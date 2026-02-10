@@ -1,0 +1,19 @@
+# Render Blueprint - SUPACLEAN POS
+# Optional: use this for "New > Blueprint" instead of manual Web Service.
+# See DEPLOY_RENDER.md for the full step-by-step guide.
+
+services:
+  - type: web
+    name: supaclean-pos
+    runtime: node
+    buildCommand: npm run build:render
+    startCommand: npm run server:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: CLIENT_URL
+        sync: false
+      - key: REACT_APP_API_URL
+        sync: false

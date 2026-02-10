@@ -1,0 +1,1087 @@
+import React, { useState, useEffect, useCallback, Fragment } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, receivePayment, sendCollectionReminder } from '../api/api';
+import { useToast } from '../hooks/useToast';
+import { useAuth } from '../contexts/AuthContext';
+import './Orders.css';
+
+const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
+const ORDERS_PAGE_SIZE = 50;
+
+const Orders = () => {
+  const navigate = useNavigate();
+  const { showToast, ToastContainer } = useToast();
+  const { selectedBranchId } = useAuth();
+  const [orders, setOrders] = useState([]);
+  const [filter, setFilter] = useState('all');
+  const [loading, setLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [editingDate, setEditingDate] = useState(null); // { orderId: number, value: string }
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [showReceivePaymentModal, setShowReceivePaymentModal] = useState(false);
+  const [selectedOrderForPayment, setSelectedOrderForPayment] = useState(null);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [receivingPayment, setReceivingPayment] = useState(false);
+  const [sendingReminder, setSendingReminder] = useState(null);
+  const [expandedReceipts, setExpandedReceipts] = useState(new Set()); // Track which receipts are expanded
+  const [searchFilters, setSearchFilters] = useState({
+    customer: '',
+    dateFrom: '',
+    dateTo: '',
+    minAmount: '',
+    maxAmount: '',
+    paymentStatus: '',
+    overdueOnly: false
+  });
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
+
+  const loadOrders = useCallback(async (append = false, offsetOverride = undefined) => {
+    const offset = append ? (offsetOverride ?? 0) : 0;
+    if (append) setLoadingMore(true);
+    else setLoading(true);
+    try {
+      const params = { limit: ORDERS_PAGE_SIZE, offset };
+      if (selectedBranchId) params.branch_id = selectedBranchId;
+      if (filter !== 'all') params.status = filter;
+      if (searchFilters.customer) params.customer = searchFilters.customer;
+      if (searchFilters.dateFrom) params.date_from = searchFilters.dateFrom;
+      if (searchFilters.dateTo) params.date_to = searchFilters.dateTo;
+      if (searchFilters.minAmount) params.min_amount = searchFilters.minAmount;
+      if (searchFilters.maxAmount) params.max_amount = searchFilters.maxAmount;
+      if (searchFilters.paymentStatus) params.payment_status = searchFilters.paymentStatus;
+      if (searchFilters.overdueOnly) params.overdue_only = 'true';
+
+      const res = await getOrders(params);
+      const data = res.data || [];
+      if (append) setOrders(prev => [...prev, ...data]);
+      else setOrders(data);
+      setHasMore(data.length === ORDERS_PAGE_SIZE);
+      if (res.fromCache && res.syncedAt) setLastSyncedAt(res.syncedAt); else setLastSyncedAt(null);
+    } catch (error) {
+      console.error('Error loading orders:', error);
+      const errorMsg = error.response?.data?.error || error.message || 'Network Error';
+      const userFriendlyMsg = errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Network Error') || errorMsg.includes('No response')
+        ? 'Cannot connect to server. Please ensure the server is running on port 5000.'
+        : errorMsg;
+      showToast('Error loading orders: ' + userFriendlyMsg, 'error');
+      if (!append) setOrders([]);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [filter, searchFilters, selectedBranchId, showToast]);
+
+  useEffect(() => {
+    loadOrders(false);
+  }, [filter, loadOrders]);
+
+  const handleFilterChange = (key, value) => {
+    setSearchFilters(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handleApplyFilters = () => {
+    loadOrders(false);
+  };
+
+  const handleClearFilters = () => {
+    setSearchFilters({
+      customer: '',
+      dateFrom: '',
+      dateTo: '',
+      minAmount: '',
+      maxAmount: '',
+      paymentStatus: '',
+      overdueOnly: false
+    });
+    setFilter('all');
+    setTimeout(() => loadOrders(false), 100);
+  };
+
+  const handleStatusUpdate = async (orderId, newStatus) => {
+    try {
+      await updateOrderStatus(orderId, newStatus);
+      showToast(`Order status updated to ${newStatus}`, 'success');
+      loadOrders(false);
+    } catch (error) {
+      const msg = error.response?.data?.error || error.message;
+      showToast(msg, 'error');
+    }
+  };
+
+  const handleEditEstimatedDate = (orderId, currentDate) => {
+    const dateValue = currentDate ? new Date(currentDate).toISOString().slice(0, 16) : '';
+    setEditingDate({ orderId, value: dateValue });
+  };
+
+  const handleSaveEstimatedDate = async (orderId) => {
+    if (!editingDate || !editingDate.orderId) return;
+    
+    try {
+      const dateToSave = editingDate.value ? new Date(editingDate.value).toISOString() : null;
+      // If we have a receiptNumber, update all orders in that receipt
+      if (editingDate.receiptNumber) {
+        // Find all orders with the same receipt number
+        const receiptOrders = orders.filter(o => o.receipt_number === editingDate.receiptNumber);
+        if (receiptOrders.length > 0) {
+          // Update all items in the receipt group
+          const updatePromises = receiptOrders.map(item => 
+            updateEstimatedCollectionDate(item.id, dateToSave)
+          );
+          await Promise.all(updatePromises);
+          showToast('Estimated collection date updated for all items in receipt', 'success');
+        }
+      } else {
+        // Single order update
+        await updateEstimatedCollectionDate(orderId, dateToSave);
+        showToast('Estimated collection date updated', 'success');
+      }
+      setEditingDate(null);
+      loadOrders(false);
+    } catch (error) {
+      showToast('Error updating estimated collection date: ' + (error.response?.data?.error || error.message), 'error');
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingDate(null);
+  };
+
+  const handleReceivePaymentSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedOrderForPayment) return;
+
+    const balanceDue = roundMoney(selectedOrderForPayment.total_amount - (selectedOrderForPayment.paid_amount || 0));
+    const payment = roundMoney(parseFloat(paymentAmount) || 0);
+    const tol = 0.01;
+    
+    if (payment <= 0) {
+      showToast('Payment amount must be greater than 0', 'error');
+      return;
+    }
+    if (payment < balanceDue - tol) {
+      showToast(`Payment must equal the balance due of TSh ${balanceDue.toLocaleString()}. Partial payments are not allowed.`, 'error');
+      return;
+    }
+    if (payment > balanceDue + tol) {
+      showToast(`Payment cannot exceed the balance due of TSh ${balanceDue.toLocaleString()}.`, 'error');
+      return;
+    }
+
+    try {
+      setReceivingPayment(true);
+      // Find all orders with the same receipt number
+      const receiptOrders = orders.filter(o => o.receipt_number === selectedOrderForPayment.receipt_number);
+      
+      if (receiptOrders.length > 1) {
+        // Distribute payment proportionally across all items
+        const totalAmount = receiptOrders.reduce((sum, item) => sum + (parseFloat(item.total_amount) || 0), 0);
+        const paymentPromises = receiptOrders.map(item => {
+          const itemPayment = (payment * (item.total_amount / totalAmount));
+          return receivePayment(item.id, {
+            payment_amount: itemPayment,
+            payment_method: paymentMethod,
+            notes: `Payment received for receipt ${selectedOrderForPayment.receipt_number}`
+          });
+        });
+        await Promise.all(paymentPromises);
+      } else {
+        // Single item payment
+        await receivePayment(selectedOrderForPayment.id, {
+          payment_amount: payment,
+          payment_method: paymentMethod,
+          notes: `Payment received for order ${selectedOrderForPayment.receipt_number}`
+        });
+      }
+      
+      showToast(`Payment of TSh ${payment.toLocaleString()} received successfully!`, 'success');
+      setShowReceivePaymentModal(false);
+      setSelectedOrderForPayment(null);
+      setPaymentAmount('');
+      loadOrders(false); // Reload orders to show updated payment info
+    } catch (err) {
+      showToast('Error receiving payment: ' + (err.response?.data?.error || err.message), 'error');
+    } finally {
+      setReceivingPayment(false);
+    }
+  };
+
+  const handleStockExcelUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Check file type
+    const validTypes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+      'application/vnd.ms-excel', // .xls
+      'text/csv' // .csv
+    ];
+    
+    if (!validTypes.includes(file.type) && !file.name.endsWith('.xlsx') && !file.name.endsWith('.xls') && !file.name.endsWith('.csv')) {
+      showToast('Please upload a valid Excel file (.xlsx, .xls) or CSV file', 'error');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      showToast('Uploading and processing stock file...', 'info');
+      const res = await uploadStockExcel(formData);
+      showToast(`Successfully imported ${res.data.imported} orders! ${res.data.skipped > 0 ? `${res.data.skipped} skipped.` : ''}`, 'success');
+      if (res.data.errors && res.data.errors.length > 0) {
+        console.warn('Import errors:', res.data.errors);
+      }
+      loadOrders(false);
+    } catch (error) {
+      showToast('Error uploading file: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      // Reset file input
+      e.target.value = '';
+    }
+  };
+
+  const handleSendReminder = async (orderId, channels = ['sms']) => {
+    try {
+      setSendingReminder(orderId);
+      const res = await sendCollectionReminder(orderId, channels);
+      if (res.data.result && res.data.result.success) {
+        showToast('Reminder sent successfully!', 'success');
+      } else {
+        showToast(res.data.result?.error || res.data.error || 'Failed to send reminder', 'warning');
+      }
+    } catch (error) {
+      showToast('Error sending reminder: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setSendingReminder(null);
+    }
+  };
+
+  const formatDateTime = (dateString) => {
+    if (!dateString) return 'Not set';
+    const date = new Date(dateString);
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'pending': return '#f59e0b';
+      case 'processing': return '#3b82f6';
+      case 'ready': return '#10b981';
+      case 'collected': return '#6b7280';
+      default: return '#6b7280';
+    }
+  };
+
+  const RECEIPT_COMPACT_THRESHOLD = 12;
+
+  // Print receipt for a receipt group (single page; compact format when many items).
+  // Uses original order date/time (when customer brought in the order) and original estimated collection, not reprint time.
+  const handlePrintReceipt = async (receiptGroup) => {
+    try {
+      const receiptOrders = receiptGroup.items;
+      if (receiptOrders.length === 0) {
+        showToast('No items found for this receipt', 'error');
+        return;
+      }
+
+      // Use original order date/time (first order in the receipt) so reprint matches the original receipt
+      const orderDate = receiptOrders[0].order_date ? new Date(receiptOrders[0].order_date) : new Date();
+      const dateStr = `${String(orderDate.getDate()).padStart(2, '0')}/${String(orderDate.getMonth() + 1).padStart(2, '0')}/${orderDate.getFullYear()} ${String(orderDate.getHours()).padStart(2, '0')}:${String(orderDate.getMinutes()).padStart(2, '0')}`;
+      const estimatedCollectionDate = receiptGroup.estimated_collection_date
+        ? (() => {
+            const estDate = new Date(receiptGroup.estimated_collection_date);
+            return `Est. Collection: ${String(estDate.getDate()).padStart(2, '0')}/${String(estDate.getMonth() + 1).padStart(2, '0')}/${estDate.getFullYear()} ${String(estDate.getHours()).padStart(2, '0')}:${String(estDate.getMinutes()).padStart(2, '0')}\n`;
+          })()
+        : '';
+
+      const useCompact = receiptOrders.length > RECEIPT_COMPACT_THRESHOLD;
+
+      const headerText = useCompact
+        ? `SUPACLEAN | Arusha\nReceipt: ${receiptGroup.receipt_number} | ${dateStr}\n${estimatedCollectionDate}${receiptGroup.customer_name} | ${receiptGroup.customer_phone}\n`
+        : `
+═══════════════════════════════════
+   Laundry & Dry Cleaning
+        Arusha, Tanzania
+═══════════════════════════════════
+
+Receipt No: ${receiptGroup.receipt_number}
+Date: ${dateStr}
+${estimatedCollectionDate}
+Customer: ${receiptGroup.customer_name}
+Phone: ${receiptGroup.customer_phone}
+───────────────────────────────────
+`;
+      const brandTitle = useCompact ? null : 'SUPACLEAN';
+
+      const items = [];
+      receiptOrders.forEach((order) => {
+        const itemName = order.garment_type || order.service_name || 'Item';
+        const quantity = order.quantity || 1;
+        const color = order.color || '';
+        const itemAmount = parseFloat(order.total_amount) || 0;
+        let itemDescription = itemName;
+        if (color) itemDescription += ` (${color})`;
+        items.push({
+          qty: String(quantity),
+          desc: itemDescription,
+          amount: `TSh ${itemAmount.toLocaleString()}`
+        });
+      });
+
+      const sep = useCompact ? '─'.repeat(32) : '───────────────────────────────────────────';
+      let footerText = `${sep}\nTOTAL: TSh ${receiptGroup.total_amount.toLocaleString()}\n`;
+      if (receiptGroup.payment_status === 'not_paid') {
+        footerText += `NOT PAID\n`;
+      } else if (receiptGroup.payment_status === 'paid_full') {
+        footerText += `PAID (${(receiptGroup.payment_method || 'cash').toUpperCase()})\n`;
+      } else {
+        footerText += `ADVANCE | Paid TSh ${receiptGroup.paid_amount.toLocaleString()} | Due TSh ${(receiptGroup.total_amount - receiptGroup.paid_amount).toLocaleString()}\n`;
+      }
+      footerText += useCompact ? `\nKeep for collection. Thank you!\n` : `\nPlease keep this receipt for collection.\nThank you for choosing SUPACLEAN!\n\n═══════════════════════════════════\n`;
+
+      await printReceiptText({ headerText, items, footerText, brandTitle });
+    } catch (error) {
+      console.error('Error generating receipt:', error);
+      showToast('Error generating receipt: ' + (error.message || 'Unknown error'), 'error');
+    }
+  };
+
+  // Print receipt text (single page; no black page; Terms QR at end).
+  // Accepts either receiptText (string) or { headerText, items, footerText, brandTitle } for centered layout with table (desc wraps, amount visible).
+  const printReceiptText = async (receiptTextOrData) => {
+    const isStructured = receiptTextOrData && typeof receiptTextOrData === 'object' && Array.isArray(receiptTextOrData.items);
+    const receiptText = isStructured ? null : (receiptTextOrData && typeof receiptTextOrData === 'string' ? receiptTextOrData : '');
+    if (!isStructured && (!receiptText || !receiptText.trim())) {
+      showToast('Error: Invalid receipt data', 'error');
+      return;
+    }
+    const compact = isStructured ? receiptTextOrData.items.length > 12 : (receiptText.match(/\n/g) || []).length > 35;
+    // Use public origin for Terms QR so it works when scanned from a phone (not localhost)
+    const baseUrl = (typeof process !== 'undefined' && process.env && process.env.REACT_APP_PUBLIC_ORIGIN)
+      ? process.env.REACT_APP_PUBLIC_ORIGIN.replace(/\/$/, '')
+      : (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
+    const termsUrl = baseUrl ? `${baseUrl}/terms` : '';
+    const termsQrSrc = termsUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=${encodeURIComponent(termsUrl)}` : '';
+    let termsQrDataUrl = '';
+    if (termsQrSrc) {
+      try {
+        const res = await fetch(termsQrSrc);
+        const blob = await res.blob();
+        termsQrDataUrl = await new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result);
+          r.onerror = reject;
+          r.readAsDataURL(blob);
+        });
+      } catch (e) {
+        console.warn('Terms QR fetch failed', e);
+      }
+    }
+    const termsQrBlock = termsQrDataUrl
+      ? `<div class="receipt-end"><img src="${termsQrDataUrl}" alt="Terms" width="80" height="80" /><p>Scan for Terms / Masharti</p></div>`
+      : '';
+    const escape = (s) =>
+      String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    const itemsTableRows = isStructured
+      ? receiptTextOrData.items.map((r) => `<tr><td class="r-qty">${escape(r.qty)}</td><td class="r-desc">${escape(r.desc)}</td><td class="r-amount">${escape(r.amount)}</td></tr>`).join('')
+      : '';
+    const brandBlock = (isStructured && receiptTextOrData.brandTitle)
+      ? `<div class="receipt-brand">${escape(receiptTextOrData.brandTitle)}</div>`
+      : '';
+    const bodyContent = isStructured
+      ? `${brandBlock}<pre class="receipt-header">${escape(receiptTextOrData.headerText)}</pre>
+              <table class="receipt-items"><thead><tr><th class="r-qty">Qty</th><th class="r-desc">Item</th><th class="r-amount">TSh</th></tr></thead><tbody>${itemsTableRows}</tbody></table>
+              <pre class="receipt-footer">${escape(receiptTextOrData.footerText)}</pre>`
+      : `<pre>${escape(receiptText)}</pre>`;
+    const printHTML = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Receipt - SUPACLEAN</title>
+            <meta charset="UTF-8">
+            <style>
+              @media print {
+                @page { size: 80mm auto; margin: 0; }
+                html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                .receipt-sheet { height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; }
+                body { font-family: 'Courier New', monospace; padding: 8mm 4mm; margin: 0; background: white; }
+                pre, .receipt-items th, .receipt-items td { color: #000 !important; font-weight: 600; }
+                .receipt-items .r-desc { color: #000 !important; font-weight: 600; }
+                .receipt-footer { font-weight: bold; color: #000 !important; }
+                .receipt-end p { font-weight: bold; color: #000 !important; }
+                pre { margin: 0; padding: 0; white-space: pre; overflow: visible; }
+                body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: 8pt; }
+                .receipt-end { margin-top: 6px; page-break-inside: avoid; }
+                * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+              }
+              @media screen { body { font-family: 'Courier New', monospace; padding: 20px; max-width: 80mm; margin: 0 auto; background: #f5f5f5; } }
+              .receipt-sheet { text-align: center; margin: 0 auto; max-width: 80mm; }
+              .receipt-brand { font-weight: bold; text-align: center; margin: 0 0 4px 0; font-size: 1.1em; color: #000; }
+              body:not(.receipt-compact) pre, body:not(.receipt-compact) .receipt-items { font-size: 9pt; line-height: 1.2; }
+              body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: 8pt; line-height: 1.05; }
+              pre { margin: 0; color: black; white-space: pre; }
+              .receipt-header, .receipt-footer { text-align: center; }
+              .receipt-items { width: 100%; margin: 4px 0; border-collapse: collapse; text-align: center; }
+              .receipt-items th, .receipt-items td { padding: 2px 4px; border: none; }
+              .receipt-items .r-qty { width: 2.5em; text-align: center; }
+              .receipt-items .r-desc { text-align: left; word-wrap: break-word; word-break: break-word; max-width: 1px; color: #000 !important; font-weight: 600; }
+              .receipt-items .r-amount { width: 4.5em; text-align: right; white-space: nowrap; }
+              .receipt-footer { font-weight: bold; }
+              .receipt-end { text-align: center; margin-top: 8px; }
+              .receipt-end p { margin: 4px 0 0 0; font-size: 8pt; color: #000; font-weight: bold; }
+            </style>
+          </head>
+          <body class="${compact ? 'receipt-compact' : ''}">
+            <div class="receipt-sheet">
+              ${bodyContent}
+              ${termsQrBlock}
+            </div>
+            <script>
+              window.onload = function() { setTimeout(function() { window.focus(); window.print(); }, 100); };
+              window.onafterprint = function() { setTimeout(function() { window.close(); }, 500); };
+            </script>
+          </body>
+        </html>
+      `;
+    try {
+      const printWindow = window.open('', '_blank', 'width=400,height=600,scrollbars=yes');
+      if (printWindow) {
+        printWindow.document.open();
+        printWindow.document.write(printHTML);
+        printWindow.document.close();
+        showToast('Receipt print dialog opened', 'success');
+      } else {
+        const iframe = document.createElement('iframe');
+        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:none';
+        document.body.appendChild(iframe);
+        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+        iframeDoc.open();
+        iframeDoc.write(printHTML);
+        iframeDoc.close();
+        iframe.onload = function() {
+          setTimeout(function() {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+            setTimeout(function() {
+              if (document.body.contains(iframe)) document.body.removeChild(iframe);
+            }, 2000);
+          }, 500);
+        };
+        showToast('Receipt print dialog opened', 'success');
+      }
+    } catch (error) {
+      console.error('Error printing receipt:', error);
+      showToast('Error printing receipt: ' + error.message, 'error');
+    }
+  };
+
+  // Group orders by receipt number
+  const groupOrdersByReceipt = (ordersList) => {
+    const grouped = {};
+    ordersList.forEach(order => {
+      const receiptNum = order.receipt_number;
+      if (!grouped[receiptNum]) {
+        grouped[receiptNum] = {
+          receipt_number: receiptNum,
+          customer_name: order.customer_name,
+          customer_phone: order.customer_phone,
+          order_date: order.order_date,
+          estimated_collection_date: order.estimated_collection_date,
+          items: [],
+          total_amount: 0,
+          paid_amount: 0,
+          payment_status: order.payment_status,
+          payment_method: order.payment_method,
+          status: order.status, // Use the most common status or 'pending' if mixed
+          order_ids: []
+        };
+      }
+      grouped[receiptNum].items.push(order);
+      grouped[receiptNum].total_amount += parseFloat(order.total_amount) || 0;
+      grouped[receiptNum].paid_amount += parseFloat(order.paid_amount) || 0;
+      grouped[receiptNum].order_ids.push(order.id);
+      
+      // Determine overall status (if all ready, show ready; if any pending, show pending; etc.)
+      const statuses = grouped[receiptNum].items.map(o => o.status);
+      if (statuses.every(s => s === 'ready')) {
+        grouped[receiptNum].status = 'ready';
+      } else if (statuses.some(s => s === 'pending')) {
+        grouped[receiptNum].status = 'pending';
+      } else if (statuses.some(s => s === 'processing')) {
+        grouped[receiptNum].status = 'processing';
+      } else if (statuses.every(s => s === 'collected')) {
+        grouped[receiptNum].status = 'collected';
+      }
+    });
+    return Object.values(grouped);
+  };
+
+  const toggleReceiptExpansion = (receiptNumber) => {
+    const newExpanded = new Set(expandedReceipts);
+    if (newExpanded.has(receiptNumber)) {
+      newExpanded.delete(receiptNumber);
+    } else {
+      newExpanded.add(receiptNumber);
+    }
+    setExpandedReceipts(newExpanded);
+  };
+
+  // Get consolidated orders
+  const consolidatedOrders = groupOrdersByReceipt(orders);
+
+  // Helper to get receipt group for a receipt number
+  const getReceiptGroup = (receiptNumber) => {
+    return consolidatedOrders.find(r => r.receipt_number === receiptNumber);
+  };
+
+  return (
+    <div className="orders-page">
+      <ToastContainer />
+      {lastSyncedAt && (
+        <div className="sync-cache-banner" role="status">
+          Showing data from last sync — {new Date(lastSyncedAt).toLocaleString()}
+        </div>
+      )}
+      <div className="page-header-modern">
+        <div>
+          <h1>Orders</h1>
+          <p className="subtitle">View and manage all orders</p>
+        </div>
+        <div className="header-actions">
+          <label className="btn-secondary" style={{ cursor: 'pointer' }} title="Format: id, name, phone, amount, paid/not paid. All uploaded stock is uncollected (Ready). See UPLOAD_STOCK_FORMAT.md">
+            📦 Upload Stock Excel
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              style={{ display: 'none' }}
+              onChange={handleStockExcelUpload}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="orders-filters-section">
+        <div className="orders-filters">
+          {['all', 'pending', 'ready', 'collected'].map(status => (
+              <button
+              key={status}
+              className={`filter-btn ${filter === status ? 'active' : ''}`}
+              onClick={() => setFilter(status)}
+            >
+              {status === 'pending' ? 'Pending Orders' : status.charAt(0).toUpperCase() + status.slice(1)}
+            </button>
+          ))}
+          <button
+            className="filter-btn btn-secondary"
+            onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+          >
+            {showAdvancedFilters ? '🔽 Hide Filters' : '🔍 Advanced Filters'}
+          </button>
+        </div>
+
+        {showAdvancedFilters && (
+          <div className="advanced-filters-card">
+            <div className="filters-grid">
+              <div className="filter-group">
+                <label>Customer (Name/Phone)</label>
+                <input
+                  type="text"
+                  placeholder="Search customer..."
+                  value={searchFilters.customer}
+                  onChange={(e) => handleFilterChange('customer', e.target.value)}
+                />
+              </div>
+              
+              <div className="filter-group">
+                <label>Date From</label>
+                <input
+                  type="date"
+                  value={searchFilters.dateFrom}
+                  onChange={(e) => handleFilterChange('dateFrom', e.target.value)}
+                />
+              </div>
+              
+              <div className="filter-group">
+                <label>Date To</label>
+                <input
+                  type="date"
+                  value={searchFilters.dateTo}
+                  onChange={(e) => handleFilterChange('dateTo', e.target.value)}
+                />
+              </div>
+              
+              <div className="filter-group">
+                <label>Min Amount (TSh)</label>
+                <input
+                  type="number"
+                  placeholder="0"
+                  value={searchFilters.minAmount}
+                  onChange={(e) => handleFilterChange('minAmount', e.target.value)}
+                  min="0"
+                />
+              </div>
+              
+              <div className="filter-group">
+                <label>Max Amount (TSh)</label>
+                <input
+                  type="number"
+                  placeholder="Any"
+                  value={searchFilters.maxAmount}
+                  onChange={(e) => handleFilterChange('maxAmount', e.target.value)}
+                  min="0"
+                />
+              </div>
+              
+              <div className="filter-group">
+                <label>Payment Status</label>
+                <select
+                  value={searchFilters.paymentStatus}
+                  onChange={(e) => handleFilterChange('paymentStatus', e.target.value)}
+                >
+                  <option value="">All</option>
+                  <option value="not_paid">Not Paid</option>
+                  <option value="advance">Advance Payment</option>
+                  <option value="paid_full">Paid Full</option>
+                </select>
+              </div>
+            </div>
+            
+            <div className="filter-options">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={searchFilters.overdueOnly}
+                  onChange={(e) => handleFilterChange('overdueOnly', e.target.checked)}
+                />
+                <span>Show only overdue orders</span>
+              </label>
+            </div>
+            
+            <div className="filter-actions">
+              <button className="btn-primary" onClick={handleApplyFilters}>
+                🔍 Apply Filters
+              </button>
+              <button className="btn-secondary" onClick={handleClearFilters}>
+                ✕ Clear All
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="loading">Loading orders...</div>
+      ) : consolidatedOrders.length === 0 ? (
+        <div className="empty-state">No orders found</div>
+      ) : (
+        <>
+        <div className="orders-table">
+          <div className="orders-table-wrapper">
+            <table>
+            <thead>
+              <tr>
+                <th style={{ width: '30px' }}></th>
+                <th>Receipt No</th>
+                <th>Customer</th>
+                <th>Items</th>
+                <th>Total Amount</th>
+                <th>Payment</th>
+                <th>Order Date</th>
+                <th>Est. Collection</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {consolidatedOrders.map((receiptGroup) => {
+                const isExpanded = expandedReceipts.has(receiptGroup.receipt_number);
+                const balance = receiptGroup.total_amount - receiptGroup.paid_amount;
+                const itemCount = receiptGroup.items.length;
+                
+                return (
+                  <Fragment key={receiptGroup.receipt_number}>
+                    {/* Main consolidated row */}
+                    <tr className="receipt-group-row" style={{ backgroundColor: isExpanded ? 'var(--bg-hover)' : 'transparent' }}>
+                      <td>
+                        <button
+                          className="expand-btn"
+                          onClick={() => toggleReceiptExpansion(receiptGroup.receipt_number)}
+                          style={{ 
+                            background: 'none', 
+                            border: 'none', 
+                            cursor: 'pointer',
+                            fontSize: '14px',
+                            padding: '4px 8px'
+                          }}
+                          title={isExpanded ? 'Collapse' : 'Expand to see items'}
+                        >
+                          {isExpanded ? '▼' : '▶'}
+                        </button>
+                      </td>
+                      <td><strong>{receiptGroup.receipt_number}</strong></td>
+                      <td>
+                        <div>
+                          <strong>{receiptGroup.customer_name}</strong>
+                          <span>{receiptGroup.customer_phone}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="order-details">
+                          <span style={{ fontWeight: '600' }}>{itemCount} {itemCount === 1 ? 'item' : 'items'}</span>
+                          {!isExpanded && (
+                            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                              {receiptGroup.items.slice(0, 2).map((item, idx) => (
+                                <div key={idx}>
+                                  {item.garment_type || item.service_name} x{item.quantity}
+                                  {item.color && ` (${item.color})`}
+                                </div>
+                              ))}
+                              {itemCount > 2 && <div>+ {itemCount - 2} more...</div>}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td><strong>TSh {receiptGroup.total_amount.toLocaleString()}</strong></td>
+                      <td>
+                        <div className="payment-info">
+                          <div>Paid: TSh {receiptGroup.paid_amount.toLocaleString()}</div>
+                          {balance > 0 ? (
+                            <div style={{ color: 'var(--warning-color)', fontWeight: 'bold' }}>
+                              Balance: TSh {balance.toLocaleString()}
+                            </div>
+                          ) : (
+                            <div style={{ color: 'var(--success-color)' }}>✅ Paid Full</div>
+                          )}
+                          <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            {receiptGroup.payment_status === 'not_paid' ? 'Not Paid' : 
+                             receiptGroup.payment_status === 'advance' ? 'Advance' : 'Paid Full'}
+                          </div>
+                        </div>
+                      </td>
+                      <td>{new Date(receiptGroup.order_date).toLocaleDateString()}</td>
+                      <td>
+                        {editingDate && editingDate.receiptNumber === receiptGroup.receipt_number ? (
+                          <div className="date-edit-controls">
+                            <input
+                              type="datetime-local"
+                              value={editingDate.value}
+                              onChange={(e) => setEditingDate({ ...editingDate, value: e.target.value })}
+                              min={new Date().toISOString().slice(0, 16)}
+                              className="date-edit-input"
+                              autoFocus
+                            />
+                            <div className="date-edit-buttons">
+                              <button
+                                className="btn-small btn-success"
+                                onClick={() => {
+                                  // Update all orders in this receipt group
+                                  receiptGroup.items.forEach(item => {
+                                    handleSaveEstimatedDate(item.id);
+                                  });
+                                }}
+                                title="Save"
+                              >
+                                ✓
+                              </button>
+                              <button
+                                className="btn-small btn-secondary"
+                                onClick={handleCancelEdit}
+                                title="Cancel"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div 
+                            className="estimated-date-cell"
+                            onClick={() => {
+                              const firstOrder = receiptGroup.items[0];
+                              handleEditEstimatedDate(firstOrder.id, receiptGroup.estimated_collection_date);
+                              setEditingDate(prev => ({ ...prev, receiptNumber: receiptGroup.receipt_number }));
+                            }}
+                            title="Click to edit"
+                          >
+                            <span className={receiptGroup.estimated_collection_date ? '' : 'not-set'}>
+                              {formatDateTime(receiptGroup.estimated_collection_date)}
+                            </span>
+                            <button
+                              className="edit-date-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const firstOrder = receiptGroup.items[0];
+                                handleEditEstimatedDate(firstOrder.id, receiptGroup.estimated_collection_date);
+                                setEditingDate(prev => ({ ...prev, receiptNumber: receiptGroup.receipt_number }));
+                              }}
+                              title="Edit estimated collection date"
+                            >
+                              ✏️
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        <span
+                          className="status-badge"
+                          style={{ backgroundColor: getStatusColor(receiptGroup.status === 'processing' ? 'pending' : receiptGroup.status) }}
+                        >
+                          {receiptGroup.status === 'processing' ? 'Pending' : receiptGroup.status}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="action-buttons">
+                          {receiptGroup.status === 'pending' && (
+                            <button
+                              className="btn-small btn-success"
+                              onClick={() => {
+                                receiptGroup.items.forEach(item => {
+                                  handleStatusUpdate(item.id, 'ready');
+                                });
+                              }}
+                              title="Mark order as ready for collection"
+                            >
+                              ✓ Mark as Ready
+                            </button>
+                          )}
+                          {receiptGroup.status === 'processing' && (
+                            <button
+                              className="btn-small btn-success"
+                              onClick={() => {
+                                receiptGroup.items.forEach(item => {
+                                  handleStatusUpdate(item.id, 'ready');
+                                });
+                              }}
+                              title="Mark all ready"
+                            >
+                              Ready All
+                            </button>
+                          )}
+                          {receiptGroup.status === 'ready' && (
+                            <>
+                              <button
+                                className="btn-small btn-warning"
+                                onClick={() => {
+                                  receiptGroup.items.forEach(item => {
+                                    handleStatusUpdate(item.id, 'collected');
+                                  });
+                                }}
+                                disabled={balance > 0}
+                                title={balance > 0 ? 'Payment required before collection. Use Pay first.' : 'Collect all items'}
+                              >
+                                Collect All
+                              </button>
+                              <button
+                                className="btn-small btn-secondary"
+                                onClick={() => {
+                                  receiptGroup.items.forEach(item => {
+                                    handleSendReminder(item.id);
+                                  });
+                                }}
+                                disabled={sendingReminder !== null}
+                                title="Send collection reminder"
+                                style={{ marginTop: '4px' }}
+                              >
+                                {sendingReminder ? '⏳ Sending...' : '📱 Remind'}
+                              </button>
+                            </>
+                          )}
+                          {balance > 0 && (
+                            <button
+                              className="btn-small btn-primary"
+                              onClick={() => {
+                                // Use first order for payment modal (all share same receipt)
+                                setSelectedOrderForPayment({
+                                  ...receiptGroup.items[0],
+                                  total_amount: receiptGroup.total_amount,
+                                  paid_amount: receiptGroup.paid_amount
+                                });
+                                setPaymentAmount(balance.toString());
+                                setShowReceivePaymentModal(true);
+                              }}
+                              style={{ marginTop: '4px' }}
+                            >
+                              💰 Pay
+                            </button>
+                          )}
+                          <button
+                            className="btn-small btn-secondary"
+                            onClick={() => handlePrintReceipt(receiptGroup)}
+                            style={{ marginTop: '4px' }}
+                            title="Reprint receipt"
+                          >
+                            🖨️ Reprint Receipt
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {/* Expanded items rows */}
+                    {isExpanded && receiptGroup.items.map((item, idx) => (
+                      <tr key={`${receiptGroup.receipt_number}-item-${idx}`} className="receipt-item-row" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                        <td></td>
+                        <td style={{ paddingLeft: '40px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          Item {idx + 1}
+                        </td>
+                        <td colSpan="2">
+                          <div className="order-details" style={{ fontSize: '13px' }}>
+                            <span><strong>Type:</strong> {item.garment_type || item.service_name}</span>
+                            {item.color && <span><strong>Color:</strong> {item.color}</span>}
+                            <span><strong>Qty:</strong> {item.quantity}</span>
+                            {item.weight_kg && <span><strong>Weight:</strong> {item.weight_kg}kg</span>}
+                          </div>
+                        </td>
+                        <td style={{ fontSize: '13px' }}>TSh {item.total_amount.toLocaleString()}</td>
+                        <td>
+                          <div className="action-buttons">
+                            {(item.status === 'pending' || item.status === 'processing') && (
+                              <>
+                                {item.status === 'pending' && (
+                                  <button
+                                    className="btn-small btn-primary"
+                                    onClick={() => handleStatusUpdate(item.id, 'processing')}
+                                  >
+                                    Start
+                                  </button>
+                                )}
+                                {item.status === 'processing' && (
+                                  <button
+                                    className="btn-small btn-success"
+                                    onClick={() => handleStatusUpdate(item.id, 'ready')}
+                                  >
+                                    Ready
+                                  </button>
+                                )}
+                              </>
+                            )}
+                            {item.status === 'ready' && (
+                              <button
+                                className="btn-small btn-warning"
+                                onClick={() => handleStatusUpdate(item.id, 'collected')}
+                                disabled={balance > 0}
+                                title={balance > 0 ? 'Payment required before collection. Use Pay first.' : 'Collect'}
+                              >
+                                Collect
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                        <td colSpan="4"></td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+          </div>
+        </div>
+        {hasMore && !loading && (
+          <div className="load-more-row" style={{ padding: '12px', textAlign: 'center' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => loadOrders(true, orders.length)}
+              disabled={loadingMore}
+            >
+              {loadingMore ? 'Loading…' : 'Load more orders'}
+            </button>
+          </div>
+        )}
+        </>
+      )}
+
+      {/* Receive Payment Modal */}
+      {showReceivePaymentModal && selectedOrderForPayment && (
+        <div className="modal-overlay" onClick={() => setShowReceivePaymentModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>💰 Receive Payment</h2>
+              <button className="modal-close" onClick={() => setShowReceivePaymentModal(false)}>×</button>
+            </div>
+            <form onSubmit={handleReceivePaymentSubmit}>
+              <div className="modal-body">
+                <div className="payment-summary">
+                  <div className="payment-item">
+                    <span>Receipt No:</span>
+                    <strong>{selectedOrderForPayment.receipt_number}</strong>
+                  </div>
+                  <div className="payment-item">
+                    <span>Customer:</span>
+                    <strong>{selectedOrderForPayment.customer_name}</strong>
+                  </div>
+                  <div className="payment-item">
+                    <span>Total Amount:</span>
+                    <strong>TSh {selectedOrderForPayment.total_amount.toLocaleString()}</strong>
+                  </div>
+                  <div className="payment-item">
+                    <span>Amount Paid:</span>
+                    <strong>TSh {(selectedOrderForPayment.paid_amount || 0).toLocaleString()}</strong>
+                  </div>
+                  <div className="payment-item balance-due">
+                    <span>Balance Due:</span>
+                    <strong>TSh {(selectedOrderForPayment.total_amount - (selectedOrderForPayment.paid_amount || 0)).toLocaleString()}</strong>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Payment Amount * (must equal balance due)</label>
+                  <input
+                    type="number"
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    placeholder={`Enter exactly TSh ${(selectedOrderForPayment.total_amount - (selectedOrderForPayment.paid_amount || 0)).toLocaleString()}`}
+                    min="0"
+                    step="0.01"
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Payment Method *</label>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    required
+                  >
+                    <option value="cash">Cash</option>
+                    <option value="mobile_money">Mobile Money</option>
+                    <option value="card">Card</option>
+                    <option value="bank_transfer">Bank Transfer</option>
+                  </select>
+                </div>
+                <div className="info-notice" style={{ marginTop: '15px', padding: '10px', background: 'var(--primary-light)', borderRadius: '8px', fontSize: '14px' }}>
+                  ℹ️ This will record the payment and update the order's payment status. The order status will remain unchanged.
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-secondary" onClick={() => {
+                  setShowReceivePaymentModal(false);
+                  setSelectedOrderForPayment(null);
+                  setPaymentAmount('');
+                }}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" disabled={receivingPayment}>
+                  {receivingPayment ? '⏳ Processing...' : '💰 Receive Payment'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Orders;

@@ -1,0 +1,25 @@
+/* App fills viewport when using Layout; main-content (Layout.css) is the full-area scroll container */
+.app-container {
+  min-height: 100%;
+  height: 100%;
+  background-color: transparent;
+}
+
+#root {
+  min-height: 100%;
+  height: 100%;
+}
+
+/* Offline "last sync" banner (used by Dashboard, Reports, Expenses, Orders, Cash, Collection, Monthly Billing) */
+.sync-cache-banner {
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  background: rgba(180, 83, 9, 0.15);
+  border: 1px solid rgba(180, 83, 9, 0.4);
+  border-radius: 8px;
+  color: var(--text-secondary, #666);
+  font-size: 13px;
+}
+[data-theme="dark"] .sync-cache-banner {
+  color: rgba(255, 255, 255, 0.8);
+}

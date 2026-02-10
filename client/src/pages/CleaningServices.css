@@ -1,0 +1,369 @@
+.cleaning-services {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.cs-header {
+  margin-bottom: 32px;
+}
+
+.cs-header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 6px 0;
+}
+
+.cs-header p {
+  font-size: 15px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.cs-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--text-secondary);
+}
+
+.cs-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 24px;
+}
+
+.cs-action-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 28px 24px;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border-color);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.cs-action-card:hover {
+  border-color: var(--primary-color);
+  background: var(--bg-hover);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.cs-action-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+}
+
+.cs-action-label {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.cs-action-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.cs-panel {
+  background: var(--bg-secondary);
+  border-radius: 16px;
+  padding: 24px;
+  border: 1px solid var(--border-color);
+}
+
+.cs-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.cs-back {
+  padding: 8px 14px;
+  font-size: 14px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.cs-back:hover {
+  background: var(--bg-hover);
+  border-color: var(--primary-color);
+}
+
+.cs-panel-header h2 {
+  margin: 0;
+  font-size: 20px;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.cs-filter {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.cs-form-section {
+  margin-bottom: 24px;
+}
+
+.cs-form-section h3 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.cs-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 600px) {
+  .cs-form-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cs-field {
+  margin-bottom: 12px;
+}
+
+.cs-field label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.cs-field input,
+.cs-field select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.cs-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 12px;
+}
+
+.cs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.cs-table th,
+.cs-table td {
+  padding: 10px 8px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.cs-table th {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.cs-table input {
+  width: 100%;
+  min-width: 60px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.cs-btn-remove {
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.cs-btn-remove:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.cs-btn-add {
+  padding: 8px 16px;
+  font-size: 14px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.cs-btn-add:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+.cs-total {
+  margin: 12px 0 0 0;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.cs-form-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.cs-btn {
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.cs-btn.secondary {
+  background: transparent;
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+.cs-btn.secondary:hover {
+  background: var(--bg-hover);
+}
+
+.cs-btn.primary {
+  background: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+}
+
+.cs-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.cs-btn.primary:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.cs-btn.small {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.cs-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 16px 0;
+}
+
+.cs-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.cs-modal {
+  background: var(--bg-secondary);
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 440px;
+  width: 90%;
+  border: 1px solid var(--border-color);
+}
+
+.cs-modal h3 {
+  margin: 0 0 12px 0;
+  font-size: 18px;
+  color: var(--text-primary);
+}
+
+.cs-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.cs-summary-card {
+  background: var(--bg-hover);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cs-summary-card.highlight {
+  border-color: var(--primary-color);
+  background: var(--bg-secondary);
+}
+
+.cs-summary-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.cs-summary-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.cs-select-and-add {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.cs-select-and-add select {
+  flex: 1;
+  min-width: 200px;
+}
+
+.cs-add-customer-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.cs-modal-wide {
+  max-width: 520px;
+}

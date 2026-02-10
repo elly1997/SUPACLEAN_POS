@@ -1,0 +1,254 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+    'Helvetica Neue', 'Segoe UI', 'Roboto', sans-serif;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--bg-primary);
+  background-image: 
+    radial-gradient(circle at 20% 50%, rgba(0, 122, 255, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(52, 199, 89, 0.03) 0%, transparent 50%);
+  min-height: 100%;
+  height: 100%;
+  color: var(--text-primary);
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+[data-theme="dark"] body {
+  background: var(--bg-primary);
+  background-image: none;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+:root,
+[data-theme="light"] {
+  /* iOS-style system colors */
+  --primary-color: #007AFF;
+  --primary-hover: #0051D5;
+  --primary-light: rgba(0, 122, 255, 0.1);
+  --secondary-color: #5856D6;
+  --accent-color: #FF9500;
+  --success-color: #34C759;
+  --success-hover: #30D158;
+  --success-light: rgba(52, 199, 89, 0.1);
+  --danger-color: #FF3B30;
+  --danger-hover: #FF2D55;
+  --danger-light: rgba(255, 59, 48, 0.1);
+  --warning-color: #FF9500;
+  --warning-light: rgba(255, 149, 0, 0.1);
+  --info-color: #5AC8FA;
+  --info-light: rgba(90, 200, 250, 0.1);
+  
+  /* Text colors - iOS style */
+  --text-primary: #000000;
+  --text-secondary: #3C3C43;
+  --text-muted: #8E8E93;
+  --text-light: #FFFFFF;
+  
+  /* Background colors - iOS style */
+  --bg-primary: #F2F2F7;
+  --bg-secondary: #FFFFFF;
+  --bg-tertiary: #E5E5EA;
+  --bg-hover: #F2F2F7;
+  --bg-gradient: linear-gradient(135deg, #F2F2F7 0%, #FFFFFF 100%);
+  
+  /* Border colors - iOS style */
+  --border-color: rgba(60, 60, 67, 0.12);
+  --border-light: rgba(60, 60, 67, 0.08);
+  
+  /* Shadows - iOS style subtle elevation */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.12);
+  --shadow-xl: 0 12px 32px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.15);
+  --shadow-soft: 0 2px 8px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="dark"] {
+  /* iOS Dark Mode system colors */
+  --primary-color: #0A84FF;
+  --primary-hover: #409CFF;
+  --primary-light: rgba(10, 132, 255, 0.15);
+  --secondary-color: #5E5CE6;
+  --accent-color: #FF9F0A;
+  --success-color: #32D74B;
+  --success-hover: #30D158;
+  --success-light: rgba(50, 215, 75, 0.15);
+  --danger-color: #FF453A;
+  --danger-hover: #FF6961;
+  --danger-light: rgba(255, 69, 58, 0.15);
+  --warning-color: #FF9F0A;
+  --warning-light: rgba(255, 159, 10, 0.15);
+  --info-color: #64D2FF;
+  --info-light: rgba(100, 210, 255, 0.15);
+  
+  /* Text colors - iOS Dark */
+  --text-primary: #FFFFFF;
+  --text-secondary: #EBEBF5;
+  --text-muted: #8E8E93;
+  --text-light: #FFFFFF;
+  
+  /* Background colors - iOS Dark */
+  --bg-primary: #000000;
+  --bg-secondary: #1C1C1E;
+  --bg-tertiary: #2C2C2E;
+  --bg-hover: #3A3A3C;
+  --bg-gradient: linear-gradient(135deg, #000000 0%, #1C1C1E 100%);
+  
+  /* Border colors - iOS Dark */
+  --border-color: rgba(255, 255, 255, 0.1);
+  --border-light: rgba(255, 255, 255, 0.08);
+  
+  /* Shadows - iOS Dark */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 4px rgba(0, 0, 0, 0.6);
+  --shadow-xl: 0 12px 32px rgba(0, 0, 0, 0.6), 0 4px 8px rgba(0, 0, 0, 0.7);
+  --shadow-soft: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+:root {
+  /* Border radius - iOS standard */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+  
+  /* Transitions - iOS spring physics */
+  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring: all 0.4s cubic-bezier(0.36, 0.66, 0.04, 1);
+  --transition-bounce: all 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  --transition-fast: all 0.15s ease;
+  --transition-slow: all 0.5s ease;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  outline: none;
+  font-family: inherit;
+  transition: var(--transition-spring);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+button:active {
+  transform: scale(0.97);
+  transition: transform 0.1s ease;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  outline: none;
+  transition: var(--transition);
+}
+
+/* iOS-style minimal scrollbar */
+::-webkit-scrollbar {
+  width: 0px;
+  background: transparent;
+}
+
+/* Enable momentum scrolling */
+* {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+/* iOS-style focus */
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--primary-color);
+  background: var(--bg-primary);
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.1);
+}
+
+[data-theme="dark"] input:focus,
+[data-theme="dark"] select:focus,
+[data-theme="dark"] textarea:focus {
+  box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.2);
+}
+
+/* Toast notification styles */
+.toast-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.toast {
+  background: rgba(28, 28, 30, 0.95);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  padding: 16px 20px;
+  border-radius: var(--radius-lg);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.3),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+  min-width: 300px;
+  color: white;
+  animation: slideUp 0.3s cubic-bezier(0.36, 0.66, 0.04, 1);
+}
+
+[data-theme="light"] .toast {
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--text-primary);
+  border: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+
+.toast.success {
+  border-left-color: var(--success-color);
+}
+
+.toast.error {
+  border-left-color: var(--danger-color);
+}
+
+.toast.warning {
+  border-left-color: var(--warning-color);
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(100px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
