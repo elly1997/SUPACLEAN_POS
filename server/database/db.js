@@ -1,9 +1,20 @@
 /**
  * Single database entry point: use PostgreSQL when DATABASE_URL is set (e.g. Render, Supabase),
- * otherwise SQLite for local development. This ensures production never touches SQLite.
+ * otherwise SQLite for local development. In production we REQUIRE DATABASE_URL so we never use SQLite.
  * When using PostgreSQL, get/all/run support optional callback as last arg (SQLite-style) for compatibility.
  */
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
+
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction && !process.env.DATABASE_URL) {
+  console.error('');
+  console.error('❌ DATABASE_URL is required in production (e.g. on Render).');
+  console.error('   Add it in Render: Dashboard → Your Service → Environment → Add variable:');
+  console.error('   Key: DATABASE_URL');
+  console.error('   Value: your Supabase connection string (from Supabase → Settings → Database).');
+  console.error('');
+  process.exit(1);
+}
 
 if (process.env.DATABASE_URL) {
   console.log('📍 Using PostgreSQL (DATABASE_URL set)');
