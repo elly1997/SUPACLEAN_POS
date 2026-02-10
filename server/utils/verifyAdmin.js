@@ -5,7 +5,7 @@
  * Run this script if you're having login issues: node server/utils/verifyAdmin.js
  */
 
-const db = require('../database/init');
+const db = require('../database/db');
 const bcrypt = require('bcryptjs');
 
 const ADMIN_USERNAME = 'admin';

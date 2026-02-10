@@ -1,5 +1,5 @@
 // Script to create default admin user
-const db = require('../database/init');
+const db = require('../database/db');
 const bcrypt = require('bcryptjs');
 
 // Create default admin user

@@ -34,10 +34,8 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-// Initialize database: use PostgreSQL when DATABASE_URL is set (e.g. Render, production); otherwise SQLite (local dev)
-if (!process.env.DATABASE_URL) {
-  require('./database/init');
-}
+// Initialize database: db.js uses PostgreSQL when DATABASE_URL is set (Render/Supabase), else SQLite (local)
+require('./database/db');
 
 // Routes - with error handling
 try {
@@ -118,8 +116,8 @@ function gracefulShutdown(signal) {
   console.log(`\n${signal} signal received: closing HTTP server`);
   server.close(() => {
     console.log('HTTP server closed');
-    if (!process.env.DATABASE_URL) {
-      const db = require('./database/init');
+    const db = require('./database/db');
+    if (typeof db.close === 'function') {
       db.close((err) => {
         if (err) console.error('Error closing database:', err.message);
         else console.log('Database connection closed');

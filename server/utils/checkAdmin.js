@@ -1,5 +1,5 @@
 // Quick script to check and create admin user
-const db = require('../database/init');
+const db = require('../database/db');
 const bcrypt = require('bcryptjs');
 
 setTimeout(() => {

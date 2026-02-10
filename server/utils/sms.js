@@ -1,5 +1,5 @@
 const axios = require('axios');
-const db = require('../database/init');
+const db = require('../database/db');
 
 // SMS notification service
 // This is a template - you'll need to integrate with a Tanzanian SMS provider

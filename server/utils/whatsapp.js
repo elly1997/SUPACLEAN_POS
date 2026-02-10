@@ -1,5 +1,5 @@
 const axios = require('axios');
-const db = require('../database/init');
+const db = require('../database/db');
 
 /**
  * WhatsApp Business API integration

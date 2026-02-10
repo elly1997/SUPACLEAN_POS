@@ -3,7 +3,7 @@
  * Run this if you're experiencing duplicate receipt number errors
  */
 
-const db = require('../database/init');
+const db = require('../database/db');
 const path = require('path');
 
 console.log('🔍 Checking database for UNIQUE constraints on receipt_number...\n');

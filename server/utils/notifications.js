@@ -1,6 +1,6 @@
 const { sendSMS, generateReadyNotification, generateOrderConfirmation, generateCollectionReminder, generateInvoiceReminder, generatePaymentNoticeShort } = require('./sms');
 const { sendWhatsApp } = require('./whatsapp');
-const db = require('../database/init');
+const db = require('../database/db');
 
 /**
  * Unified notification service

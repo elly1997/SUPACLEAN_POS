@@ -3,7 +3,7 @@
  * Tests the login functionality directly
  */
 
-const db = require('../database/init');
+const db = require('../database/db');
 const bcrypt = require('bcryptjs');
 
 setTimeout(() => {
