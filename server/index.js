@@ -78,9 +78,22 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../client/build')));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
+  const buildDir = path.join(__dirname, '../client/build');
+  const fs = require('fs');
+  if (!fs.existsSync(path.join(buildDir, 'index.html'))) {
+    console.error('❌ Frontend build missing. Run Build Command: npm run build:render');
+    console.error('   Expected: client/build/index.html');
+  }
+  app.use(express.static(buildDir));
+  app.get('*', (req, res, next) => {
+    const indexPath = path.join(buildDir, 'index.html');
+    if (!fs.existsSync(indexPath)) {
+      return res.status(503).json({
+        error: 'Frontend not built. In Render, set Build Command to: npm run build:render',
+        hint: 'Dashboard → Your Service → Settings → Build & Deploy → Build Command'
+      });
+    }
+    res.sendFile(indexPath);
   });
 }
 

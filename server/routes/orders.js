@@ -981,20 +981,20 @@ router.post('/collect/:receiptNumber', authenticate, requireBranchAccess(), requ
       });
     };
 
-    // Handle payment if provided
+    // Handle payment if provided (collect balance due, not full receipt total)
     if (payment_amount !== undefined && payment_amount > 0) {
       const paymentAmount = roundMoney(parseFloat(payment_amount));
       
       try {
         const tol = 0.01;
-        if (paymentAmount < receiptTotal - tol) {
+        if (paymentAmount <= 0) {
           return res.status(400).json({
-            error: `Payment must equal the receipt total of TSh ${receiptTotal.toLocaleString()}. Partial payments are not allowed.`
+            error: 'Payment amount must be greater than 0.'
           });
         }
-        if (paymentAmount > receiptTotal + tol) {
+        if (paymentAmount > balanceDue + tol) {
           return res.status(400).json({
-            error: `Payment cannot exceed the receipt total of TSh ${receiptTotal.toLocaleString()}.`
+            error: `Payment cannot exceed the balance due of TSh ${balanceDue.toLocaleString()}.`
           });
         }
         
@@ -1006,9 +1006,9 @@ router.post('/collect/:receiptNumber', authenticate, requireBranchAccess(), requ
           return res.status(400).json({ error: 'Duplicate payment detected. This payment was already recorded.' });
         }
         
-        // Record exact receipt total as paid (overwrite any spurious prior paid_amount)
-        finalPaidAmount = roundMoney(receiptTotal);
-        finalPaymentStatus = 'paid_full';
+        // Add payment to existing paid amount (collect balance due, not receipt total)
+        finalPaidAmount = roundMoney(receiptPaid + paymentAmount);
+        finalPaymentStatus = (finalPaidAmount >= receiptTotal - tol) ? 'paid_full' : 'advance';
 
         // Record payment transaction using utility function
         const orderObj = {
@@ -1046,7 +1046,7 @@ router.post('/collect/:receiptNumber', authenticate, requireBranchAccess(), requ
       // No payment provided — only allow when already fully paid
       if (balanceDue > 0) {
         return res.status(400).json({
-          error: 'Cannot collect without payment. Payment is required at collection. Record the receipt total in the payment modal, or receive payment first on the Orders page.'
+          error: 'Cannot collect without payment. Record the balance due in the payment modal, or receive payment first (Orders or Collection page).'
         });
       }
       await updateAllOrders();

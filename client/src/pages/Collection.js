@@ -388,11 +388,11 @@ const Collection = () => {
       return;
     }
 
-    const { receiptTotal, balanceDue } = getReceiptTotals(order, allReceiptOrders);
+    const { balanceDue } = getReceiptTotals(order, allReceiptOrders);
     
-    // If there's a balance due, show payment modal. Cashier must record exact receipt total.
+    // If there's a balance due, show payment modal. Cashier records balance due (not full receipt total).
     if (balanceDue > 0) {
-      setPaymentAmount(String(receiptTotal));
+      setPaymentAmount(String(balanceDue));
       setShowPaymentModal(true);
       return;
     }
@@ -445,17 +445,16 @@ const Collection = () => {
     e.preventDefault();
     if (!order) return;
     
-    const { receiptTotal } = getReceiptTotals(order, allReceiptOrders);
+    const { balanceDue } = getReceiptTotals(order, allReceiptOrders);
     const payment = roundMoney(parseFloat(paymentAmount) || 0);
     const tol = 0.01;
     
-    // Cashier may only record the exact receipt amount. Partial payments are not allowed.
-    if (payment < receiptTotal - tol) {
-      showToast(`Payment must equal the receipt total of TSh ${receiptTotal.toLocaleString()}. Partial payments are not allowed.`, 'error');
+    if (payment <= 0) {
+      showToast('Payment amount must be greater than 0', 'error');
       return;
     }
-    if (payment > receiptTotal + tol) {
-      showToast(`Payment cannot exceed the receipt total of TSh ${receiptTotal.toLocaleString()}.`, 'error');
+    if (payment > balanceDue + tol) {
+      showToast(`Payment cannot exceed the balance due of TSh ${balanceDue.toLocaleString()}.`, 'error');
       return;
     }
 
@@ -1325,12 +1324,15 @@ Thank you for choosing SUPACLEAN!
               {order.status !== 'ready' && order.status !== 'collected' && (() => {
                 const { balanceDue } = getReceiptTotals(order, allReceiptOrders);
                 return balanceDue > 0 ? (
-                  <button
-                    className="btn-primary btn-large"
-                    onClick={handleReceivePayment}
-                  >
-                    💰 Receive Payment
-                  </button>
+                  <div className="receive-payment-early">
+                    <button
+                      className="btn-primary btn-large"
+                      onClick={handleReceivePayment}
+                    >
+                      💰 Receive Payment
+                    </button>
+                    <small>Customer can pay now and collect items when ready.</small>
+                  </div>
                 ) : null;
               })()}
               {order.status === 'collected' && (
@@ -1381,12 +1383,12 @@ Thank you for choosing SUPACLEAN!
                   </div>
                 </div>
                 <div className="form-group">
-                  <label>Payment Amount * (must equal receipt total)</label>
+                  <label>Payment Amount * (balance due — can be paid in full or part)</label>
                   <input
                     type="number"
                     value={paymentAmount}
                     onChange={(e) => setPaymentAmount(e.target.value)}
-                    placeholder={`Enter exactly TSh ${receiptTotal.toLocaleString()}`}
+                    placeholder={`Balance due: TSh ${balanceDue.toLocaleString()}`}
                     min="0"
                     step="0.01"
                     required
@@ -1421,7 +1423,7 @@ Thank you for choosing SUPACLEAN!
         );
       })()}
 
-      {/* Receive Payment Modal (without collecting) */}
+      {/* Receive Payment Modal (without collecting) — use anytime, including before collection date */}
       {showReceivePaymentModal && order && (() => {
         const { receiptTotal, receiptPaid, balanceDue } = getReceiptTotals(order, allReceiptOrders);
         return (
@@ -1429,6 +1431,7 @@ Thank you for choosing SUPACLEAN!
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>💰 Receive Payment</h2>
+              <p className="modal-hint">You can receive payment before the collection date. The customer can collect items later when ready.</p>
               <button className="modal-close" onClick={() => setShowReceivePaymentModal(false)}>×</button>
             </div>
             <form onSubmit={handleReceivePaymentSubmit}>
