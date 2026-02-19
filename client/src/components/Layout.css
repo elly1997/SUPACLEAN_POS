@@ -319,6 +319,66 @@
   }
 }
 
+/* Tablet (e.g. iPad): comfortable single-column, full sidebar when open */
+@media (max-width: 1024px) {
+  .content-wrapper {
+    max-width: 100%;
+    padding: 20px 16px 40px;
+  }
+}
+
+/* Small phone / thermal POS: compact UI, touch-friendly */
+@media (max-width: 480px) {
+  .sidebar {
+    width: min(260px, 90vw);
+  }
+
+  .sidebar-header {
+    padding: 20px 16px;
+  }
+
+  .sidebar-header h2 {
+    font-size: 22px;
+  }
+
+  .nav-item {
+    padding: 14px 12px;
+    font-size: 15px;
+  }
+
+  .main-content {
+    padding-top: 56px;
+  }
+
+  .content-wrapper {
+    padding: 12px 10px 32px;
+    max-width: 100%;
+  }
+
+  .mobile-menu-btn {
+    width: 40px;
+    height: 40px;
+    top: 12px;
+    left: 12px;
+    font-size: 18px;
+  }
+}
+
+/* Very small screens (thermal POS / small phone): minimal chrome, max content */
+@media (max-width: 360px) {
+  .sidebar {
+    width: min(240px, 92vw);
+  }
+
+  .sidebar-header h2 {
+    font-size: 18px;
+  }
+
+  .content-wrapper {
+    padding: 10px 8px 24px;
+  }
+}
+
 .page-header {
   margin-bottom: 30px;
 }

@@ -728,7 +728,8 @@ Phone: ${customer.phone}
       ? process.env.REACT_APP_PUBLIC_ORIGIN.replace(/\/$/, '')
       : (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
     const termsUrl = baseUrl ? `${baseUrl}/terms` : '';
-    const termsQrSrc = termsUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=${encodeURIComponent(termsUrl)}` : '';
+    const termsQrSize = 64;
+    const termsQrSrc = termsUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=${termsQrSize}x${termsQrSize}&data=${encodeURIComponent(termsUrl)}` : '';
     let termsQrDataUrl = '';
     if (termsQrSrc) {
       try {
@@ -745,7 +746,7 @@ Phone: ${customer.phone}
       }
     }
     const termsQrBlock = termsQrDataUrl
-      ? `<div class="receipt-end"><img src="${termsQrDataUrl}" alt="Terms" width="80" height="80" /><p>Scan for Terms / Masharti</p></div>`
+      ? `<div class="receipt-end"><img src="${termsQrDataUrl}" alt="Terms" width="${termsQrSize}" height="${termsQrSize}" /><p>Scan for Terms / Masharti</p></div>`
       : '';
     const escape = (s) =>
       String(s == null ? '' : s)
@@ -778,8 +779,8 @@ Phone: ${customer.phone}
               @media print {
                 @page { size: 80mm auto; margin: 0; }
                 html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                .receipt-sheet { height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; }
-                body { font-family: 'Courier New', monospace; padding: 8mm 4mm; margin: 0; background: white; font-weight: 600; }
+                .receipt-sheet { width: 80mm; max-width: 80mm; height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; }
+                body { font-family: 'Courier New', monospace; padding: 8mm 4mm; margin: 0; background: white; font-weight: 600; width: 80mm; max-width: 80mm; box-sizing: border-box; }
                 pre, .receipt-items, .receipt-items th, .receipt-items td { color: #000 !important; font-weight: 600; }
                 .receipt-items .r-desc { color: #000 !important; font-weight: 600; }
                 .receipt-footer { font-weight: bold; color: #000 !important; }
@@ -812,8 +813,9 @@ Phone: ${customer.phone}
               ${termsQrBlock}
             </div>
             <script>
-              window.onload = function() { setTimeout(function() { window.focus(); window.print(); }, 200); };
-              setTimeout(function() { try { window.focus(); window.print(); } catch (e) {} }, 100);
+              function doPrint() { try { window.focus(); window.print(); } catch (e) {} }
+              window.onload = function() { setTimeout(doPrint, 450); };
+              setTimeout(function() { if (document.readyState === 'complete') doPrint(); }, 1200);
               window.onafterprint = function() { setTimeout(function() { try { window.close(); } catch (e) {} }, 500); };
             </script>
           </body>
@@ -823,7 +825,7 @@ Phone: ${customer.phone}
     try {
       let printWindow = null;
       try {
-        printWindow = window.open('', '_blank', 'width=400,height=600,scrollbars=yes');
+        printWindow = window.open('', '_blank', 'width=320,height=500,scrollbars=yes');
       } catch (e) {
         console.error('Error opening print window:', e);
       }
@@ -853,15 +855,15 @@ Phone: ${customer.phone}
           setTimeout(function() {
             if (document.body.contains(printContainer)) document.body.removeChild(printContainer);
             if (document.head.contains(printStyle)) document.head.removeChild(printStyle);
-          }, 1000);
-        }, 300);
+          }, 1500);
+        }, 500);
         return;
       }
 
       printWindow.document.open();
       printWindow.document.write(printHTML);
       printWindow.document.close();
-      showToast('Receipt print dialog opened', 'success');
+      showToast('Receipt print dialog opened. Select your thermal printer if needed.', 'success');
     } catch (e) {
       console.error('Error writing to print window:', e);
       showToast('Error opening print window. Please use Print button in Orders page.', 'warning');

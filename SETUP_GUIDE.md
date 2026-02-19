@@ -275,6 +275,20 @@ If you run **multiple branches** or use **thermal POS** with item photos:
    - `indexes-multi-branch-scale.sql` — indexes for better performance with lots of data.
 2. See **`PRE_LAUNCH_CHECKLIST.md`** for fixes, pagination, UI stabilisation, and a step-by-step go-live plan.
 
+### Responsive interface (thermal POS, tablet, desktop)
+
+The app adapts to screen size:
+
+- **Small screens (e.g. thermal POS, phone):** Sidebar becomes a hamburger menu; content uses compact padding so the full UI fits. Use the **menu button** (top-left) to open the sidebar, then tap a page.
+- **Tablet (e.g. iPad):** Same layout with comfortable spacing.
+- **Desktop:** Full sidebar and wide content.
+
+### Thermal and other printers
+
+- **Receipts** are formatted for **80mm thermal** paper. When you complete an order or print from Collection, the print dialog opens — **choose your thermal printer** if it is not the default.
+- If the receipt **preview is blank** or does not print: the app now waits for the receipt to render before opening the dialog. Ensure the thermal printer is installed and selected in the dialog. On some POS devices, set the thermal printer as the **default** printer so it is pre-selected.
+- If the **print window is blocked**, the app falls back to an in-page print area; use **Print** and select your thermal printer.
+
 ## Next Steps
 
 After setup:
