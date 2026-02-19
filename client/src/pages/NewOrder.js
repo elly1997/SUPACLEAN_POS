@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { getServices, getItems, getCustomers, createCustomer, createOrder, getCustomerOrders, getSettings, generateReceiptNumber, sendReceiptSms } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import './NewOrder.css';
 
 // Color Input Component - Defined outside to prevent recreation on each render
@@ -728,7 +729,6 @@ Phone: ${customer.phone}
       ? process.env.REACT_APP_PUBLIC_ORIGIN.replace(/\/$/, '')
       : (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
     const termsUrl = baseUrl ? `${baseUrl}/terms` : '';
-    const termsQrSize = 64;
     const termsQrSrc = termsUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=${termsQrSize}x${termsQrSize}&data=${encodeURIComponent(termsUrl)}` : '';
     let termsQrDataUrl = '';
     if (termsQrSrc) {
@@ -775,25 +775,25 @@ Phone: ${customer.phone}
             <title>Receipt - SUPACLEAN</title>
             <meta charset="UTF-8">
             <style>
-              @media screen { body { font-family: 'Courier New', monospace; padding: 20px; max-width: 80mm; margin: 0 auto; background: #f5f5f5; } }
+              @media screen { body { font-family: 'Courier New', monospace; padding: 20px; max-width: ${receiptWidthCss}; margin: 0 auto; background: #f5f5f5; } }
               @media print {
-                @page { size: 80mm auto; margin: 0; }
+                @page { size: ${receiptWidthCss} auto; margin: 0; }
                 html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                .receipt-sheet { width: 80mm; max-width: 80mm; height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; }
-                body { font-family: 'Courier New', monospace; padding: 8mm 4mm; margin: 0; background: white; font-weight: 600; width: 80mm; max-width: 80mm; box-sizing: border-box; }
+                .receipt-sheet { width: ${receiptWidthCss}; max-width: ${receiptWidthCss}; height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; }
+                body { font-family: 'Courier New', monospace; padding: ${receiptPadding}; margin: 0; background: white; font-weight: 600; width: ${receiptWidthCss}; max-width: ${receiptWidthCss}; box-sizing: border-box; font-size: ${receiptFontSize}; }
                 pre, .receipt-items, .receipt-items th, .receipt-items td { color: #000 !important; font-weight: 600; }
                 .receipt-items .r-desc { color: #000 !important; font-weight: 600; }
                 .receipt-footer { font-weight: bold; color: #000 !important; }
                 .receipt-end p { font-weight: bold; color: #000 !important; }
                 pre { margin: 0; padding: 0; white-space: pre; overflow: visible; }
-                body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: 8pt; }
+                body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: ${receiptCompactFontSize}; }
                 .receipt-end { margin-top: 6px; page-break-inside: avoid; }
                 * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
               }
-              .receipt-sheet { text-align: center; margin: 0 auto; max-width: 80mm; color: #000; font-weight: 600; }
-              .receipt-brand { font-weight: bold; text-align: center; margin: 0 0 4px 0; font-size: 1.1em; color: #000; }
-              body:not(.receipt-compact) pre, body:not(.receipt-compact) .receipt-items { font-size: 9pt; line-height: 1.2; }
-              body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: 8pt; line-height: 1.05; }
+              .receipt-sheet { text-align: center; margin: 0 auto; max-width: ${receiptWidthCss}; color: #000; font-weight: 600; }
+              .receipt-brand { font-weight: bold; text-align: center; margin: ${receiptBrandMargin}; font-size: ${receiptBrandFontSize}; color: #000; }
+              body:not(.receipt-compact) pre, body:not(.receipt-compact) .receipt-items { font-size: ${receiptFontSize}; line-height: 1.15; }
+              body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: ${receiptCompactFontSize}; line-height: 1.05; }
               pre { margin: 0; color: #000; white-space: pre; font-weight: 600; }
               .receipt-items th, .receipt-items td { color: #000; font-weight: 600; }
               .receipt-header, .receipt-footer { text-align: center; }
@@ -822,51 +822,64 @@ Phone: ${customer.phone}
         </html>
       `;
 
+    const isSmallScreen = typeof window !== 'undefined' && window.innerWidth <= 600;
+    const useInPagePrint = () => {
+      const printContainer = document.createElement('div');
+      printContainer.id = 'receipt-print-container';
+      printContainer.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+      const inner = document.createElement('div');
+      inner.style.cssText = `width:${receiptWidthCss};max-width:100%;background:white;padding:${receiptPadding};font-family:'Courier New',monospace;font-size:${receiptFontSize};font-weight:600;color:#000;text-align:center;border-radius:8px`;
+      const fallbackBody = isStructured
+        ? (receiptTextOrData.brandTitle ? `<div class="receipt-brand" style="font-weight:bold;text-align:center;margin:${receiptBrandMargin};color:#000">${escape(receiptTextOrData.brandTitle)}</div>` : '') + `<pre class="receipt-header" style="margin:0;text-align:center;color:#000;font-weight:600">${escape(receiptTextOrData.headerText)}</pre><table class="receipt-items" style="width:100%;margin:4px 0;font-size:${receiptFontSize};border-collapse:collapse;color:#000;font-weight:600"><thead><tr><th style="text-align:center">Qty</th><th style="text-align:left">Item</th><th style="text-align:right">TSh</th></tr></thead><tbody>${receiptTextOrData.items.map((r) => `<tr><td style="text-align:center">${escape(r.qty)}</td><td class="r-desc" style="text-align:left;word-wrap:break-word;word-break:break-word;color:#000;font-weight:600">${escape(r.desc)}</td><td style="text-align:right;white-space:nowrap">${escape(r.amount)}</td></tr>`).join('')}</tbody></table><pre class="receipt-footer" style="margin:0;text-align:center;color:#000;font-weight:bold">${escape(receiptTextOrData.footerText)}</pre>`
+        : `<pre style="white-space:pre-wrap;word-wrap:break-word;margin:0;color:#000;font-weight:600">${escape(receiptText)}</pre>`;
+      inner.innerHTML = fallbackBody + termsQrBlock;
+      if (compact) {
+        const pre = inner.querySelector('pre');
+        if (pre) { pre.style.fontSize = receiptCompactFontSize; pre.style.lineHeight = '1.05'; }
+      }
+      printContainer.appendChild(inner);
+      const printStyle = document.createElement('style');
+      printStyle.textContent = `#receipt-print-container .receipt-end p{font-weight:bold;color:#000}#receipt-print-container .receipt-footer{font-weight:bold;color:#000}#receipt-print-container .r-desc{color:#000;font-weight:600}@media print{@page{size:${receiptWidthCss} auto;margin:0}body *{visibility:hidden !important}#receipt-print-container,#receipt-print-container *{visibility:visible !important}#receipt-print-container{position:absolute !important;left:0 !important;top:0 !important;right:auto !important;bottom:auto !important;background:white !important;padding:${receiptPadding} !important;width:${receiptWidthCss} !important;max-width:${receiptWidthCss} !important;min-height:auto !important}#receipt-print-container>div{background:white !important}}`;
+      document.head.appendChild(printStyle);
+      document.body.appendChild(printContainer);
+      const cleanup = () => {
+        if (document.body.contains(printContainer)) document.body.removeChild(printContainer);
+        if (document.head.contains(printStyle)) document.head.removeChild(printStyle);
+      };
+      const doPrint = () => {
+        window.print();
+        setTimeout(cleanup, 1500);
+      };
+      if (isSmallScreen) {
+        showToast('Printing from this screen. Use default (built-in) printer.', 'info');
+      }
+      setTimeout(doPrint, 700);
+    };
+
     try {
+      if (isSmallScreen) {
+        useInPagePrint();
+        return;
+      }
       let printWindow = null;
       try {
         printWindow = window.open('', '_blank', 'width=320,height=500,scrollbars=yes');
       } catch (e) {
         console.error('Error opening print window:', e);
       }
-
       if (!printWindow || printWindow.closed || typeof printWindow.closed === 'undefined') {
-        showToast('Popup blocked! Using alternative print method...', 'info');
-        const printContainer = document.createElement('div');
-        printContainer.id = 'receipt-print-container';
-        printContainer.style.cssText = 'position:fixed;left:0;top:0;width:80mm;min-height:100vh;background:white;padding:10mm 5mm;font-family:\'Courier New\',monospace;font-size:9pt;font-weight:600;color:#000;z-index:99999;text-align:center';
-        const fallbackBody = isStructured
-          ? (receiptTextOrData.brandTitle ? `<div class="receipt-brand" style="font-weight:bold;text-align:center;margin:0 0 4px 0;color:#000">${escape(receiptTextOrData.brandTitle)}</div>` : '') + `<pre class="receipt-header" style="margin:0;text-align:center;color:#000;font-weight:600">${escape(receiptTextOrData.headerText)}</pre><table class="receipt-items" style="width:100%;margin:4px 0;font-size:9pt;border-collapse:collapse;color:#000;font-weight:600"><thead><tr><th style="text-align:center">Qty</th><th style="text-align:left">Item</th><th style="text-align:right">TSh</th></tr></thead><tbody>${receiptTextOrData.items.map((r) => `<tr><td style="text-align:center">${escape(r.qty)}</td><td class="r-desc" style="text-align:left;word-wrap:break-word;word-break:break-word;color:#000;font-weight:600">${escape(r.desc)}</td><td style="text-align:right;white-space:nowrap">${escape(r.amount)}</td></tr>`).join('')}</tbody></table><pre class="receipt-footer" style="margin:0;text-align:center;color:#000;font-weight:bold">${escape(receiptTextOrData.footerText)}</pre>`
-          : `<pre style="white-space:pre-wrap;word-wrap:break-word;margin:0;color:#000;font-weight:600">${escape(receiptText)}</pre>`;
-        printContainer.innerHTML = fallbackBody + termsQrBlock;
-        if (compact) {
-          const pre = printContainer.querySelector('pre');
-          if (pre) {
-            pre.style.fontSize = '8pt';
-            pre.style.lineHeight = '1.05';
-          }
-        }
-        const printStyle = document.createElement('style');
-        printStyle.textContent = `#receipt-print-container .receipt-end p{font-weight:bold;color:#000}#receipt-print-container .receipt-footer{font-weight:bold;color:#000}#receipt-print-container .r-desc{color:#000;font-weight:600}@media print{@page{size:80mm auto;margin:0}body *{visibility:hidden}#receipt-print-container,#receipt-print-container *{visibility:visible}#receipt-print-container{position:absolute;left:0;top:0;width:80mm}}`;
-        document.head.appendChild(printStyle);
-        document.body.appendChild(printContainer);
-        setTimeout(function() {
-          window.print();
-          setTimeout(function() {
-            if (document.body.contains(printContainer)) document.body.removeChild(printContainer);
-            if (document.head.contains(printStyle)) document.head.removeChild(printStyle);
-          }, 1500);
-        }, 500);
+        showToast('Using same-window print (better for built-in printer).', 'info');
+        useInPagePrint();
         return;
       }
-
       printWindow.document.open();
       printWindow.document.write(printHTML);
       printWindow.document.close();
       showToast('Receipt print dialog opened. Select your thermal printer if needed.', 'success');
     } catch (e) {
-      console.error('Error writing to print window:', e);
-      showToast('Error opening print window. Please use Print button in Orders page.', 'warning');
+      console.error('Error printing:', e);
+      showToast('Print failed. Trying same-window print...', 'info');
+      useInPagePrint();
     }
   };
 

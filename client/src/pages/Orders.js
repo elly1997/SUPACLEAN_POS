@@ -4,6 +4,7 @@ import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStoc
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
+import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import './Orders.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
@@ -435,10 +436,10 @@ Phone: ${receiptGroup.customer_phone}
             <meta charset="UTF-8">
             <style>
               @media print {
-                @page { size: 80mm auto; margin: 0; }
+                @page { size: ${receiptWidthCss} auto; margin: 0; }
                 html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                .receipt-sheet { height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; }
-                body { font-family: 'Courier New', monospace; padding: 8mm 4mm; margin: 0; background: white; }
+                .receipt-sheet { width: ${receiptWidthCss}; max-width: ${receiptWidthCss}; height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; }
+                body { font-family: 'Courier New', monospace; padding: ${receiptPadding}; margin: 0; background: white; width: ${receiptWidthCss}; max-width: ${receiptWidthCss}; font-size: ${receiptFontSize}; }
                 pre, .receipt-items th, .receipt-items td { color: #000 !important; font-weight: 600; }
                 .receipt-items .r-desc { color: #000 !important; font-weight: 600; }
                 .receipt-footer { font-weight: bold; color: #000 !important; }
@@ -448,11 +449,11 @@ Phone: ${receiptGroup.customer_phone}
                 .receipt-end { margin-top: 6px; page-break-inside: avoid; }
                 * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
               }
-              @media screen { body { font-family: 'Courier New', monospace; padding: 20px; max-width: 80mm; margin: 0 auto; background: #f5f5f5; } }
-              .receipt-sheet { text-align: center; margin: 0 auto; max-width: 80mm; }
-              .receipt-brand { font-weight: bold; text-align: center; margin: 0 0 4px 0; font-size: 1.1em; color: #000; }
-              body:not(.receipt-compact) pre, body:not(.receipt-compact) .receipt-items { font-size: 9pt; line-height: 1.2; }
-              body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: 8pt; line-height: 1.05; }
+              @media screen { body { font-family: 'Courier New', monospace; padding: 20px; max-width: ${receiptWidthCss}; margin: 0 auto; background: #f5f5f5; } }
+              .receipt-sheet { text-align: center; margin: 0 auto; max-width: ${receiptWidthCss}; }
+              .receipt-brand { font-weight: bold; text-align: center; margin: ${receiptBrandMargin}; font-size: ${receiptBrandFontSize}; color: #000; }
+              body:not(.receipt-compact) pre, body:not(.receipt-compact) .receipt-items { font-size: ${receiptFontSize}; line-height: 1.15; }
+              body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: ${receiptCompactFontSize}; line-height: 1.05; }
               pre { margin: 0; color: black; white-space: pre; }
               .receipt-header, .receipt-footer { text-align: center; }
               .receipt-items { width: 100%; margin: 4px 0; border-collapse: collapse; text-align: center; }

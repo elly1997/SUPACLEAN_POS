@@ -283,11 +283,15 @@ The app adapts to screen size:
 - **Tablet (e.g. iPad):** Same layout with comfortable spacing.
 - **Desktop:** Full sidebar and wide content.
 
-### Thermal and other printers
+### Thermal and in-built POS printers
 
-- **Receipts** are formatted for **80mm thermal** paper. When you complete an order or print from Collection, the print dialog opens — **choose your thermal printer** if it is not the default.
-- If the receipt **preview is blank** or does not print: the app now waits for the receipt to render before opening the dialog. Ensure the thermal printer is installed and selected in the dialog. On some POS devices, set the thermal printer as the **default** printer so it is pre-selected.
-- If the **print window is blocked**, the app falls back to an in-page print area; use **Print** and select your thermal printer.
+- **Receipt width** is configurable so it adapts to the printer you use:
+  - **58mm** (default) – in-built POS, 58mm paper. Set `REACT_APP_RECEIPT_WIDTH_MM=58` in `.env` (or leave unset).
+  - **80mm** – 80mm thermal printers. Set `REACT_APP_RECEIPT_WIDTH_MM=80` in `.env`, then **rebuild the client** (`npm run build` or redeploy). On Render, add `REACT_APP_RECEIPT_WIDTH_MM=80` in **Environment** and redeploy.
+- Font size and QR size adjust automatically (smaller for 58mm, larger for 80mm).
+- **On POS with in-built printer (small screen):** The app now uses **same-window printing**: the receipt is shown on screen and the print dialog opens in the same window. The **default printer** on the device is used — so **set your built-in printer as the default** in the POS device settings (e.g. Settings → Printers → set built-in thermal as default). Then when you complete an order or print from Collection, the dialog will show that printer; tap Print.
+- **If the built-in printer does not appear** in the print dialog at all, it may not be registered as a system printer. In that case: (1) Install any driver or utility that came with the POS so the built-in printer appears in the device’s printer list; (2) Set it as default; (3) Try again. Some POS devices require their own “print service” or driver to be enabled in settings.
+- **Larger screens (tablet/desktop):** A new window may open for the receipt; choose your thermal printer in the dialog. If the window is blocked, the app falls back to same-window print.
 
 ## Next Steps
 

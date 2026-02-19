@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { getOrderByReceipt, collectOrder, receivePayment, getCustomers, searchOrdersByCustomer, getCollectionQueue, getOrders, getReceiptQRCode } from '../api/api';
 import { useToast } from '../hooks/useToast';
+import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import './Collection.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
@@ -637,7 +638,6 @@ Phone: ${mainOrder.customer_phone}
       ? process.env.REACT_APP_PUBLIC_ORIGIN.replace(/\/$/, '')
       : (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
     const termsUrl = baseUrl ? `${baseUrl}/terms` : '';
-    const termsQrSize = 64;
     const termsQrSrc = termsUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=${termsQrSize}x${termsQrSize}&data=${encodeURIComponent(termsUrl)}` : '';
     let termsQrDataUrl = '';
     if (termsQrSrc) {
@@ -686,26 +686,26 @@ Phone: ${mainOrder.customer_phone}
             <meta charset="UTF-8">
             <style>
               @media print {
-                @page { size: 80mm auto; margin: 0; }
+                @page { size: ${receiptWidthCss} auto; margin: 0; }
                 html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                .receipt-sheet { width: 80mm; max-width: 80mm; height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; }
-                body { font-family: 'Courier New', monospace; padding: 8mm 4mm; margin: 0; background: white; width: 80mm; max-width: 80mm; box-sizing: border-box; }
+                .receipt-sheet { width: ${receiptWidthCss}; max-width: ${receiptWidthCss}; height: auto !important; min-height: 0 !important; overflow: visible !important; color: #000 !important; }
+                body { font-family: 'Courier New', monospace; padding: ${receiptPadding}; margin: 0; background: white; width: ${receiptWidthCss}; max-width: ${receiptWidthCss}; box-sizing: border-box; font-size: ${receiptFontSize}; }
                 pre, .receipt-items th, .receipt-items td { color: #000 !important; font-weight: 600; }
                 .receipt-items .r-desc { color: #000 !important; font-weight: 600; }
                 .receipt-footer { font-weight: bold; color: #000 !important; }
                 .receipt-end p { font-weight: bold; color: #000 !important; }
                 pre { margin: 0; padding: 0; white-space: pre; overflow: visible; }
-                body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: 8pt; }
+                body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: ${receiptCompactFontSize}; }
                 .receipt-end { margin-top: 6px; page-break-inside: avoid; }
                 * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
               }
               @media screen {
-                body { font-family: 'Courier New', monospace; padding: 20px; max-width: 80mm; margin: 0 auto; background: #f5f5f5; }
+                body { font-family: 'Courier New', monospace; padding: 20px; max-width: ${receiptWidthCss}; margin: 0 auto; background: #f5f5f5; }
               }
-              .receipt-sheet { text-align: center; margin: 0 auto; max-width: 80mm; }
-              .receipt-brand { font-weight: bold; text-align: center; margin: 0 0 4px 0; font-size: 1.1em; color: #000; }
-              body:not(.receipt-compact) pre, body:not(.receipt-compact) .receipt-items { font-size: 9pt; line-height: 1.2; }
-              body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: 8pt; line-height: 1.05; }
+              .receipt-sheet { text-align: center; margin: 0 auto; max-width: ${receiptWidthCss}; }
+              .receipt-brand { font-weight: bold; text-align: center; margin: ${receiptBrandMargin}; font-size: ${receiptBrandFontSize}; color: #000; }
+              body:not(.receipt-compact) pre, body:not(.receipt-compact) .receipt-items { font-size: ${receiptFontSize}; line-height: 1.15; }
+              body.receipt-compact pre, body.receipt-compact .receipt-items { font-size: ${receiptCompactFontSize}; line-height: 1.05; }
               pre { margin: 0; color: black; white-space: pre; }
               .receipt-header, .receipt-footer { text-align: center; }
               .receipt-items { width: 100%; margin: 4px 0; border-collapse: collapse; text-align: center; }
@@ -733,7 +733,41 @@ Phone: ${mainOrder.customer_phone}
         </html>
       `;
 
+    const isSmallScreen = typeof window !== 'undefined' && window.innerWidth <= 600;
+    const useInPagePrint = () => {
+      const printContainer = document.createElement('div');
+      printContainer.id = 'receipt-print-container-collection';
+      printContainer.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+      const inner = document.createElement('div');
+      inner.style.cssText = `width:${receiptWidthCss};max-width:100%;background:white;padding:${receiptPadding};font-family:'Courier New',monospace;font-size:${receiptFontSize};font-weight:600;color:#000;text-align:center;border-radius:8px`;
+      inner.innerHTML = bodyContent + termsQrBlock;
+      if (compact) {
+        const pres = inner.querySelectorAll('pre');
+        pres.forEach((p) => { p.style.fontSize = receiptCompactFontSize; p.style.lineHeight = '1.05'; });
+      }
+      printContainer.appendChild(inner);
+      const printStyle = document.createElement('style');
+      printStyle.textContent = `#receipt-print-container-collection .receipt-end p{font-weight:bold;color:#000}#receipt-print-container-collection .receipt-footer{font-weight:bold;color:#000}#receipt-print-container-collection .r-desc{color:#000;font-weight:600}@media print{@page{size:${receiptWidthCss} auto;margin:0}body *{visibility:hidden !important}#receipt-print-container-collection,#receipt-print-container-collection *{visibility:visible !important}#receipt-print-container-collection{position:absolute !important;left:0 !important;top:0 !important;right:auto !important;bottom:auto !important;background:white !important;padding:${receiptPadding} !important;width:${receiptWidthCss} !important;max-width:${receiptWidthCss} !important;min-height:auto !important}#receipt-print-container-collection>div{background:white !important}}`;
+      document.head.appendChild(printStyle);
+      document.body.appendChild(printContainer);
+      const cleanup = () => {
+        if (document.body.contains(printContainer)) document.body.removeChild(printContainer);
+        if (document.head.contains(printStyle)) document.head.removeChild(printStyle);
+      };
+      setTimeout(() => {
+        window.print();
+        setTimeout(cleanup, 1500);
+      }, 700);
+      if (isSmallScreen) {
+        showToast('Printing from this screen. Use default (built-in) printer.', 'info');
+      }
+    };
+
     try {
+      if (isSmallScreen) {
+        useInPagePrint();
+        return;
+      }
       const printWindow = window.open('', '_blank', 'width=320,height=500,scrollbars=yes');
       if (printWindow) {
         printWindow.document.open();
@@ -741,27 +775,13 @@ Phone: ${mainOrder.customer_phone}
         printWindow.document.close();
         showToast('Receipt print dialog opened. Select your thermal printer.', 'success');
       } else {
-        const iframe = document.createElement('iframe');
-        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:none';
-        document.body.appendChild(iframe);
-        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-        iframeDoc.open();
-        iframeDoc.write(printHTML);
-        iframeDoc.close();
-        iframe.onload = function() {
-          setTimeout(function() {
-            iframe.contentWindow.focus();
-            iframe.contentWindow.print();
-            setTimeout(function() {
-              if (document.body.contains(iframe)) document.body.removeChild(iframe);
-            }, 2500);
-          }, 600);
-        };
-        showToast('Receipt print dialog opened', 'success');
+        showToast('Using same-window print (better for built-in printer).', 'info');
+        useInPagePrint();
       }
     } catch (error) {
       console.error('Error printing receipt:', error);
-      showToast('Error printing receipt: ' + error.message, 'error');
+      showToast('Trying same-window print...', 'info');
+      useInPagePrint();
     }
   };
 
