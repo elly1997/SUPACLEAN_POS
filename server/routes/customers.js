@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
-const { authenticate, requireBranchAccess } = require('../middleware/auth');
+const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 const multer = require('multer');
@@ -17,8 +17,31 @@ if (!fs.existsSync(uploadsDir)) {
 
 const upload = multer({ dest: uploadsDir });
 
+/** Normalize phone for lookup: digits only; 9 digits with leading 0 -> 255 prefix (Tanzania) */
+function normalizePhone(phone) {
+  if (!phone || typeof phone !== 'string') return '';
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length === 9 && phone.trim().startsWith('0')) return '255' + digits;
+  if (digits.length === 9) return '255' + digits;
+  return digits;
+}
+
+/** Find customer by phone (exact or normalized match for Tanzania) */
+async function findCustomerByPhone(phone) {
+  if (!phone || !phone.trim()) return null;
+  const trimmed = phone.trim();
+  const normalized = normalizePhone(trimmed);
+  const rows = await db.all(
+    `SELECT * FROM customers WHERE phone = ? OR phone = ? OR TRIM(phone) = ? LIMIT 1`,
+    [trimmed, normalized, trimmed]
+  );
+  return rows && rows[0] ? rows[0] : null;
+}
+
+router.use(authenticate, requireBranchFeature('customers'));
+
 // Get all customers with optional outstanding balance (?light=1 for fast list, no JOIN)
-router.get('/', authenticate, async (req, res) => {
+router.get('/', async (req, res) => {
   const { search, limit: limitParam, offset: offsetParam, page, light } = req.query;
   const useLight = light === '1' || light === 'true';
   const limit = Math.min(parseInt(limitParam, 10) || (useLight ? 50 : 200), 500);
@@ -41,6 +64,7 @@ router.get('/', authenticate, async (req, res) => {
     try {
       const rows = await db.all(
         `SELECT c.*,
+                (SELECT o.branch_id FROM orders o WHERE o.customer_id = c.id ORDER BY o.order_date DESC LIMIT 1) AS branch_id,
                 (SELECT b.name FROM orders o JOIN branches b ON o.branch_id = b.id WHERE o.customer_id = c.id ORDER BY o.order_date DESC LIMIT 1) AS branch_name
          FROM customers c${whereClause} ORDER BY c.created_at DESC LIMIT ? OFFSET ?`,
         [...params, limit, offset]
@@ -50,6 +74,7 @@ router.get('/', authenticate, async (req, res) => {
         tags: row.tags || null,
         sms_notifications_enabled: row.sms_notifications_enabled !== undefined ? row.sms_notifications_enabled : 1,
         outstanding_balance: 0,
+        branch_id: row.branch_id != null ? row.branch_id : null,
         branch_name: row.branch_name || null
       }));
       return res.json(formattedRows);
@@ -67,6 +92,8 @@ router.get('/', authenticate, async (req, res) => {
   
   let query = `
     SELECT c.*,
+           (SELECT o.branch_id FROM orders o WHERE o.customer_id = c.id ORDER BY o.order_date DESC LIMIT 1) AS branch_id,
+           (SELECT b.name FROM orders o JOIN branches b ON o.branch_id = b.id WHERE o.customer_id = c.id ORDER BY o.order_date DESC LIMIT 1) AS branch_name,
            COALESCE(SUM(CASE 
              WHEN o.id IS NOT NULL 
              AND o.status != 'collected' 
@@ -117,7 +144,7 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // Get customer by ID
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const row = await db.get('SELECT * FROM customers WHERE id = ?', [id]);
@@ -130,29 +157,40 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-// Quick-add customer for billing (name, phone, TIN, VRN) – canCreateOrders
-router.post('/quick-add', authenticate, requirePermission('canCreateOrders'), async (req, res) => {
+// Quick-add customer for billing (name, phone, TIN, VRN) – canCreateOrders. Find-or-create by phone.
+router.post('/quick-add', requirePermission('canCreateOrders'), async (req, res) => {
   const { name, phone, tin, vrn } = req.body;
   if (!name || !phone) {
     return res.status(400).json({ error: 'Name and phone are required' });
   }
   try {
+    const existing = await findCustomerByPhone(phone);
+    if (existing) {
+      const c = await db.get('SELECT id, name, phone, tin, vrn FROM customers WHERE id = ?', [existing.id]);
+      return res.status(200).json({ ...c, existing: true });
+    }
     const r = await db.run(
       'INSERT INTO customers (name, phone, tin, vrn) VALUES (?, ?, ?, ?) RETURNING id',
       [name.trim(), phone.trim(), (tin || '').trim() || null, (vrn || '').trim() || null]
     );
-    const c = await db.get('SELECT id, name, phone, tin, vrn FROM customers WHERE id = ?', [r.lastID]);
+    const id = r?.row?.id ?? r?.lastID;
+    const c = await db.get('SELECT id, name, phone, tin, vrn FROM customers WHERE id = ?', [id]);
     res.status(201).json(c);
   } catch (err) {
-    if (err.message && err.message.includes('UNIQUE') && err.message.includes('phone')) {
+    if (err.message && (err.message.includes('UNIQUE') || err.message.includes('customers_phone_key')) && err.message.includes('phone')) {
+      const existing = await findCustomerByPhone(phone).catch(() => null);
+      if (existing) {
+        const c = await db.get('SELECT id, name, phone, tin, vrn FROM customers WHERE id = ?', [existing.id]);
+        return res.status(200).json({ ...c, existing: true });
+      }
       return res.status(400).json({ error: 'Phone number already exists' });
     }
     res.status(500).json({ error: err.message });
   }
 });
 
-// Create new customer (managers and admins only)
-router.post('/', authenticate, requireBranchAccess(), requirePermission('canManageCustomers'), async (req, res) => {
+// Create new customer (managers and admins only). Find-or-create: if phone exists, return that customer so all branches can use it.
+router.post('/', requireBranchAccess(), requirePermission('canManageCustomers'), async (req, res) => {
   const { name, phone, email, address } = req.body;
 
   if (!name || !phone) {
@@ -160,13 +198,38 @@ router.post('/', authenticate, requireBranchAccess(), requirePermission('canMana
   }
 
   try {
+    const existing = await findCustomerByPhone(phone);
+    if (existing) {
+      return res.status(200).json({
+        id: existing.id,
+        name: existing.name,
+        phone: existing.phone,
+        email: existing.email ?? email ?? null,
+        address: existing.address ?? address ?? null,
+        existing: true,
+        message: 'Customer with this phone already exists; use this customer for your order.'
+      });
+    }
     const result = await db.run(
       'INSERT INTO customers (name, phone, email, address) VALUES (?, ?, ?, ?) RETURNING id',
-      [name, phone, email || null, address || null]
+      [name.trim(), phone.trim(), email ? email.trim() || null : null, address ? address.trim() || null : null]
     );
-    res.json({ id: result.lastID, name, phone, email, address });
+    const id = result?.row?.id ?? result?.lastID;
+    res.status(201).json({ id, name: name.trim(), phone: phone.trim(), email: email || null, address: address || null });
   } catch (err) {
-    if (err.message && err.message.includes('UNIQUE constraint')) {
+    if (err.message && (err.message.includes('UNIQUE') || err.message.includes('unique constraint') || err.message.includes('customers_phone_key'))) {
+      const existing = await findCustomerByPhone(phone).catch(() => null);
+      if (existing) {
+        return res.status(200).json({
+          id: existing.id,
+          name: existing.name,
+          phone: existing.phone,
+          email: existing.email ?? null,
+          address: existing.address ?? null,
+          existing: true,
+          message: 'Customer with this phone already exists; use this customer for your order.'
+        });
+      }
       return res.status(400).json({ error: 'Phone number already exists' });
     }
     res.status(500).json({ error: err.message });
@@ -174,7 +237,7 @@ router.post('/', authenticate, requireBranchAccess(), requirePermission('canMana
 });
 
 // Update customer (managers and admins only)
-router.put('/:id', authenticate, requireBranchAccess(), requirePermission('canManageCustomers'), async (req, res) => {
+router.put('/:id', requireBranchAccess(), requirePermission('canManageCustomers'), async (req, res) => {
   const { id } = req.params;
   const { name, phone, email, address, tags, sms_notifications_enabled } = req.body;
 
@@ -182,6 +245,12 @@ router.put('/:id', authenticate, requireBranchAccess(), requirePermission('canMa
   const tagsString = Array.isArray(tags) ? tags.join(',') : (tags || '');
 
   try {
+    if (phone != null && phone.trim()) {
+      const existing = await findCustomerByPhone(phone);
+      if (existing && String(existing.id) !== String(id)) {
+        return res.status(400).json({ error: 'Phone number already in use by another customer' });
+      }
+    }
     const result = await db.run(
       'UPDATE customers SET name = ?, phone = ?, email = ?, address = ?, tags = ?, sms_notifications_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
       [name, phone, email || null, address || null, tagsString || null, sms_notifications_enabled !== undefined ? sms_notifications_enabled : null, id]
@@ -191,12 +260,15 @@ router.put('/:id', authenticate, requireBranchAccess(), requirePermission('canMa
     }
     res.json({ message: 'Customer updated successfully' });
   } catch (err) {
+    if (err.message && (err.message.includes('UNIQUE') || err.message.includes('customers_phone_key'))) {
+      return res.status(400).json({ error: 'Phone number already in use by another customer' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
 
 // Update customer tags
-router.put('/:id/tags', authenticate, async (req, res) => {
+router.put('/:id/tags', async (req, res) => {
   const { id } = req.params;
   const { tags } = req.body;
 
@@ -217,7 +289,7 @@ router.put('/:id/tags', authenticate, async (req, res) => {
 });
 
 // Get customers by tag
-router.get('/by-tag/:tag', authenticate, async (req, res) => {
+router.get('/by-tag/:tag', async (req, res) => {
   const { tag } = req.params;
   
   try {
@@ -234,7 +306,7 @@ router.get('/by-tag/:tag', authenticate, async (req, res) => {
 });
 
 // Get all unique tags
-router.get('/tags/all', authenticate, async (req, res) => {
+router.get('/tags/all', async (req, res) => {
   try {
     const rows = await db.all(
       'SELECT DISTINCT tags FROM customers WHERE tags IS NOT NULL AND tags != \'\'',
@@ -261,7 +333,7 @@ router.get('/tags/all', authenticate, async (req, res) => {
 });
 
 // Upload Excel file and import customers
-router.post('/upload-excel', authenticate, upload.single('file'), async (req, res) => {
+router.post('/upload-excel', upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
@@ -320,23 +392,23 @@ router.post('/upload-excel', authenticate, upload.single('file'), async (req, re
       }
 
       try {
-        // Check if customer already exists
-        const existing = await db.get('SELECT id FROM customers WHERE phone = ?', [phone]);
-        
+        const existing = await findCustomerByPhone(phone);
         if (existing) {
           skipped++;
           continue;
         }
-
-        // Insert new customer
         await db.run(
           'INSERT INTO customers (name, phone, email, address) VALUES (?, ?, ?, ?) RETURNING id',
           [name, phone, email || null, address || null]
         );
         imported++;
       } catch (insertErr) {
-        errors.push(`Row ${index + 2}: ${insertErr.message}`);
-        skipped++;
+        if (insertErr.message && (insertErr.message.includes('UNIQUE') || insertErr.message.includes('customers_phone_key'))) {
+          skipped++;
+        } else {
+          errors.push(`Row ${index + 2}: ${insertErr.message}`);
+          skipped++;
+        }
       }
     }
 
@@ -367,7 +439,7 @@ router.post('/upload-excel', authenticate, upload.single('file'), async (req, re
 });
 
 // Get customer orders
-router.get('/:id/orders', authenticate, async (req, res) => {
+router.get('/:id/orders', async (req, res) => {
   const { id } = req.params;
   try {
     const rows = await db.all(
@@ -386,7 +458,7 @@ router.get('/:id/orders', authenticate, async (req, res) => {
 });
 
 // Send balance reminder to customer
-router.post('/:id/send-balance-reminder', authenticate, async (req, res) => {
+router.post('/:id/send-balance-reminder', async (req, res) => {
   const { id } = req.params;
   const { channels = ['sms'] } = req.body;
   const { sendBalanceReminder } = require('../utils/notifications');

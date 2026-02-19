@@ -14,46 +14,91 @@ async function sendSMS(phone, message, options = {}) {
     ? `+${cleanPhone}` 
     : `+255${cleanPhone.slice(-9)}`;
 
-  // Create notification record
+  // Create notification record (await so we have notificationId for status updates, especially on PostgreSQL)
   let notificationId = null;
   if (customerId) {
-    db.run(
-      `INSERT INTO notifications (customer_id, order_id, notification_type, channel, recipient, message, status)
-       VALUES (?, ?, ?, 'sms', ?, ?, 'pending')`,
-      [customerId, orderId || null, notificationType, formattedPhone, message],
-      function(err) {
-        if (!err) {
-          notificationId = this.lastID;
-        }
-      }
-    );
+    try {
+      const insertResult = await db.run(
+        `INSERT INTO notifications (customer_id, order_id, notification_type, channel, recipient, message, status)
+         VALUES (?, ?, ?, 'sms', ?, ?, 'pending')`,
+        [customerId, orderId || null, notificationType, formattedPhone, message]
+      );
+      notificationId = insertResult?.row?.id ?? insertResult?.lastID ?? null;
+    } catch (insertErr) {
+      console.error('SMS: failed to create notification record:', insertErr.message);
+    }
   }
 
   try {
-    // Example integration structure - replace with actual SMS provider
-    const smsConfig = {
-      apiKey: process.env.SMS_API_KEY,
-      apiUrl: process.env.SMS_API_URL || 'https://api.africastalking.com/version1/messaging',
-      username: process.env.SMS_USERNAME,
-    };
+    const provider = (process.env.SMS_PROVIDER || 'africastalking').toLowerCase();
+    const apiKey = process.env.SMS_API_KEY || process.env.TWILIO_AUTH_TOKEN;
 
     // If no SMS provider configured, just log (for development)
-    if (!smsConfig.apiKey) {
+    if (!apiKey) {
       console.log(`📱 SMS (not sent - no API key): ${formattedPhone}`);
       console.log(`Message: ${message}`);
-      
-      // Update notification status
       if (notificationId) {
         db.run(
           `UPDATE notifications SET status = 'logged', sent_at = CURRENT_TIMESTAMP, error_message = 'No API key configured' WHERE id = ?`,
           [notificationId]
         );
       }
-      
       return { success: true, message: 'SMS logged (no API key configured)', notificationId };
     }
 
-    // Implement Africa's Talking SMS API
+    // ----- Twilio -----
+    if (provider === 'twilio') {
+      const accountSid = process.env.TWILIO_ACCOUNT_SID;
+      const authToken = process.env.TWILIO_AUTH_TOKEN;
+      const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+      if (!accountSid || !authToken || !fromNumber) {
+        throw new Error('Twilio requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER in .env');
+      }
+      try {
+        const response = await axios.post(
+          `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+          new URLSearchParams({
+            To: formattedPhone,
+            From: fromNumber,
+            Body: message
+          }),
+          {
+            auth: { username: accountSid, password: authToken },
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+          }
+        );
+        if (response.data && response.data.sid) {
+          if (notificationId) {
+            db.run(
+              `UPDATE notifications SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = ?`,
+              [notificationId]
+            );
+          }
+          return { success: true, message: 'SMS sent successfully', notificationId, provider: 'twilio' };
+        }
+        throw new Error('Twilio returned no message SID');
+      } catch (apiError) {
+        const errMsg = apiError.response?.data?.message || apiError.message;
+        console.error('Twilio SMS error:', errMsg);
+        if (notificationId) {
+          db.run(
+            `UPDATE notifications SET status = 'failed', error_message = ? WHERE id = ?`,
+            [errMsg, notificationId]
+          );
+        }
+        return { success: false, error: errMsg, notificationId };
+      }
+    }
+
+    // ----- Africa's Talking (default) -----
+    const smsConfig = {
+      apiKey: process.env.SMS_API_KEY,
+      apiUrl: process.env.SMS_API_URL || 'https://api.africastalking.com/version1/messaging',
+      username: process.env.SMS_USERNAME,
+    };
+    if (!smsConfig.username) {
+      console.warn('📱 SMS: SMS_USERNAME is not set. Set it in .env (e.g. "sandbox" for testing or your Africa\'s Talking app username for production).');
+    }
     if (smsConfig.apiKey && smsConfig.username) {
       try {
         const response = await axios.post(
@@ -72,11 +117,10 @@ async function sendSMS(phone, message, options = {}) {
             }
           }
         );
-        
         if (response.data && response.data.SMSMessageData) {
           const recipients = response.data.SMSMessageData.Recipients || [];
-          const success = recipients.length > 0 && recipients[0].statusCode === '101';
-          
+          const first = recipients[0];
+          const success = recipients.length > 0 && (first.status === 'Success' || first.statusCode === 101 || first.statusCode === 102);
           if (success) {
             if (notificationId) {
               db.run(
@@ -85,26 +129,33 @@ async function sendSMS(phone, message, options = {}) {
               );
             }
             return { success: true, message: 'SMS sent successfully', notificationId, provider: 'africas_talking' };
-          } else {
-            throw new Error('SMS API returned error status');
           }
-        } else {
-          throw new Error('Unexpected response from SMS API');
+          const apiErrMsg = first?.status || first?.message || response.data.SMSMessageData.Message || 'SMS API returned error status';
+          console.error('📱 Africa\'s Talking SMS error:', apiErrMsg, 'Response:', JSON.stringify(response.data));
+          throw new Error(apiErrMsg);
         }
+        console.error('📱 Africa\'s Talking unexpected response:', JSON.stringify(response.data));
+        throw new Error('Unexpected response from SMS API');
       } catch (apiError) {
-        console.error('SMS API error:', apiError.response?.data || apiError.message);
+        const errData = apiError.response?.data;
+        const errMsg = errData?.message || errData?.SMSMessageData?.Message || apiError.message;
+        console.error('📱 Africa\'s Talking SMS failed:', errMsg, errData ? 'Data: ' + JSON.stringify(errData) : '');
+        if (notificationId) {
+          db.run(
+            `UPDATE notifications SET status = 'failed', error_message = ? WHERE id = ?`,
+            [String(errMsg).slice(0, 255), notificationId]
+          );
+        }
         throw apiError;
       }
     }
 
-    // Fallback: Log if no API key (development mode)
     if (notificationId) {
       db.run(
         `UPDATE notifications SET status = 'logged', sent_at = CURRENT_TIMESTAMP, error_message = 'No API key configured' WHERE id = ?`,
         [notificationId]
       );
     }
-    
     return { success: true, message: 'SMS logged (no API key configured)', notificationId, logged: true };
   } catch (error) {
     console.error('Error sending SMS:', error);

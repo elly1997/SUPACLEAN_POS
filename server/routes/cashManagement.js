@@ -1,12 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
-const { authenticate, requireBranchAccess } = require('../middleware/auth');
+const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getEffectiveBranchId } = require('../utils/branchFilter');
 
+// All cash-management routes require branch feature 'cash_management' (admin bypasses)
+router.use(authenticate, requireBranchFeature('cash_management'));
+
 // Get daily cash summary by date (cashiers, managers, admins can view)
-router.get('/daily/:date', authenticate, requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { date } = req.params;
   const branchId = getEffectiveBranchId(req);
   if (branchId == null) {
@@ -44,7 +47,7 @@ router.get('/daily/:date', authenticate, requireBranchAccess(), requirePermissio
 });
 
 // Get today's cash summary (with automatic calculations) (cashiers, managers, admins can view)
-router.get('/today', authenticate, requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const branchId = getEffectiveBranchId(req);
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to view cash management' });
@@ -155,7 +158,7 @@ async function calculateRemaining(date, openingBalance, cashSales, bookSales, br
 }
 
 // Create or update daily cash summary
-router.post('/daily', authenticate, requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const {
     date,
     bank_deposits,
@@ -305,7 +308,7 @@ router.post('/daily', authenticate, requireBranchAccess(), requirePermission('ca
 
 // Reconcile daily cash (managers and admins only)
 // If no daily summary exists for the date, create it from calculated values first, then mark reconciled.
-router.post('/reconcile/:date', authenticate, requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { date } = req.params;
   const { reconciled_by } = req.body;
   const branchId = getEffectiveBranchId(req);
@@ -368,9 +371,106 @@ router.post('/reconcile/:date', authenticate, requireBranchAccess(), requirePerm
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Daily summary not found' });
     }
-    
+
     row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
-    res.json(row);
+    const branchRow = await db.get('SELECT name FROM branches WHERE id = ?', [branchId]);
+    const branchName = branchRow?.name || `Branch ${branchId}`;
+
+    // Daily Closing Report (SUPACLEAN format) – send to director WhatsApp (or return for manual send)
+    let reportSent = false;
+    let reportText = null;
+    let directorPhoneForWa = null;
+    try {
+      const settingsRows = await db.all('SELECT setting_key, setting_value FROM settings WHERE setting_key = ?', ['manager_whatsapp_number']);
+      const directorPhone = (settingsRows && settingsRows[0] && settingsRows[0].setting_value) ? settingsRows[0].setting_value.trim() : null;
+      if (!directorPhone) {
+        console.warn('Reconcile: No director WhatsApp number in settings – daily report not sent.');
+      } else {
+        const opening = parseFloat(row.opening_balance) || 0;
+        const cashSales = parseFloat(row.cash_sales) || 0;
+        const bookSales = parseFloat(row.book_sales) || 0;
+        const cardSales = parseFloat(row.card_sales) || 0;
+        const mobileSales = parseFloat(row.mobile_money_sales) || 0;
+        const totalSales = cashSales + bookSales + cardSales + mobileSales;
+        const expensesCash = parseFloat(row.expenses_from_cash) || 0;
+        const expensesBank = parseFloat(row.expenses_from_bank) || 0;
+        const expensesMpesa = parseFloat(row.expenses_from_mpesa) || 0;
+        const totalExpenses = expensesCash + expensesBank + expensesMpesa;
+        const closing = parseFloat(row.closing_balance) || 0;
+        const cashOut = expensesCash;
+        const expectedCash = opening + cashSales + bookSales - cashOut;
+        const dateFormatted = new Date(date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+        const cashierName = reconciled_by || 'Cashier';
+
+        // P&L: Revenue = total sales; discounts/COGS from schema if available, else 0
+        const revenue = totalSales;
+        const discounts = 0;
+        const costOfGoods = 0;
+        const grossProfit = revenue - discounts - costOfGoods;
+        const operatingExpenses = totalExpenses;
+        const netProfit = grossProfit - operatingExpenses;
+
+        const fmt = (n) => Number(n).toLocaleString();
+        const report = [
+          '*SUPACLEAN*',
+          '*Daily Closing Report*',
+          '━━━━━━━━━━━━━━━━',
+          `📅 ${dateFormatted}`,
+          `👤 Cashier: ${cashierName}`,
+          '',
+          '💰 *OPENING CASH*',
+          `TZS ${fmt(opening)}`,
+          '',
+          '📈 *SALES BREAKDOWN*',
+          `• Cash Sales: TZS ${fmt(cashSales)}`,
+          `• M-Pesa: TZS ${fmt(mobileSales)}`,
+          `• Bank: TZS ${fmt(cardSales)}`,
+          `• Credit Sales: TZS ${fmt(0)}`,
+          `*Total Sales: TZS ${fmt(totalSales)}*`,
+          '',
+          '📥 *CREDIT COLLECTIONS*',
+          `Received Today: TZS ${fmt(bookSales)}`,
+          '',
+          '📤 *OUTFLOWS*',
+          `• Expenses: TZS ${fmt(totalExpenses)}`,
+          `• Stock Purchases: TZS 0`,
+          '',
+          '📊 *PROFIT & LOSS*',
+          `• Revenue: TZS ${fmt(revenue)}`,
+          `• Less Discounts: (TZS ${fmt(discounts)})`,
+          `• Cost of Goods: (TZS ${fmt(costOfGoods)})`,
+          `• *Gross Profit: TZS ${fmt(grossProfit)}*`,
+          `• Operating Expenses: (TZS ${fmt(operatingExpenses)})`,
+          `*💰 NET PROFIT: TZS ${fmt(netProfit)}*`,
+          '',
+          '💵 *CASH POSITION*',
+          `Opening: TZS ${fmt(opening)}`,
+          `+ Cash Sales: TZS ${fmt(cashSales)}`,
+          `+ Collections: TZS ${fmt(bookSales)}`,
+          `- Cash Out: TZS ${fmt(cashOut)}`,
+          `*Expected Cash: TZS ${fmt(expectedCash)}*`,
+          '━━━━━━━━━━━━━━━━',
+          branchName ? `📍 ${branchName}` : ''
+        ].filter(Boolean).join('\n');
+
+        const { sendWhatsApp, formatPhoneNumber } = require('../utils/whatsapp');
+        const waResult = await sendWhatsApp(directorPhone, report, {});
+        reportSent = !!(waResult && waResult.success);
+        if (!reportSent) {
+          reportText = report;
+          directorPhoneForWa = formatPhoneNumber(directorPhone).replace(/\D/g, '');
+        }
+      }
+    } catch (waErr) {
+      console.error('Reconcile: failed to send daily report WhatsApp:', waErr.message);
+    }
+
+    res.json({
+      ...row,
+      report_sent: reportSent,
+      report_text: reportText || undefined,
+      director_phone_wa: directorPhoneForWa || undefined
+    });
   } catch (err) {
     console.error('Error reconciling daily cash:', err);
     res.status(500).json({ error: err.message });
@@ -378,7 +478,7 @@ router.post('/reconcile/:date', authenticate, requireBranchAccess(), requirePerm
 });
 
 // Get cash summary range
-router.get('/range', authenticate, requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { start_date, end_date } = req.query;
   const branchId = getEffectiveBranchId(req);
   if (branchId == null) {

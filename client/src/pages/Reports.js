@@ -20,6 +20,7 @@ import {
   getCustomerReport
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
+import { useAuth } from '../contexts/AuthContext';
 import './Reports.css';
 
 class ChartErrorBoundary extends React.Component {
@@ -77,7 +78,7 @@ const presetRanges = () => {
   };
 };
 
-const exportCSV = (rows, columns, filename) => {
+const exportCSV = (rows, columns, filename, branchLabel) => {
   if (!rows || rows.length === 0) return;
   const headers = columns.map((c) => (typeof c === 'string' ? c : c.label)).join(',');
   const lines = rows.map((row) =>
@@ -89,7 +90,8 @@ const exportCSV = (rows, columns, filename) => {
       return `"${String(val ?? '').replace(/"/g, '""')}"`;
     }).join(',')
   );
-  const csv = [headers, ...lines].join('\n');
+  const headerLine = branchLabel ? `Branch: ${branchLabel}\n` : '';
+  const csv = headerLine + [headers, ...lines].join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
@@ -101,6 +103,8 @@ const exportCSV = (rows, columns, filename) => {
 const Reports = () => {
   const [searchParams] = useSearchParams();
   const { showToast, ToastContainer } = useToast();
+  const { branch } = useAuth();
+  const csvBranchLabel = branch?.name || (branch?.id != null ? `Branch ID ${branch.id}` : null);
   const [summary, setSummary] = useState(null);
   const [financialReport, setFinancialReport] = useState(null);
   const [profitReport, setProfitReport] = useState([]);
@@ -421,7 +425,8 @@ const Reports = () => {
                         { key: 'profit', label: 'Profit' },
                         { key: 'reconciled_days', label: 'Reconciled Days' }
                       ],
-                      `financial-${dateRange.start}-${dateRange.end}.csv`
+                      `financial-${dateRange.start}-${dateRange.end}.csv`,
+                      csvBranchLabel
                     )
                   }
                 >
@@ -634,7 +639,8 @@ const Reports = () => {
                             { key: 'pending_orders', label: 'Pending' },
                             { key: 'ready_orders', label: 'Ready' }
                           ],
-                          `sales-${dateRange.start}-${dateRange.end}.csv`
+                          `sales-${dateRange.start}-${dateRange.end}.csv`,
+                          csvBranchLabel
                         )
                       }
                     >
@@ -719,7 +725,8 @@ const Reports = () => {
                             { key: 'total_revenue', label: 'Total Revenue' },
                             { key: 'average_order_value', label: 'Avg Order Value' }
                           ],
-                          `services-${dateRange.start}-${dateRange.end}.csv`
+                          `services-${dateRange.start}-${dateRange.end}.csv`,
+                          csvBranchLabel
                         )
                       }
                     >
@@ -793,7 +800,8 @@ const Reports = () => {
                           { key: 'tier', label: 'Tier' },
                           { key: 'last_order_date', label: 'Last Order' }
                         ],
-                        `customers-${customerFilter.year}-${customerFilter.month}.csv`
+                        `customers-${customerFilter.year}-${customerFilter.month}.csv`,
+                        csvBranchLabel
                       )
                     }
                   >

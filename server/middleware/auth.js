@@ -107,7 +107,15 @@ function requireBranchAccess() {
 
 // Cleaning services: only admin or branches with cleaning_services feature
 function requireCleaningAccess() {
-  return (req, res, next) => {
+  return requireBranchFeature('cleaning_services');
+}
+
+/**
+ * Require that the user's branch has the given feature enabled (admin bypasses).
+ * Use after authenticate. Use for routes that must respect admin-configured branch privileges.
+ */
+function requireBranchFeature(featureKey) {
+  return async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
@@ -115,20 +123,49 @@ function requireCleaningAccess() {
       return next();
     }
     if (!req.user.branchId) {
-      return res.status(403).json({ error: 'Cleaning services not enabled for your branch' });
+      return res.status(403).json({ error: 'This feature is not available for your account.' });
     }
-    db.get(
-      'SELECT 1 FROM branch_features WHERE branch_id = ? AND feature_key = ? AND is_enabled = true',
-      [req.user.branchId, 'cleaning_services']
-    )
-      .then((row) => {
-        if (row) next();
-        else res.status(403).json({ error: 'Cleaning services not enabled for your branch' });
-      })
-      .catch((err) => {
-        console.error('requireCleaningAccess:', err);
-        res.status(500).json({ error: err.message });
-      });
+    try {
+      const row = await db.get(
+        'SELECT 1 FROM branch_features WHERE branch_id = $1 AND feature_key = $2 AND is_enabled = true',
+        [req.user.branchId, featureKey]
+      );
+      if (row) {
+        return next();
+      }
+      res.status(403).json({ error: 'This feature is not enabled for your branch. Contact your administrator.' });
+    } catch (err) {
+      console.error('requireBranchFeature:', err);
+      res.status(500).json({ error: err.message });
+    }
+  };
+}
+
+/** Require at least one of the given branch features (admin bypasses). */
+function requireBranchFeatureAny(...featureKeys) {
+  return async (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    if (req.user.role === 'admin') {
+      return next();
+    }
+    if (!req.user.branchId) {
+      return res.status(403).json({ error: 'This feature is not available for your account.' });
+    }
+    try {
+      for (const key of featureKeys) {
+        const row = await db.get(
+          'SELECT 1 FROM branch_features WHERE branch_id = $1 AND feature_key = $2 AND is_enabled = true',
+          [req.user.branchId, key]
+        );
+        if (row) return next();
+      }
+      res.status(403).json({ error: 'This feature is not enabled for your branch. Contact your administrator.' });
+    } catch (err) {
+      console.error('requireBranchFeatureAny:', err);
+      res.status(500).json({ error: err.message });
+    }
   };
 }
 
@@ -136,5 +173,7 @@ module.exports = {
   authenticate,
   requireRole,
   requireBranchAccess,
-  requireCleaningAccess
+  requireCleaningAccess,
+  requireBranchFeature,
+  requireBranchFeatureAny
 };

@@ -2,11 +2,12 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
 
+const MANAGER_WHATSAPP_DEFAULT = '+255752757635';
+
 // Get all settings
 router.get('/', async (req, res) => {
   try {
     const rows = await db.all('SELECT * FROM settings ORDER BY setting_key', []);
-    // Convert to object format for easier access
     const settingsObj = {};
     rows.forEach(row => {
       settingsObj[row.setting_key] = {
@@ -14,6 +15,13 @@ router.get('/', async (req, res) => {
         description: row.description
       };
     });
+    // Ensure director WhatsApp number exists (Daily Closing Report on reconcile)
+    if (!settingsObj.manager_whatsapp_number) {
+      settingsObj.manager_whatsapp_number = {
+        value: MANAGER_WHATSAPP_DEFAULT,
+        description: 'Director WhatsApp number – receives Daily Closing Report when a branch reconciles the day'
+      };
+    }
     res.json(settingsObj);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -34,17 +42,23 @@ router.get('/:key', async (req, res) => {
   }
 });
 
-// Update setting
+// Update setting (creates row if key is allowed and missing, e.g. manager_whatsapp_number)
 router.put('/:key', async (req, res) => {
   const { key } = req.params;
   const { value, description } = req.body;
+  const allowedUpsertKeys = ['manager_whatsapp_number'];
 
   try {
-    const result = await db.run(
+    let result = await db.run(
       'UPDATE settings SET setting_value = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE setting_key = ?',
       [value, description || null, key]
     );
-    if (result.changes === 0) {
+    if (result.changes === 0 && allowedUpsertKeys.includes(key)) {
+      await db.run(
+        'INSERT INTO settings (setting_key, setting_value, description) VALUES (?, ?, ?)',
+        [key, value, description || null]
+      );
+    } else if (result.changes === 0) {
       return res.status(404).json({ error: 'Setting not found' });
     }
     res.json({ message: 'Setting updated successfully' });

@@ -219,16 +219,18 @@ async function formatReceiptAsync(order, customer, service) {
   // Generate QR code
   const qrCodeDataURL = await generateReceiptQRCode(order, customer, service);
   
+  const branchLine = (order.branch_name || order.branch_id) ? `Branch: ${order.branch_name || `ID ${order.branch_id}`}\n` : '';
+  const branchLocation = order.branch_name ? order.branch_name + ', Tanzania' : 'Arusha, Tanzania';
   const receipt = {
     text: `
 ═══════════════════════════════════
          SUPACLEAN
    Laundry & Dry Cleaning
-        Arusha, Tanzania
+   ${branchLocation}
 ═══════════════════════════════════
 
 Receipt No: ${order.receipt_number}
-Date: ${moment(order.order_date).format('DD/MM/YYYY HH:mm')}
+${branchLine}Date: ${moment(order.order_date).format('DD/MM/YYYY HH:mm')}
 ${estimatedCollectionDate}
 Customer: ${customer.name}
 Phone: ${customer.phone}
@@ -269,15 +271,16 @@ function formatReceipt(order, customer, service) {
   // Ensure total_amount is a number and properly formatted
   const totalAmount = parseFloat(order.total_amount) || 0;
   
+  const branchLine = (order.branch_name || order.branch_id) ? `Branch: ${order.branch_name || `ID ${order.branch_id}`}\n` : '';
   const receipt = `
 ═══════════════════════════════════
          SUPACLEAN
    Laundry & Dry Cleaning
-        Arusha, Tanzania
+   ${order.branch_name ? order.branch_name + ', Tanzania' : 'Arusha, Tanzania'}
 ═══════════════════════════════════
 
 Receipt No: ${order.receipt_number}
-Date: ${moment(order.order_date).format('DD/MM/YYYY HH:mm')}
+${branchLine}Date: ${moment(order.order_date).format('DD/MM/YYYY HH:mm')}
 ${estimatedCollectionDate}
 Customer: ${customer.name}
 Phone: ${customer.phone}

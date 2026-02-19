@@ -94,7 +94,8 @@ const Dashboard = () => {
       showToast(`Order marked as ${newStatus}`, 'success');
       loadDashboardData();
     } catch (error) {
-      showToast('Error updating order', 'error');
+      const msg = error.response?.data?.error || error.message || 'Error updating order';
+      showToast(msg, 'error');
     }
   };
 
@@ -107,7 +108,8 @@ const Dashboard = () => {
       showToast(`Receipt ${receiptGroup.receipt_number} marked as ${newStatus}`, 'success');
       loadDashboardData();
     } catch (error) {
-      showToast('Error updating order', 'error');
+      const msg = error.response?.data?.error || error.message || 'Error updating order';
+      showToast(msg, 'error');
     }
   };
 

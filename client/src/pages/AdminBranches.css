@@ -299,6 +299,111 @@
   animation: fadeIn 0.4s ease-out;
 }
 
+.branch-logins-card {
+  margin-bottom: 28px;
+  padding: 20px 24px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(15px);
+  border-radius: 16px;
+  border: 0.5px solid var(--border-color);
+}
+
+[data-theme="dark"] .branch-logins-card {
+  background: rgba(28, 28, 30, 0.7);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.branch-logins-card h3 {
+  font-size: 18px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.branch-logins-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+.branch-logins-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.branch-logins-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.branch-logins-item .logins {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.empty-logins {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.admin-settings-section h2 {
+  font-size: 26px;
+  margin-bottom: 24px;
+  color: var(--text-primary);
+}
+
+.admin-settings-section .settings-card {
+  max-width: 520px;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(15px);
+  border-radius: 16px;
+  border: 0.5px solid var(--border-color);
+}
+
+[data-theme="dark"] .admin-settings-section .settings-card {
+  background: rgba(28, 28, 30, 0.7);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.admin-settings-section .settings-card h3 {
+  font-size: 18px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.admin-settings-section .settings-description {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+.admin-settings-section .settings-card .form-group {
+  margin-bottom: 16px;
+}
+
+.admin-settings-section .settings-card .form-group label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.admin-settings-section .settings-card .form-group input {
+  width: 100%;
+  max-width: 280px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
 .users-table {
   background: rgba(255, 255, 255, 0.7);
   backdrop-filter: blur(20px) saturate(180%);
@@ -537,6 +642,14 @@
 
 .form-group input::placeholder {
   color: var(--text-muted);
+}
+
+.form-group .field-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.35;
 }
 
 .form-actions {

@@ -143,6 +143,15 @@ function initializeTables() {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Bank Accounts table (admin-managed list for deposit dropdown)
+  db.run(`CREATE TABLE IF NOT EXISTS bank_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    account_number TEXT,
+    is_active INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // Bank Deposits table
   db.run(`CREATE TABLE IF NOT EXISTS bank_deposits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -519,15 +528,28 @@ function migrateDatabase() {
         }
       });
 
-      // Add branch_id to expenses table
+      // Add branch_id and bank-deposit fields to expenses table
       db.all("PRAGMA table_info(expenses)", [], (expErr, expColumns) => {
         if (!expErr && expColumns) {
           const expColumnNames = expColumns.map(col => col.name);
           if (!expColumnNames.includes('branch_id')) {
             db.run("ALTER TABLE expenses ADD COLUMN branch_id INTEGER", (alterErr) => {
-              if (!alterErr) {
-                console.log('✅ Added branch_id column to expenses');
-              }
+              if (!alterErr) console.log('✅ Added branch_id column to expenses');
+            });
+          }
+          if (!expColumnNames.includes('bank_account_id')) {
+            db.run("ALTER TABLE expenses ADD COLUMN bank_account_id INTEGER", (alterErr) => {
+              if (!alterErr) console.log('✅ Added bank_account_id to expenses');
+            });
+          }
+          if (!expColumnNames.includes('deposit_reference_number')) {
+            db.run("ALTER TABLE expenses ADD COLUMN deposit_reference_number TEXT", (alterErr) => {
+              if (!alterErr) console.log('✅ Added deposit_reference_number to expenses');
+            });
+          }
+          if (!expColumnNames.includes('bank_deposit_id')) {
+            db.run("ALTER TABLE expenses ADD COLUMN bank_deposit_id INTEGER", (alterErr) => {
+              if (!alterErr) console.log('✅ Added bank_deposit_id to expenses');
             });
           }
         }
@@ -541,6 +563,13 @@ function migrateDatabase() {
             db.run("ALTER TABLE bank_deposits ADD COLUMN branch_id INTEGER", (alterErr) => {
               if (!alterErr) {
                 console.log('✅ Added branch_id column to bank_deposits');
+              }
+            });
+          }
+          if (!bankColumnNames.includes('bank_account_id')) {
+            db.run("ALTER TABLE bank_deposits ADD COLUMN bank_account_id INTEGER", (alterErr) => {
+              if (!alterErr) {
+                console.log('✅ Added bank_account_id column to bank_deposits');
               }
             });
           }

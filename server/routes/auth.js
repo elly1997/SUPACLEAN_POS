@@ -21,16 +21,23 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    // Find user by username - is_active must be true (works for boolean or integer 0/1 in PostgreSQL)
-    const user = await db.get(
-      'SELECT * FROM users WHERE username = $1 AND COALESCE(is_active::int, 0) != 0',
+    // Find user by username (case-insensitive); check active separately for clearer error
+    const userByUsername = await db.get(
+      'SELECT * FROM users WHERE LOWER(TRIM(username)) = LOWER(TRIM($1))',
       [username]
     );
 
-    if (!user) {
+    if (!userByUsername) {
       console.log('❌ User not found:', username);
       return res.status(401).json({ error: 'Invalid username or password' });
     }
+
+    if (!userByUsername.is_active || userByUsername.is_active === 0) {
+      console.log('❌ User deactivated:', username);
+      return res.status(401).json({ error: 'This account is deactivated. Contact your administrator.' });
+    }
+
+    const user = userByUsername;
 
     console.log('✅ User found:', { id: user.id, username: user.username, hasPasswordHash: !!user.password_hash });
 

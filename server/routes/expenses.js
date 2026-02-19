@@ -1,16 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
-const { authenticate, requireBranchAccess } = require('../middleware/auth');
+const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
-const { getBranchFilter } = require('../utils/branchFilter');
+const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 
-// Get all expenses (managers and admins can view)
-router.get('/', authenticate, requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
+router.use(authenticate, requireBranchFeature('expenses'));
+
+// Get all expenses (managers and admins can view), with bank account name for Bank Deposit category
+router.get('/', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
   const { start_date, end_date, category } = req.query;
   const branchFilter = getBranchFilter(req, 'e');
   
-  let query = 'SELECT * FROM expenses e WHERE 1=1';
+  let query = 'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE 1=1';
   const params = [];
   let paramIndex = 1;
   
@@ -47,11 +49,14 @@ router.get('/', authenticate, requireBranchAccess(), requirePermission('canManag
 });
 
 // Get expense by ID (managers and admins can view)
-router.get('/:id', authenticate, requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
+router.get('/:id', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
   const { id } = req.params;
   
   try {
-    const row = await db.get('SELECT * FROM expenses WHERE id = $1', [id]);
+    const row = await db.get(
+      'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = $1',
+      [id]
+    );
     if (!row) {
       return res.status(404).json({ error: 'Expense not found' });
     }
@@ -61,8 +66,8 @@ router.get('/:id', authenticate, requireBranchAccess(), requirePermission('canMa
   }
 });
 
-// Create new expense (managers and admins only)
-router.post('/', authenticate, requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
+// Create new expense (managers and admins only). If category is "Bank Deposit", also creates a bank_deposits row.
+router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
   const {
     date,
     category,
@@ -70,35 +75,81 @@ router.post('/', authenticate, requireBranchAccess(), requirePermission('canMana
     payment_source,
     description,
     receipt_number,
-    created_by
+    created_by,
+    bank_account_id,
+    deposit_reference_number,
+    bank_name: deposit_bank_name
   } = req.body;
   
   if (!date || !category || !amount || !payment_source) {
     return res.status(400).json({ error: 'Date, category, amount, and payment_source are required' });
   }
   
-  // Get branch_id from user (required for multi-branch support)
-  const branchId = req.user?.branchId || null;
+  const branchId = getEffectiveBranchId(req) || req.user?.branchId || null;
   if (!branchId && req.user?.role !== 'admin') {
     return res.status(400).json({ error: 'Branch assignment required for expense creation' });
   }
   
+  if (category === 'Bank Deposit') {
+    const accountId = bank_account_id != null && bank_account_id !== '' ? Number(bank_account_id) : null;
+    const otherName = deposit_bank_name && String(deposit_bank_name).trim() ? String(deposit_bank_name).trim() : null;
+    if (!accountId && !otherName) {
+      return res.status(400).json({ error: 'For Bank Deposit, select a bank account or enter bank name (Other)' });
+    }
+  }
+  
   try {
+    let bankDepositId = null;
+    if (category === 'Bank Deposit' && branchId) {
+      const accountId = bank_account_id != null && bank_account_id !== '' ? Number(bank_account_id) : null;
+      const otherName = deposit_bank_name && String(deposit_bank_name).trim() ? String(deposit_bank_name).trim() : null;
+      const depResult = await db.run(
+        `INSERT INTO bank_deposits (date, amount, reference_number, bank_name, bank_account_id, notes, created_by, branch_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [
+          date,
+          amount,
+          deposit_reference_number || null,
+          otherName || null,
+          accountId,
+          description || null,
+          created_by || null,
+          branchId
+        ]
+      );
+      bankDepositId = depResult.lastID ?? depResult.row?.id;
+    }
+    
     const result = await db.run(
-      `INSERT INTO expenses (date, category, amount, payment_source, description, receipt_number, created_by, branch_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-      [date, category, amount, payment_source, description || null, receipt_number || null, created_by || null, branchId]
+      `INSERT INTO expenses (date, category, amount, payment_source, description, receipt_number, created_by, branch_id, bank_account_id, deposit_reference_number, bank_deposit_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+      [
+        date,
+        category,
+        amount,
+        payment_source,
+        description || null,
+        receipt_number || null,
+        created_by || null,
+        branchId,
+        (bank_account_id != null && bank_account_id !== '') ? Number(bank_account_id) : null,
+        deposit_reference_number || null,
+        bankDepositId
+      ]
     );
     
-    const expense = await db.get('SELECT * FROM expenses WHERE id = $1', [result.lastID]);
+    const expense = await db.get(
+      'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = $1',
+      [result.lastID]
+    );
     res.status(201).json(expense);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Update expense (managers and admins only)
-router.put('/:id', authenticate, requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
+// Update expense (managers and admins only). If expense has bank_deposit_id, updates the linked bank_deposit.
+router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
   const { id } = req.params;
   const {
     date,
@@ -106,33 +157,71 @@ router.put('/:id', authenticate, requireBranchAccess(), requirePermission('canMa
     amount,
     payment_source,
     description,
-    receipt_number
+    receipt_number,
+    bank_account_id,
+    deposit_reference_number,
+    bank_name: deposit_bank_name
   } = req.body;
   
   try {
+    const existing = await db.get('SELECT * FROM expenses WHERE id = $1', [id]);
+    if (!existing) {
+      return res.status(404).json({ error: 'Expense not found' });
+    }
+    
     const result = await db.run(
       `UPDATE expenses 
-       SET date = $1, category = $2, amount = $3, payment_source = $4, description = $5, receipt_number = $6
-       WHERE id = $7`,
-      [date, category, amount, payment_source, description || null, receipt_number || null, id]
+       SET date = $1, category = $2, amount = $3, payment_source = $4, description = $5, receipt_number = $6,
+           bank_account_id = $7, deposit_reference_number = $8
+       WHERE id = $9`,
+      [
+        date,
+        category,
+        amount,
+        payment_source,
+        description || null,
+        receipt_number || null,
+        (bank_account_id != null && bank_account_id !== '') ? Number(bank_account_id) : null,
+        deposit_reference_number || null,
+        id
+      ]
     );
     
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Expense not found' });
     }
     
-    const expense = await db.get('SELECT * FROM expenses WHERE id = $1', [id]);
+    if (existing.bank_deposit_id) {
+      const accountId = (bank_account_id != null && bank_account_id !== '') ? Number(bank_account_id) : null;
+      const otherName = deposit_bank_name && String(deposit_bank_name).trim() ? String(deposit_bank_name).trim() : null;
+      await db.run(
+        `UPDATE bank_deposits SET date = $1, amount = $2, reference_number = $3, bank_name = $4, bank_account_id = $5, notes = $6 WHERE id = $7`,
+        [date, amount, deposit_reference_number || null, otherName, accountId, description || null, existing.bank_deposit_id]
+      );
+    }
+    
+    const expense = await db.get(
+      'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = $1',
+      [id]
+    );
     res.json(expense);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Delete expense (managers and admins only)
-router.delete('/:id', authenticate, requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
+// Delete expense (managers and admins only). If expense has linked bank_deposit, deletes it first.
+router.delete('/:id', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
   const { id } = req.params;
   
   try {
+    const existing = await db.get('SELECT bank_deposit_id FROM expenses WHERE id = $1', [id]);
+    if (!existing) {
+      return res.status(404).json({ error: 'Expense not found' });
+    }
+    if (existing.bank_deposit_id) {
+      await db.run('DELETE FROM bank_deposits WHERE id = $1', [existing.bank_deposit_id]);
+    }
     const result = await db.run('DELETE FROM expenses WHERE id = $1', [id]);
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Expense not found' });
@@ -144,7 +233,7 @@ router.delete('/:id', authenticate, requireBranchAccess(), requirePermission('ca
 });
 
 // Get expense summary by category (managers and admins can view)
-router.get('/summary/by-category', authenticate, requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
+router.get('/summary/by-category', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
   const { start_date, end_date } = req.query;
   const branchFilter = getBranchFilter(req, 'e');
   

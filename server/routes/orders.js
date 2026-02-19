@@ -4,7 +4,7 @@ const db = require('../database/query');
 const { generateReceiptNumber, calculateTotal, formatReceipt, formatReceiptAsync, generateReceiptQRCode } = require('../utils/receipt');
 const { sendSMS, generateReadyNotification, generateOrderReceiptSms } = require('../utils/sms');
 const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
-const { authenticate, requireBranchAccess } = require('../middleware/auth');
+const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 const { validatePayment } = require('../utils/paymentValidation');
@@ -25,8 +25,11 @@ const upload = multer({ dest: uploadsDir });
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
 
+// All order routes require new_order or order_processing (admin bypasses); collect route adds collection
+router.use(authenticate, requireBranchFeatureAny('new_order', 'order_processing'));
+
 // Get all orders
-router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
+router.get('/', requireBranchAccess(), async (req, res) => {
   const { 
     status, 
     customer_id, 
@@ -46,10 +49,12 @@ router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
   const branchFilter = getBranchFilter(req, 'o');
   
   let query = `
-    SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone
+    SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
+           b.name as branch_name
     FROM orders o
     JOIN services s ON o.service_id = s.id
     JOIN customers c ON o.customer_id = c.id
+    LEFT JOIN branches b ON o.branch_id = b.id
     WHERE 1=1
     ${branchFilter.clause}
   `;
@@ -134,7 +139,7 @@ router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
 });
 
 // Get collection queue (ready orders with queue info) - grouped by receipt number
-router.get('/collection-queue', authenticate, requireBranchAccess(), async (req, res) => {
+router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
   const { limit = 20, overdue_only } = req.query;
   const branchFilter = getBranchFilter(req, 'o');
   
@@ -219,7 +224,7 @@ router.get('/collection-queue', authenticate, requireBranchAccess(), async (req,
 
 // Get order by receipt number - returns ALL items for the receipt with aggregated totals
 // Case-insensitive receipt number search
-router.get('/receipt/:receiptNumber', authenticate, requireBranchAccess(), async (req, res) => {
+router.get('/receipt/:receiptNumber', requireBranchAccess(), async (req, res) => {
   const { receiptNumber } = req.params;
   const branchFilter = getBranchFilter(req, 'o');
   
@@ -229,11 +234,13 @@ router.get('/receipt/:receiptNumber', authenticate, requireBranchAccess(), async
     const allOrders = await db.all(
       `SELECT o.*, s.name as service_name, s.description as service_description,
               c.name as customer_name, c.phone as customer_phone, c.email as customer_email,
-              i.name as item_name, i.category as item_category
+              i.name as item_name, i.category as item_category,
+              b.name as branch_name
        FROM orders o
        JOIN services s ON o.service_id = s.id
        JOIN customers c ON o.customer_id = c.id
        LEFT JOIN items i ON o.item_id = i.id
+       LEFT JOIN branches b ON o.branch_id = b.id
        WHERE UPPER(o.receipt_number) = UPPER(?)
        ${branchFilter.clause}
        ORDER BY o.id`,
@@ -265,7 +272,7 @@ router.get('/receipt/:receiptNumber', authenticate, requireBranchAccess(), async
 });
 
 // Send receipt SMS after order created and receipt printed (customer name, ID, items, amount, status)
-router.post('/receipt/:receiptNumber/send-receipt-sms', authenticate, requireBranchAccess(), async (req, res) => {
+router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), async (req, res) => {
   const { receiptNumber } = req.params;
   const branchFilter = getBranchFilter(req, 'o');
 
@@ -336,7 +343,7 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', authenticate, requireBra
 });
 
 // Search orders by customer phone or name
-router.get('/search/customer', authenticate, requireBranchAccess(), async (req, res) => {
+router.get('/search/customer', requireBranchAccess(), async (req, res) => {
   const { phone, name, status } = req.query;
   
   if (!phone && !name) {
@@ -445,7 +452,7 @@ async function generateReceiptNumberPromise() {
 }
 
 // Create new order (cashiers, managers, and admins can create)
-router.post('/', authenticate, requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {
+router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {
   try {
     console.log('POST /api/orders - Request received');
     console.log('User:', req.user?.username, 'Role:', req.user?.role, 'BranchId:', req.user?.branchId);
@@ -589,10 +596,16 @@ router.post('/', authenticate, requireBranchAccess(), requirePermission('canCrea
 
           // Get customer details for receipt
           const customer = await db.get('SELECT * FROM customers WHERE id = ?', [customer_id]);
-
+          let branchName = null;
+          if (branchId) {
+            const branchRow = await db.get('SELECT name FROM branches WHERE id = ?', [branchId]).catch(() => null);
+            branchName = branchRow?.name || null;
+          }
           const order = {
             id: orderId,
             receipt_number: finalReceiptNumber,
+            branch_id: branchId,
+            branch_name: branchName,
             customer_id,
             service_id,
             quantity: quantity || 1,
@@ -613,8 +626,9 @@ router.post('/', authenticate, requireBranchAccess(), requirePermission('canCrea
 
           const receipt = formatReceipt(order, customer, service);
 
-          // Send order confirmation SMS (optional - WhatsApp fallback if SMS fails)
-          if (process.env.SEND_ORDER_CONFIRMATION_SMS === 'true' && customer.phone) {
+          // Send SMS when order is recorded and receipt is printed (default on; set SEND_ORDER_CONFIRMATION_SMS=false to disable)
+          const sendConfirmationSms = process.env.SEND_ORDER_CONFIRMATION_SMS !== 'false';
+          if (sendConfirmationSms && customer.phone) {
             const smsEnabled = customer.sms_notifications_enabled !== 0;
             if (smsEnabled) {
               const { generateOrderConfirmation } = require('../utils/sms');
@@ -624,17 +638,16 @@ router.post('/', authenticate, requireBranchAccess(), requirePermission('canCrea
                 total_amount,
                 estimated_collection_date
               );
-              
               sendSmsWithWhatsAppFallback(customer.phone, confirmationMessage, {
                 customerId: customer.id,
                 orderId: orderId,
                 notificationType: 'order_confirmation'
               }).then(result => {
                 if (result.success) {
-                  console.log(`✅ Order confirmation sent via ${result.channel || 'sms'} to ${customer.phone}`);
+                  console.log(`✅ Order confirmation SMS sent via ${result.channel || 'sms'} to ${customer.phone}`);
                 }
               }).catch(err => {
-                console.error('Error sending order confirmation:', err);
+                console.error('Error sending order confirmation SMS:', err);
               });
             }
           }
@@ -723,7 +736,7 @@ router.post('/', authenticate, requireBranchAccess(), requirePermission('canCrea
 });
 
 // Update order status (managers, processors, and admins can update)
-router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
@@ -733,13 +746,18 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
   }
 
   try {
-    // First verify user has access to this order
+    // Verify user has access: match by branch, or allow orders with null branch_id (legacy) and assign to current branch
     const branchFilter = getBranchFilter(req, 'o');
-    const order = await db.get(
-      `SELECT id, total_amount, paid_amount FROM orders WHERE id = ? ${branchFilter.clause}`,
+    let order = await db.get(
+      `SELECT o.id, o.total_amount, o.paid_amount, o.branch_id FROM orders o WHERE o.id = ? ${branchFilter.clause}`,
       [id, ...branchFilter.params]
     );
-    
+    if (!order && (branchFilter.clause || branchFilter.params?.length)) {
+      order = await db.get('SELECT id, total_amount, paid_amount, branch_id FROM orders WHERE id = ?', [id]);
+      if (order && order.branch_id != null) {
+        return res.status(403).json({ error: 'Order belongs to another branch. You can only update orders for your branch.' });
+      }
+    }
     if (!order) {
       return res.status(404).json({ error: 'Order not found or access denied' });
     }
@@ -757,10 +775,14 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
     }
 
     // User has access, proceed with update
+    const branchId = req.user?.branchId;
     let updateQuery = 'UPDATE orders SET status = ?';
     const params = [status];
-    const branchId = req.user?.branchId;
-
+    // If order had no branch (legacy), assign it to current user's branch
+    if (order.branch_id == null && branchId != null) {
+      updateQuery += ', branch_id = ?';
+      params.push(branchId);
+    }
     if (status === 'ready') {
       updateQuery += ', ready_date = CURRENT_TIMESTAMP';
       if (branchId) {
@@ -768,7 +790,6 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
         params.push(branchId);
       }
     }
-    
     if (status === 'collected') {
       updateQuery += ', collected_date = CURRENT_TIMESTAMP';
       if (branchId) {
@@ -776,7 +797,6 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
         params.push(branchId);
       }
     }
-
     updateQuery += ' WHERE id = ?';
     params.push(id);
     
@@ -841,7 +861,7 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
 });
 
 // Update estimated collection date (managers, processors, and admins can update)
-router.put('/:id/estimated-collection-date', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.put('/:id/estimated-collection-date', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { id } = req.params;
   const { estimated_collection_date } = req.body;
 
@@ -879,7 +899,7 @@ router.put('/:id/estimated-collection-date', authenticate, requireBranchAccess()
 
 // Collect order (by receipt number) with optional payment (managers, processors, and admins can collect)
 // This endpoint handles ALL items on a receipt together - collects the entire receipt, not individual items
-router.post('/collect/:receiptNumber', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { receiptNumber } = req.params;
   const { payment_amount, payment_method = 'cash', notes } = req.body;
   
@@ -1058,7 +1078,7 @@ router.post('/collect/:receiptNumber', authenticate, requireBranchAccess(), requ
 });
 
 // Receive payment for an order (without collecting) - uses RECEIPT-level totals for multi-item receipts
-router.post('/:id/receive-payment', authenticate, requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { id } = req.params;
   const { payment_amount, payment_method = 'cash', notes } = req.body;
 
@@ -1163,7 +1183,7 @@ router.post('/:id/receive-payment', authenticate, requireBranchAccess(), require
 });
 
 // Upload Excel file and import stock/orders
-router.post('/upload-stock-excel', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), upload.single('file'), async (req, res) => {
+router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('canManageOrders'), upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
@@ -1445,7 +1465,7 @@ router.get('/notifications', async (req, res) => {
 });
 
 // Manually send notification
-router.post('/:id/send-notification', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.post('/:id/send-notification', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { id } = req.params;
   const { notification_type = 'ready' } = req.body;
   
@@ -1514,7 +1534,7 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
 });
 
 // Send collection reminder for a specific order
-router.post('/:id/send-reminder', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.post('/:id/send-reminder', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { id } = req.params;
   const { channels = ['sms'] } = req.body;
   const { sendCollectionReminder } = require('../utils/notifications');

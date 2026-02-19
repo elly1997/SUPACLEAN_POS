@@ -307,6 +307,16 @@ const NewOrder = () => {
     return () => clearTimeout(timer);
   }, [searchTerm, loadCustomers]);
 
+  // When search returns exactly one customer, auto-select so user can proceed to add items and pay
+  useEffect(() => {
+    if (customers.length === 1 && !selectedCustomer && searchTerm && searchTerm.trim()) {
+      const customer = customers[0];
+      setSelectedCustomer(customer);
+      setSearchTerm(searchByPhone ? (customer.phone || customer.name) : (customer.name || customer.phone));
+      setShowCustomerDropdown(false);
+    }
+  }, [customers, searchTerm, searchByPhone, selectedCustomer]);
+
   useEffect(() => {
     // Close dropdown when customer is selected
     if (selectedCustomer) {
@@ -446,7 +456,12 @@ const NewOrder = () => {
       setShowNewCustomer(false);
       setNewCustomer({ name: '', phone: '', email: '', address: '' });
       loadCustomers();
-      showToast('Customer created successfully', 'success');
+      showToast(
+        res.data.existing
+          ? 'Customer with this phone already exists. Using existing customer for your order.'
+          : 'Customer created successfully',
+        'success'
+      );
     } catch (error) {
       showToast('Error creating customer: ' + (error.response?.data?.error || error.message), 'error');
     }
@@ -647,17 +662,19 @@ const NewOrder = () => {
       : '';
 
     const useCompact = receipts.length > RECEIPT_COMPACT_THRESHOLD;
+    const branchLabel = receipts[0]?.order?.branch_name || (receipts[0]?.order?.branch_id ? `Branch ID ${receipts[0].order.branch_id}` : 'Arusha');
+    const branchLine = (receipts[0]?.order?.branch_name || receipts[0]?.order?.branch_id) ? `Branch: ${branchLabel}\n` : '';
 
     const headerText = useCompact
-      ? `SUPACLEAN | Arusha\nReceipt: ${receipts[0].order.receipt_number} | ${dateStr}\n${estimatedCollectionDate}${customer.name} | ${customer.phone}\n`
+      ? `SUPACLEAN | ${branchLabel}\nReceipt: ${receipts[0].order.receipt_number} | ${dateStr}\n${estimatedCollectionDate}${customer.name} | ${customer.phone}\n`
       : `
 ═══════════════════════════════════
    Laundry & Dry Cleaning
-        Arusha, Tanzania
+   ${branchLabel}, Tanzania
 ═══════════════════════════════════
 
 Receipt No: ${receipts[0].order.receipt_number}
-Date: ${dateStr}
+${branchLine}Date: ${dateStr}
 ${estimatedCollectionDate}
 Customer: ${customer.name}
 Phone: ${customer.phone}
@@ -1033,9 +1050,11 @@ Phone: ${customer.phone}
                             key={customer.id}
                             className="customer-dropdown-item"
                             role="option"
-                            onClick={() => {
+                            aria-selected={selectedCustomer?.id === customer.id}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
                               setSelectedCustomer(customer);
-                              setSearchTerm(searchByPhone ? customer.phone : customer.name);
+                              setSearchTerm(searchByPhone ? (customer.phone || customer.name) : (customer.name || customer.phone));
                               setShowCustomerDropdown(false);
                             }}
                           >

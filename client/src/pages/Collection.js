@@ -574,16 +574,18 @@ const Collection = () => {
 
     const itemsToShow = orders.length > 0 ? orders : (mainOrder.all_items || [mainOrder]);
     const useCompact = itemsToShow.length > RECEIPT_COMPACT_THRESHOLD;
+    const branchLabel = mainOrder.branch_name || (mainOrder.branch_id ? `Branch ID ${mainOrder.branch_id}` : 'Arusha');
+    const branchLine = (mainOrder.branch_name || mainOrder.branch_id) ? `Branch: ${branchLabel}\n` : '';
 
     const headerText = useCompact
-      ? `SUPACLEAN | Arusha\nReceipt: ${mainOrder.receipt_number} | ${dateStr}\n${estimatedCollectionDate}${mainOrder.customer_name} | ${mainOrder.customer_phone}\n`
+      ? `SUPACLEAN | ${branchLabel}\nReceipt: ${mainOrder.receipt_number} | ${dateStr}\n${estimatedCollectionDate}${mainOrder.customer_name} | ${mainOrder.customer_phone}\n`
       : `═══════════════════════════════════
    Laundry & Dry Cleaning
-        Arusha, Tanzania
+   ${branchLabel}, Tanzania
 ═══════════════════════════════════
 
 Receipt No: ${mainOrder.receipt_number}
-Date: ${dateStr}
+${branchLine}Date: ${dateStr}
 ${estimatedCollectionDate}
 Customer: ${mainOrder.customer_name}
 Phone: ${mainOrder.customer_phone}

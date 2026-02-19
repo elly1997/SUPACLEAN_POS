@@ -2,11 +2,23 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getCustomers, createCustomer, updateCustomer, uploadCustomersExcel, checkServerConnection, sendBalanceReminder } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import './Customers.css';
+
+const CUSTOMERS_EXPORT_COLUMNS = [
+  { key: 'branch_id', label: 'Branch ID' },
+  { key: 'branch_name', label: 'Branch' },
+  { key: 'name', label: 'Name' },
+  { key: 'phone', label: 'Phone' },
+  { key: 'email', label: 'Email' },
+  { key: 'address', label: 'Address' },
+  { key: 'outstanding_balance', label: 'Outstanding Balance' },
+  { key: 'tags', label: 'Tags' },
+];
 
 const Customers = () => {
   const { showToast, ToastContainer } = useToast();
-  const { hasPermission } = useAuth();
+  const { branch, hasPermission } = useAuth();
   const [customers, setCustomers] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [showNewCustomer, setShowNewCustomer] = useState(false);
@@ -27,6 +39,8 @@ const Customers = () => {
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [showExportPopup, setShowExportPopup] = useState(false);
   const searchInputRef = useRef(null);
 
   const CUSTOMERS_PAGE_SIZE = 50;
@@ -70,10 +84,15 @@ const Customers = () => {
   const handleCreateCustomer = async (e) => {
     e.preventDefault();
     try {
-      await createCustomer(newCustomer);
+      const res = await createCustomer(newCustomer);
       setNewCustomer({ name: '', phone: '', email: '', address: '' });
       setShowNewCustomer(false);
-      showToast('Customer created successfully', 'success');
+      showToast(
+        res.data.existing
+          ? 'Customer with this phone already exists. They are in the list below.'
+          : 'Customer created successfully',
+        'success'
+      );
       loadCustomers(false);
     } catch (error) {
       showToast('Error creating customer: ' + (error.response?.data?.error || error.message), 'error');
@@ -176,6 +195,38 @@ const Customers = () => {
     }
   };
 
+  const handleExportCustomers = async (format) => {
+    setExporting(true);
+    try {
+      const res = await getCustomers(searchTerm, { limit: 500, offset: 0, light: false });
+      const data = res.data || [];
+      if (data.length === 0) {
+        showToast('No customers to export', 'info');
+        return;
+      }
+      const rows = data.map(c => ({
+        branch_id: c.branch_id ?? '',
+        branch_name: c.branch_name ?? '',
+        name: c.name ?? '',
+        phone: c.phone ?? '',
+        email: c.email ?? '',
+        address: c.address ?? '',
+        outstanding_balance: c.outstanding_balance != null ? c.outstanding_balance : 0,
+        tags: c.tags ?? '',
+      }));
+      const title = 'Customers_' + new Date().toISOString().slice(0, 10);
+      const exportBranch = { branchName: branch?.name || rows[0]?.branch_name, branchId: branch?.id ?? rows[0]?.branch_id };
+      if (format === 'pdf') exportToPDF(title, CUSTOMERS_EXPORT_COLUMNS, rows, exportBranch);
+      else exportToExcel(title, CUSTOMERS_EXPORT_COLUMNS, rows, exportBranch);
+      showToast(`Exported ${data.length} customers as ${format.toUpperCase()}`, 'success');
+      setShowExportPopup(false);
+    } catch (error) {
+      showToast('Export failed: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (loading) {
     return <div className="loading">Loading customers...</div>;
   }
@@ -183,6 +234,33 @@ const Customers = () => {
   return (
     <div className="customers-page">
       <ToastContainer />
+      {showExportPopup && (
+        <div className="export-popup-overlay" onClick={() => setShowExportPopup(false)} role="dialog" aria-label="Export options">
+          <div className="export-popup" onClick={e => e.stopPropagation()}>
+            <div className="export-popup-header">
+              <h3>Export customers</h3>
+              <button type="button" className="export-popup-close" onClick={() => setShowExportPopup(false)} aria-label="Close">×</button>
+            </div>
+            <p className="export-popup-hint">Choose format (Branch ID and phone included)</p>
+            <div className="export-popup-actions">
+              <button
+                className="btn-primary"
+                onClick={() => handleExportCustomers('pdf')}
+                disabled={exporting}
+              >
+                {exporting ? '…' : 'PDF'}
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => handleExportCustomers('excel')}
+                disabled={exporting}
+              >
+                {exporting ? '…' : 'Excel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="page-header-modern">
         <div>
           <h1>Customers</h1>
@@ -201,6 +279,15 @@ const Customers = () => {
                     onChange={handleExcelUpload}
                   />
                 </label>
+                <button
+                  className="btn-secondary"
+                  style={{ marginRight: '12px' }}
+                  onClick={() => setShowExportPopup(true)}
+                  disabled={exporting}
+                  title="Export customers"
+                >
+                  {exporting ? '…' : 'Export'}
+                </button>
               </div>
               <button
                 className="btn-primary"

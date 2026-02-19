@@ -3,8 +3,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/useToast';
 import { 
   getBranches, createBranch, updateBranch,
-  getUsers, createUser, updateUser, deleteUser,
+  getUsers, createUser, updateUser, deleteUser, deleteUserPermanent,
   getBranchFeatures, updateBranchFeatures,
+  getSettings, updateSetting,
   checkServerConnection
 } from '../api/api';
 import './AdminBranches.css';
@@ -15,7 +16,9 @@ const AdminBranches = () => {
   const [branches, setBranches] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('branches'); // 'branches' or 'users'
+  const [activeTab, setActiveTab] = useState('branches'); // 'branches' | 'users' | 'settings'
+  const [managerWhatsapp, setManagerWhatsapp] = useState('');
+  const [managerWhatsappSaving, setManagerWhatsappSaving] = useState(false);
   
   // Branch form state
   const [showBranchForm, setShowBranchForm] = useState(false);
@@ -90,12 +93,15 @@ const AdminBranches = () => {
         return;
       }
       
-      const [branchesRes, usersRes] = await Promise.all([
+      const [branchesRes, usersRes, settingsRes] = await Promise.all([
         getBranches(),
-        getUsers()
+        getUsers(),
+        getSettings().catch(() => ({ data: {} }))
       ]);
       setBranches(branchesRes.data || []);
       setUsers(usersRes.data || []);
+      const settings = settingsRes.data || {};
+      setManagerWhatsapp(settings.manager_whatsapp_number?.value || '+255752757635');
     } catch (error) {
       console.error('Error loading data:', error);
       const errorMsg = error.response?.data?.error || error.message || 'Unknown error';
@@ -250,8 +256,8 @@ const AdminBranches = () => {
     setShowUserForm(true);
   };
 
-  const handleDeleteUser = async (userId) => {
-    if (!window.confirm('Are you sure you want to deactivate this user?')) {
+  const handleDeactivateUser = async (userId) => {
+    if (!window.confirm('Are you sure you want to deactivate this user? They will no longer be able to log in.')) {
       return;
     }
     try {
@@ -260,6 +266,19 @@ const AdminBranches = () => {
       loadData();
     } catch (error) {
       showToast('Error deactivating user: ' + (error.response?.data?.error || error.message), 'error');
+    }
+  };
+
+  const handleDeleteUserPermanent = async (userId, username) => {
+    if (!window.confirm(`Permanently delete user "${username}"? This cannot be undone. Their record will be removed.`)) {
+      return;
+    }
+    try {
+      await deleteUserPermanent(userId);
+      showToast('User permanently deleted', 'success');
+      loadData();
+    } catch (error) {
+      showToast('Error deleting user: ' + (error.response?.data?.error || error.message), 'error');
     }
   };
 
@@ -361,6 +380,12 @@ const AdminBranches = () => {
           onClick={() => setActiveTab('users')}
         >
           👥 Users ({users.length})
+        </button>
+        <button 
+          className={activeTab === 'settings' ? 'active' : ''}
+          onClick={() => setActiveTab('settings')}
+        >
+          ⚙️ Settings
         </button>
       </div>
 
@@ -541,6 +566,28 @@ const AdminBranches = () => {
 
       {activeTab === 'users' && (
         <div className="users-section">
+          <div className="branch-logins-card">
+            <h3>Branch logins (credentials)</h3>
+            <p className="branch-logins-desc">Usernames used to log in per branch. Passwords are not shown for security.</p>
+            <div className="branch-logins-list">
+              {branches.filter(b => b.is_active !== false).map(branch => {
+                const branchUsers = users.filter(u => u.branch_id === branch.id && u.is_active !== false);
+                return (
+                  <div key={branch.id} className="branch-logins-item">
+                    <strong>{branch.name}</strong> ({branch.code})
+                    <span className="logins">
+                      {branchUsers.length === 0
+                        ? ' — No users assigned'
+                        : branchUsers.map(u => `${u.username} (${u.role})`).join(', ')}
+                    </span>
+                  </div>
+                );
+              })}
+              {branches.filter(b => b.is_active !== false).length === 0 && (
+                <p className="empty-logins">No active branches. Add a branch first.</p>
+              )}
+            </div>
+          </div>
           <div className="section-header">
             <h2>Users</h2>
             <button 
@@ -576,8 +623,11 @@ const AdminBranches = () => {
                       value={userForm.username}
                       onChange={(e) => setUserForm({ ...userForm, username: e.target.value })}
                       required
-                      disabled={!!editingUser}
+                      placeholder="Login name for this user"
                     />
+                    {editingUser && (
+                      <small className="field-hint">You can change the username; the user will log in with the new name.</small>
+                    )}
                   </div>
                   <div className="form-group">
                     <label>Password {editingUser ? '(leave blank to keep current)' : '*'}</label>
@@ -586,7 +636,12 @@ const AdminBranches = () => {
                       value={userForm.password}
                       onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
                       required={!editingUser}
+                      placeholder={editingUser ? 'Enter new password to change' : 'Set password'}
+                      autoComplete={editingUser ? 'new-password' : 'off'}
                     />
+                    {editingUser && (
+                      <small className="field-hint">Passwords are stored securely and cannot be viewed. Enter a new password above only if you want to change it.</small>
+                    )}
                   </div>
                   <div className="form-group">
                     <label>Full Name *</label>
@@ -696,12 +751,20 @@ const AdminBranches = () => {
                       >
                         Edit
                       </button>
-                      {user.is_active && (
+                      {user.is_active ? (
                         <button 
                           className="btn-delete-small"
-                          onClick={() => handleDeleteUser(user.id)}
+                          onClick={() => handleDeactivateUser(user.id)}
                         >
                           Deactivate
+                        </button>
+                      ) : (
+                        <button 
+                          className="btn-delete-small"
+                          onClick={() => handleDeleteUserPermanent(user.id, user.username || user.full_name)}
+                          title="Permanently remove this user"
+                        >
+                          Delete
                         </button>
                       )}
                     </td>
@@ -709,6 +772,48 @@ const AdminBranches = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'settings' && (
+        <div className="admin-settings-section">
+          <h2>Admin settings</h2>
+          <div className="settings-card">
+            <h3>Daily Closing Report – Director WhatsApp</h3>
+            <p className="settings-description">
+              When a branch reconciles the day in Cash Management, the SUPACLEAN Daily Closing Report is sent to this number via WhatsApp.
+            </p>
+            <div className="form-group">
+              <label>Director WhatsApp number</label>
+              <input
+                type="text"
+                value={managerWhatsapp}
+                onChange={(e) => setManagerWhatsapp(e.target.value)}
+                placeholder="+255752757635"
+              />
+            </div>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={managerWhatsappSaving}
+              onClick={async () => {
+                setManagerWhatsappSaving(true);
+                try {
+                  await updateSetting('manager_whatsapp_number', {
+                    value: managerWhatsapp.trim() || '+255752757635',
+                    description: 'Director WhatsApp number – receives Daily Closing Report when a branch reconciles the day'
+                  });
+                  showToast('Director WhatsApp number saved', 'success');
+                } catch (e) {
+                  showToast('Error saving: ' + (e.response?.data?.error || e.message), 'error');
+                } finally {
+                  setManagerWhatsappSaving(false);
+                }
+              }}
+            >
+              {managerWhatsappSaving ? 'Saving...' : 'Save'}
+            </button>
           </div>
         </div>
       )}

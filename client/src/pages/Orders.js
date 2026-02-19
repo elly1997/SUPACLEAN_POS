@@ -3,15 +3,30 @@ import { useNavigate } from 'react-router-dom';
 import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, receivePayment, sendCollectionReminder } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import './Orders.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
 const ORDERS_PAGE_SIZE = 50;
 
+const ORDERS_EXPORT_COLUMNS = [
+  { key: 'branch_id', label: 'Branch ID' },
+  { key: 'receipt_number', label: 'Receipt No' },
+  { key: 'customer_name', label: 'Customer' },
+  { key: 'customer_phone', label: 'Phone' },
+  { key: 'total_amount', label: 'Total Amount' },
+  { key: 'paid_amount', label: 'Paid' },
+  { key: 'outstanding', label: 'Outstanding' },
+  { key: 'payment_status_label', label: 'Payment Status' },
+  { key: 'order_date', label: 'Order Date' },
+  { key: 'estimated_collection_date', label: 'Est. Collection' },
+  { key: 'status', label: 'Status' },
+];
+
 const Orders = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
-  const { selectedBranchId } = useAuth();
+  const { branch, selectedBranchId } = useAuth();
   const [orders, setOrders] = useState([]);
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(true);
@@ -36,6 +51,9 @@ const Orders = () => {
     overdueOnly: false
   });
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportingUncollected, setExportingUncollected] = useState(false);
+  const [showExportPopup, setShowExportPopup] = useState(false);
 
   const loadOrders = useCallback(async (append = false, offsetOverride = undefined) => {
     const offset = append ? (offsetOverride ?? 0) : 0;
@@ -303,17 +321,20 @@ const Orders = () => {
         : '';
 
       const useCompact = receiptOrders.length > RECEIPT_COMPACT_THRESHOLD;
+      const firstOrder = receiptOrders[0];
+      const branchLabel = firstOrder?.branch_name || (firstOrder?.branch_id ? `Branch ID ${firstOrder.branch_id}` : 'Arusha');
+      const branchLine = (firstOrder?.branch_name || firstOrder?.branch_id) ? `Branch: ${branchLabel}\n` : '';
 
       const headerText = useCompact
-        ? `SUPACLEAN | Arusha\nReceipt: ${receiptGroup.receipt_number} | ${dateStr}\n${estimatedCollectionDate}${receiptGroup.customer_name} | ${receiptGroup.customer_phone}\n`
+        ? `SUPACLEAN | ${branchLabel}\nReceipt: ${receiptGroup.receipt_number} | ${dateStr}\n${estimatedCollectionDate}${receiptGroup.customer_name} | ${receiptGroup.customer_phone}\n`
         : `
 ═══════════════════════════════════
    Laundry & Dry Cleaning
-        Arusha, Tanzania
+   ${branchLabel}, Tanzania
 ═══════════════════════════════════
 
 Receipt No: ${receiptGroup.receipt_number}
-Date: ${dateStr}
+${branchLine}Date: ${dateStr}
 ${estimatedCollectionDate}
 Customer: ${receiptGroup.customer_name}
 Phone: ${receiptGroup.customer_phone}
@@ -539,6 +560,94 @@ Phone: ${receiptGroup.customer_phone}
     setExpandedReceipts(newExpanded);
   };
 
+  const paymentStatusLabel = (ps) => {
+    if (ps === 'paid_full') return 'Paid';
+    if (ps === 'advance') return 'Advance';
+    return 'Unpaid';
+  };
+
+  const buildOrderExportRows = (ordersList) => {
+    const grouped = groupOrdersByReceipt(ordersList);
+    return grouped.map(g => {
+      const outstanding = roundMoney((g.total_amount || 0) - (g.paid_amount || 0));
+      const first = g.items && g.items[0];
+      return {
+        branch_id: first?.branch_id ?? '',
+        branch_name: first?.branch_name ?? '',
+        receipt_number: g.receipt_number ?? '',
+        customer_name: g.customer_name ?? '',
+        customer_phone: g.customer_phone ?? '',
+        total_amount: roundMoney(g.total_amount || 0),
+        paid_amount: roundMoney(g.paid_amount || 0),
+        outstanding,
+        payment_status_label: paymentStatusLabel(g.payment_status),
+        order_date: g.order_date ? new Date(g.order_date).toLocaleDateString() : '',
+        estimated_collection_date: g.estimated_collection_date ? new Date(g.estimated_collection_date).toLocaleString() : '',
+        status: g.status ?? '',
+      };
+    });
+  };
+
+  const handleExportOrders = async (format) => {
+    setExporting(true);
+    try {
+      const params = { limit: 500, offset: 0 };
+      if (selectedBranchId) params.branch_id = selectedBranchId;
+      if (filter !== 'all') params.status = filter;
+      Object.assign(params, {
+        date_from: searchFilters.dateFrom || undefined,
+        date_to: searchFilters.dateTo || undefined,
+        min_amount: searchFilters.minAmount || undefined,
+        max_amount: searchFilters.maxAmount || undefined,
+        payment_status: searchFilters.paymentStatus || undefined,
+        overdue_only: searchFilters.overdueOnly ? 'true' : undefined,
+        customer: searchFilters.customer || undefined,
+      });
+      const res = await getOrders(params);
+      const data = res.data || [];
+      if (data.length === 0) {
+        showToast('No orders to export', 'info');
+        return;
+      }
+      const rows = buildOrderExportRows(data);
+      const title = `Orders_${filter}_${new Date().toISOString().slice(0, 10)}`;
+      const exportBranch = { branchName: branch?.name || rows[0]?.branch_name, branchId: branch?.id ?? selectedBranchId ?? rows[0]?.branch_id };
+      if (format === 'pdf') exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+      else exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+      showToast(`Exported ${rows.length} receipt(s) as ${format.toUpperCase()}`, 'success');
+      setShowExportPopup(false);
+    } catch (error) {
+      showToast('Export failed: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportUncollectedStock = async (format) => {
+    setExportingUncollected(true);
+    try {
+      const params = { status: 'ready', overdue_only: 'true', limit: 500 };
+      if (selectedBranchId) params.branch_id = selectedBranchId;
+      const res = await getOrders(params);
+      const data = res.data || [];
+      if (data.length === 0) {
+        showToast('No uncollected (overdue) stock to export', 'info');
+        return;
+      }
+      const rows = buildOrderExportRows(data);
+      const title = 'Uncollected_Stock_' + new Date().toISOString().slice(0, 10);
+      const exportBranch = { branchName: branch?.name || rows[0]?.branch_name, branchId: branch?.id ?? selectedBranchId ?? rows[0]?.branch_id };
+      if (format === 'pdf') exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+      else exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+      showToast(`Exported ${rows.length} uncollected receipt(s) as ${format.toUpperCase()}`, 'success');
+      setShowExportPopup(false);
+    } catch (error) {
+      showToast('Export failed: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setExportingUncollected(false);
+    }
+  };
+
   // Get consolidated orders
   const consolidatedOrders = groupOrdersByReceipt(orders);
 
@@ -550,6 +659,30 @@ Phone: ${receiptGroup.customer_phone}
   return (
     <div className="orders-page">
       <ToastContainer />
+      {showExportPopup && (
+        <div className="export-popup-overlay" onClick={() => setShowExportPopup(false)} role="dialog" aria-label="Export options">
+          <div className="export-popup" onClick={e => e.stopPropagation()}>
+            <div className="export-popup-header">
+              <h3>Export</h3>
+              <button type="button" className="export-popup-close" onClick={() => setShowExportPopup(false)} aria-label="Close">×</button>
+            </div>
+            <div className="export-popup-section">
+              <p className="export-popup-label">Current orders (this tab & filters)</p>
+              <div className="export-popup-actions">
+                <button className="btn-primary" onClick={() => handleExportOrders('pdf')} disabled={exporting}>PDF</button>
+                <button className="btn-primary" onClick={() => handleExportOrders('excel')} disabled={exporting}>Excel</button>
+              </div>
+            </div>
+            <div className="export-popup-section">
+              <p className="export-popup-label">Uncollected stock (overdue, not collected)</p>
+              <div className="export-popup-actions">
+                <button className="btn-primary" onClick={() => handleExportUncollectedStock('pdf')} disabled={exportingUncollected}>PDF</button>
+                <button className="btn-primary" onClick={() => handleExportUncollectedStock('excel')} disabled={exportingUncollected}>Excel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {lastSyncedAt && (
         <div className="sync-cache-banner" role="status">
           Showing data from last sync — {new Date(lastSyncedAt).toLocaleString()}
@@ -561,6 +694,15 @@ Phone: ${receiptGroup.customer_phone}
           <p className="subtitle">View and manage all orders</p>
         </div>
         <div className="header-actions">
+          <button
+            className="btn-secondary"
+            style={{ marginRight: '8px' }}
+            onClick={() => setShowExportPopup(true)}
+            disabled={exporting || exportingUncollected}
+            title="Export orders or uncollected stock"
+          >
+            {(exporting || exportingUncollected) ? '…' : 'Export'}
+          </button>
           <label className="btn-secondary" style={{ cursor: 'pointer' }} title="Format: id, name, phone, amount, paid/not paid. All uploaded stock is uncollected (Ready). See UPLOAD_STOCK_FORMAT.md">
             📦 Upload Stock Excel
             <input

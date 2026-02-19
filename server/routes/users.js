@@ -214,8 +214,9 @@ router.put('/:id', authenticate, requireRole('admin'), async (req, res) => {
       }
     }
 
-    if (password) {
-      const passwordHash = await bcrypt.hash(password, 10);
+    // Only hash and update password if a non-empty new password was provided
+    if (password && typeof password === 'string' && password.trim().length > 0) {
+      const passwordHash = await bcrypt.hash(password.trim(), 10);
       updates.push(`password_hash = $${paramIndex++}`);
       params.push(passwordHash);
     }
@@ -256,17 +257,17 @@ router.put('/:id', authenticate, requireRole('admin'), async (req, res) => {
 });
 
 // Delete/Deactivate user (admin only)
+// Query ?permanent=true: permanently remove user (only if already inactive). Otherwise: soft delete (deactivate).
 router.delete('/:id', authenticate, requireRole('admin'), async (req, res) => {
   const { id } = req.params;
+  const permanent = req.query.permanent === 'true' || req.query.permanent === '1';
 
   try {
-    // Check if user exists
-    const user = await db.get('SELECT id, username, role FROM users WHERE id = $1', [id]);
+    const user = await db.get('SELECT id, username, role, is_active FROM users WHERE id = $1', [id]);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Prevent deleting yourself
     const sessionToken = req.headers.authorization?.replace('Bearer ', '');
     if (sessionToken) {
       const session = await db.get('SELECT user_id FROM user_sessions WHERE session_token = $1', [sessionToken]);
@@ -275,16 +276,29 @@ router.delete('/:id', authenticate, requireRole('admin'), async (req, res) => {
       }
     }
 
-    // Soft delete: Set is_active = false instead of actually deleting
-    const result = await db.run('UPDATE users SET is_active = FALSE WHERE id = $1', [id]);
+    if (permanent) {
+      // Permanent delete: only allowed for inactive users
+      if (user.is_active !== false && user.is_active !== 0) {
+        return res.status(400).json({
+          error: 'Only inactive users can be permanently deleted. Deactivate the user first, then delete.'
+        });
+      }
+      await db.run('DELETE FROM user_sessions WHERE user_id = $1', [id]);
+      const result = await db.run('DELETE FROM users WHERE id = $1', [id]);
+      if (result.changes === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      return res.json({ message: 'User permanently deleted' });
+    }
 
+    // Soft delete: deactivate
+    const result = await db.run('UPDATE users SET is_active = FALSE WHERE id = $1', [id]);
     if (result.changes === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-
     res.json({ message: 'User deactivated successfully' });
   } catch (err) {
-    console.error('Error deactivating user:', err);
+    console.error('Error in user delete:', err);
     res.status(500).json({ error: err.message });
   }
 });

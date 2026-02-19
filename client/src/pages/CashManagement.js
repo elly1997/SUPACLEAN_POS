@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit } from '../api/api';
+import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit, getActiveBankAccounts } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import './CashManagement.css';
 
 const CashManagement = () => {
   const { showToast, ToastContainer } = useToast();
-  const { selectedBranchId, isAdmin } = useAuth();
+  const { user, selectedBranchId, isAdmin } = useAuth();
   const [summary, setSummary] = useState(null);
   const [bankDeposits, setBankDeposits] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17,14 +17,21 @@ const CashManagement = () => {
   const [depositForm, setDepositForm] = useState({
     amount: '',
     reference_number: '',
+    bank_account_id: '',
     bank_name: '',
     notes: ''
   });
+  const [activeBankAccounts, setActiveBankAccounts] = useState([]);
+  const [manualWhatsAppReport, setManualWhatsAppReport] = useState(null);
   const today = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
     loadData();
   }, [selectedBranchId]);
+
+  useEffect(() => {
+    getActiveBankAccounts().then((res) => setActiveBankAccounts(res.data || [])).catch(() => setActiveBankAccounts([]));
+  }, []);
 
   const loadData = async () => {
     setErrorMessage(null);
@@ -86,17 +93,31 @@ const CashManagement = () => {
   };
 
   const handleReconcile = async () => {
-    if (!window.confirm('Are you sure you want to reconcile this day? This action cannot be undone.')) {
-      return;
-    }
-    
+    if (!window.confirm('Reconcile and send report to director? Cannot be undone.')) return;
+    setManualWhatsAppReport(null);
     try {
-      await reconcileDailyCash(today, { reconciled_by: 'Cashier' });
-      showToast('Day reconciled successfully', 'success');
+      const cashierName = user?.fullName || user?.username || 'Cashier';
+      const result = await reconcileDailyCash(today, { reconciled_by: cashierName });
+      const data = result?.data || result;
+      if (data.report_sent) {
+        showToast('Reconciled. Report sent to director.', 'success');
+      } else if (data.report_text && data.director_phone_wa) {
+        const url = `https://wa.me/${data.director_phone_wa}?text=${encodeURIComponent(data.report_text)}`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+        showToast('Reconciled. Send the message in WhatsApp to the director.', 'success');
+        setManualWhatsAppReport({ reportText: data.report_text, directorPhoneWa: data.director_phone_wa });
+      } else {
+        showToast('Reconciled. Set Director WhatsApp in Admin → Branches to send report.', 'info');
+      }
       loadData();
     } catch (error) {
-      showToast('Error reconciling: ' + (error.response?.data?.error || error.message), 'error');
+      showToast('Error: ' + (error.response?.data?.error || error.message), 'error');
     }
+  };
+
+  const openWhatsAppToSendReport = () => {
+    if (!manualWhatsAppReport?.directorPhoneWa || !manualWhatsAppReport?.reportText) return;
+    window.open(`https://wa.me/${manualWhatsAppReport.directorPhoneWa}?text=${encodeURIComponent(manualWhatsAppReport.reportText)}`, '_blank', 'noopener,noreferrer');
   };
 
   const handleAddDeposit = async (e) => {
@@ -104,12 +125,16 @@ const CashManagement = () => {
     try {
       await createBankDeposit({
         date: today,
-        ...depositForm,
+        amount: depositForm.amount,
+        reference_number: depositForm.reference_number || null,
+        bank_account_id: (depositForm.bank_account_id && depositForm.bank_account_id !== 'other') ? Number(depositForm.bank_account_id) : null,
+        bank_name: (depositForm.bank_account_id === '' || depositForm.bank_account_id === 'other') ? (depositForm.bank_name || null) : null,
+        notes: depositForm.notes || null,
         created_by: 'Cashier'
       });
       showToast('Bank deposit added', 'success');
       setShowDepositForm(false);
-      setDepositForm({ amount: '', reference_number: '', bank_name: '', notes: '' });
+      setDepositForm({ amount: '', reference_number: '', bank_account_id: '', bank_name: '', notes: '' });
       loadData();
     } catch (error) {
       showToast('Error adding deposit: ' + (error.response?.data?.error || error.message), 'error');
@@ -150,6 +175,13 @@ const CashManagement = () => {
           Showing data from last sync — {new Date(lastSyncedAt).toLocaleString()}
         </div>
       )}
+      {manualWhatsAppReport && (
+        <div className="manual-whatsapp-banner" role="alert">
+          <span>Send report to director again?</span>
+          <button type="button" className="btn-link" onClick={openWhatsAppToSendReport}>Open WhatsApp</button>
+          <button type="button" className="btn-link muted" onClick={() => setManualWhatsAppReport(null)} aria-label="Dismiss">Dismiss</button>
+        </div>
+      )}
       <div className="page-header">
         <div>
           <h1>💵 Cash Management</h1>
@@ -161,7 +193,7 @@ const CashManagement = () => {
           </button>
           {!summary.is_reconciled && (
             <button onClick={handleReconcile} className="btn-success" type="button">
-              ✅ Reconcile Day
+              ✅ Reconcile & send to director
             </button>
           )}
         </div>
@@ -317,13 +349,27 @@ const CashManagement = () => {
                 />
               </div>
               <div className="form-group">
-                <label>Bank Name</label>
-                <input
-                  type="text"
-                  value={depositForm.bank_name}
-                  onChange={(e) => setDepositForm({ ...depositForm, bank_name: e.target.value })}
-                  placeholder="Optional"
-                />
+                <label>Bank / Account</label>
+                <select
+                  value={depositForm.bank_account_id}
+                  onChange={(e) => setDepositForm({ ...depositForm, bank_account_id: e.target.value, bank_name: e.target.value === 'other' ? depositForm.bank_name : '' })}
+                >
+                  <option value="">Select bank...</option>
+                  {activeBankAccounts.map((acc) => (
+                    <option key={acc.id} value={acc.id}>{acc.name}{acc.account_number ? ` (${acc.account_number})` : ''}</option>
+                  ))}
+                  <option value="other">Other (type below)</option>
+                </select>
+                {(depositForm.bank_account_id === 'other' || !depositForm.bank_account_id) && (
+                  <input
+                    type="text"
+                    className="bank-name-other"
+                    value={depositForm.bank_name}
+                    onChange={(e) => setDepositForm({ ...depositForm, bank_name: e.target.value })}
+                    placeholder="Bank name if not in list"
+                    style={{ marginTop: 8 }}
+                  />
+                )}
               </div>
             </div>
             <div className="form-group">
@@ -350,7 +396,7 @@ const CashManagement = () => {
               <div key={deposit.id} className="deposit-item">
                 <div className="deposit-info">
                   <strong>TSh {parseFloat(deposit.amount).toLocaleString()}</strong>
-                  {deposit.bank_name && <span>{deposit.bank_name}</span>}
+                  {(deposit.bank_account_name || deposit.bank_name) && <span>{deposit.bank_account_name || deposit.bank_name}</span>}
                   {deposit.reference_number && <span className="reference">Ref: {deposit.reference_number}</span>}
                 </div>
                 {deposit.notes && <div className="deposit-notes">{deposit.notes}</div>}

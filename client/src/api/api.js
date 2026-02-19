@@ -795,6 +795,13 @@ export async function getBankDeposits(params = {}) {
     throw err;
   }
 }
+// Bank accounts (admin: full list; others: active only for dropdown)
+export const getBankAccounts = () => api.get('/bank-accounts');
+export const getActiveBankAccounts = () => api.get('/bank-accounts/active');
+export const createBankAccount = (data) => api.post('/bank-accounts', data);
+export const updateBankAccount = (id, data) => api.put(`/bank-accounts/${id}`, data);
+export const deleteBankAccount = (id) => api.delete(`/bank-accounts/${id}`);
+
 export const getBankDeposit = (id) => api.get(`/bank-deposits/${id}`);
 export const createBankDeposit = (data) => api.post('/bank-deposits', data);
 export const updateBankDeposit = (id, data) => api.put(`/bank-deposits/${id}`, data);
@@ -865,11 +872,13 @@ export const getBranch = (id) => api.get(`/branches/${id}`);
 export const createBranch = (data) => api.post('/branches', data);
 export const updateBranch = (id, data) => api.put(`/branches/${id}`, data);
 export const getBranchFeatures = (id) => api.get(`/branches/${id}/features`);
-export const updateBranchFeatures = (id, features) => api.put(`/branches/${id}/features`, { features });
+export const updateBranchFeatures = (id, features) => api.put(`/branches/${id}/features`, { features }, { timeout: 30000 });
 
 // Users
 export const getUsers = () => api.get('/users');
 export const getUser = (id) => api.get(`/users/${id}`);
-export const createUser = (data) => api.post('/users', data);
-export const updateUser = (id, data) => api.put(`/users/${id}`, data);
+export const createUser = (data) => api.post('/users', data, { timeout: 45000 });
+// User update can be slow on cold start or when DB is remote; use longer timeout for admin
+export const updateUser = (id, data) => api.put(`/users/${id}`, data, { timeout: 45000 });
 export const deleteUser = (id) => api.delete(`/users/${id}`);
+export const deleteUserPermanent = (id) => api.delete(`/users/${id}?permanent=true`);

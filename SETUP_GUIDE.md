@@ -109,27 +109,26 @@ The system comes with pre-configured services:
 
 **You can modify these prices** by editing the database or through API calls.
 
-## SMS Setup (Optional but Recommended)
+## SMS Setup (Africa's Talking)
 
-To send SMS notifications when laundry is ready:
+SMS notifications (order ready, receipt, reminders, balance reminder) use **Africa's Talking**. Credentials are configured in `.env`:
 
-### Option 1: Africa's Talking (Recommended for Tanzania)
+- **SMS_API_KEY** – Your Africa's Talking API key (already set).
+- **SMS_USERNAME** – Use `sandbox` for testing; for **production** replace with your Africa's Talking app username from the [dashboard](https://account.africastalking.com).
+- **SMS_SENDER_ID** – Sender name (e.g. `SUPACLEAN`); request an alphanumeric sender in Africa's Talking for production.
 
-1. Sign up at: https://africastalking.com
-2. Get your API key and username
-3. Create `.env` file with:
-   ```
-   SMS_API_KEY=your_api_key
-   SMS_API_URL=https://api.africastalking.com/version1/messaging
-   SMS_USERNAME=your_username
-   ```
-4. Restart the server
+**For production (live SMS):** In `.env` set `SMS_USERNAME` to your Africa's Talking app username (not `sandbox`), ensure you have credit, and remove or comment out `SMS_API_URL` so the app uses the live API.
 
-### Option 2: Other Providers
-- Modify `server/utils/sms.js` to integrate with your preferred provider
-- Common options: Twilio, SMS Gateway API
+For full details (sandbox URL, Twilio option, phone format), see **[SMS_INTEGRATION.md](SMS_INTEGRATION.md)**.
 
-**Note:** Without SMS setup, the system will log SMS messages but won't send them.
+## Daily Closing Report – WhatsApp
+
+When you **Reconcile Day** in Cash Management, the system tries to send the SUPACLEAN Daily Closing Report to the **Director WhatsApp number** (set in **Admin → Branches → Admin settings**).
+
+- **Automatic send:** The server sends the message via **WhatsApp Business API** (Meta, Twilio, or 360dialog). No app opens on your computer; the director receives the message in their WhatsApp like a normal chat. To enable this, add WhatsApp API credentials to the server `.env` (e.g. for Meta: `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`). See **FEATURES_ADDED.md** for provider setup.
+- **If WhatsApp is not configured:** After reconciling, you’ll see a green banner: **"Open WhatsApp to send report"**. Click it to open WhatsApp (app or web) with the director’s chat and the report text pre-filled so you can send it yourself.
+
+The system never “opens another app” for you when using the API; the message is sent from the server. Use the **Open WhatsApp** button when the API is not set up.
 
 ## Daily Workflow
 
@@ -228,6 +227,38 @@ The QR code on receipts links to your **Terms (Masharti)** page. If receipts are
 After this, the QR on receipts will point to `https://your-pos-domain.com/terms`, and scanning from a phone will open the Terms (Masharti) page.
 
 - **“Scan for details” QR** has been removed from New Order receipts; only the **“Scan for Terms / Masharti”** QR is printed.
+
+## How to save changes to your deployed system
+
+If your app is deployed on **Render** (or similar), use this flow to get your latest code and config live.
+
+### 1. Code changes (features, fixes, UI)
+
+1. In your project folder, open a terminal.
+2. Stage and commit:
+   ```bash
+   git add .
+   git commit -m "Describe your changes (e.g. Daily report to director, customer auto-select)"
+   ```
+3. Push to the branch Render uses (usually `main`):
+   ```bash
+   git push origin main
+   ```
+4. **Render**: If the service is connected to this repo, it will **auto-deploy** after the push. Check **Dashboard → your Web Service → Logs** to see the build. When it finishes, the live site has your changes.
+
+   If auto-deploy is off: **Dashboard → your Web Service → Manual Deploy → Deploy latest commit**.
+
+### 2. Config / secrets (e.g. new SMS API key, database URL)
+
+Your **local** `.env` is not used on Render. To change what the **deployed** app uses:
+
+1. Go to **https://dashboard.render.com** → your **Web Service** (e.g. `supaclean-pos`).
+2. Open **Environment**.
+3. Add or edit variables (e.g. `SMS_API_KEY`, `SMS_USERNAME`, `DATABASE_URL`). Use the same names as in your local `.env`.
+4. Click **Save Changes**.
+5. Trigger **Manual Deploy** → **Deploy latest commit** so the server restarts with the new values.
+
+After that, the live system uses the updated code and/or config.
 
 ## Recent fixes (ready for deploy)
 

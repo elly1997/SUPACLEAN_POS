@@ -29,7 +29,9 @@ const Layout = ({ children }) => {
     if (branch?.id) {
       fetchBranchFeatures(branch.id);
     } else if (isAdmin) {
-      setAvailableFeatures(['all']);
+      setAvailableFeatures(['all']); // Admin sees all; no branch feature filter
+    } else {
+      setAvailableFeatures([]); // Non-admin without branch: no features until loaded
     }
   }, [branch, isAdmin]);
 
@@ -53,57 +55,61 @@ const Layout = ({ children }) => {
   const fetchBranchFeatures = async (branchId) => {
     try {
       const response = await api.get(`/branches/${branchId}/features`);
-      const enabledFeatures = response.data
-        .filter(f => f.is_enabled === 1)
+      // Accept both boolean (PostgreSQL) and 1/0 (SQLite) for is_enabled
+      const enabledFeatures = (response.data || [])
+        .filter(f => f.is_enabled === true || f.is_enabled === 1)
         .map(f => f.feature_key);
       setAvailableFeatures(enabledFeatures);
     } catch (error) {
       console.error('Error fetching branch features:', error);
-      // Default to all features if fetch fails
-      setAvailableFeatures(['all']);
+      setAvailableFeatures([]); // On error, don't grant all; user may need to refresh
     }
   };
 
-  const hasFeature = (featureKey) => {
+  const hasFeature = (featureKeyOrKeys) => {
     if (isAdmin || availableFeatures.includes('all')) return true;
-    return availableFeatures.includes(featureKey);
+    if (Array.isArray(featureKeyOrKeys)) {
+      return featureKeyOrKeys.some(key => availableFeatures.includes(key));
+    }
+    return availableFeatures.includes(featureKeyOrKeys);
   };
 
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
-  // Base menu items with permission requirements
+  // Base menu items: each maps to a branch feature (admin privileges) and optionally role permission
   const baseMenuItems = [
-    { path: '/dashboard', label: 'Dashboard', icon: '📊', permission: 'canViewDashboard' },
-    { path: '/new-order', label: 'New Order', icon: '➕', permission: 'canCreateOrders' },
-    { path: '/orders', label: 'Orders', icon: '📋', permission: 'canCreateOrders' }, // Anyone who can create can view
-    { path: '/collection', label: 'Collection', icon: '✅', permission: 'canManageOrders' },
-    { path: '/customers', label: 'Customers', icon: '👥', permission: null }, // Everyone can view, but manage requires permission
-    { path: '/price-list', label: 'Price List', icon: '💰', permission: null }, // Everyone can view prices
-    { path: '/cash-management', label: 'Cash Management', icon: '💵', permission: 'canManageCash' },
-    { path: '/expenses', label: 'Expenses', icon: '📝', permission: 'canManageExpenses' },
-    { path: '/reports', label: 'Reports', icon: '📈', permission: 'canViewReports' },
-    { path: '/monthly-billing', label: 'Monthly Billing', icon: '📄', permission: 'canCreateOrders' },
+    { path: '/dashboard', label: 'Dashboard', icon: '📊', permission: 'canViewDashboard', feature: null },
+    { path: '/new-order', label: 'New Order', icon: '➕', permission: 'canCreateOrders', feature: 'new_order' },
+    { path: '/orders', label: 'Orders', icon: '📋', permission: ['canCreateOrders', 'canManageOrders'], feature: ['new_order', 'order_processing'] },
+    { path: '/collection', label: 'Collection', icon: '✅', permission: 'canManageOrders', feature: 'collection' },
+    { path: '/customers', label: 'Customers', icon: '👥', permission: null, feature: 'customers' },
+    { path: '/price-list', label: 'Price List', icon: '💰', permission: null, feature: 'price_list_view' },
+    { path: '/cash-management', label: 'Cash Management', icon: '💵', permission: 'canManageCash', feature: 'cash_management' },
+    { path: '/expenses', label: 'Expenses', icon: '📝', permission: 'canManageExpenses', feature: 'expenses' },
+    { path: '/reports', label: 'Reports', icon: '📈', permission: 'canViewReports', feature: 'reports_basic' },
+    { path: '/monthly-billing', label: 'Monthly Billing', icon: '📄', permission: 'canCreateOrders', feature: 'new_order' },
     { path: '/cleaning-services', label: 'Cleaning Services', icon: '🧹', feature: 'cleaning_services', permission: null },
   ];
 
-  // Filter menu items based on permissions and features
+  const hasAnyPermission = (permOrPerms) => {
+    if (!permOrPerms) return true;
+    if (Array.isArray(permOrPerms)) return permOrPerms.some(p => hasPermission(p));
+    return hasPermission(permOrPerms);
+  };
+  // Filter: admin sees all; others need BOTH role permission AND branch feature (when set)
   const menuItems = baseMenuItems.filter(item => {
-    // Cleaning Services: only admin or branch with cleaning_services feature
-    if (item.path === '/cleaning-services') {
-      return isAdmin || hasFeature('cleaning_services');
-    }
-    // Check feature-based access (for branch-specific features)
-    if (!hasFeature(item.feature || 'all')) return false;
-    // Check permission-based access
-    if (item.permission && !hasPermission(item.permission)) return false;
+    if (isAdmin) return true;
+    if (item.feature && !hasFeature(item.feature)) return false;
+    if (item.permission && !hasAnyPermission(item.permission)) return false;
     return true;
   });
 
   // Add admin menu items
   if (isAdmin) {
     menuItems.push({ path: '/admin/branches', label: 'Branches', icon: '🏢', feature: 'admin' });
+    menuItems.push({ path: '/admin/banking', label: 'Banking', icon: '🏦', feature: 'admin' });
   }
 
   return (

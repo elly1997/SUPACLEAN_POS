@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary } from '../api/api';
+import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import './Expenses.css';
 
 const EXPENSE_CATEGORIES = [
+  'Bank Deposit',
   'Lunch',
   'Breakfast',
   'Car Fuel',
@@ -37,14 +38,22 @@ const Expenses = () => {
     amount: '',
     payment_source: 'cash',
     description: '',
-    receipt_number: ''
+    receipt_number: '',
+    bank_account_id: '',
+    deposit_reference_number: '',
+    bank_name: ''
   });
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const [bankAccounts, setBankAccounts] = useState([]);
 
   useEffect(() => {
     loadExpenses();
   }, [filterDate]);
+
+  useEffect(() => {
+    getActiveBankAccounts().then((res) => setBankAccounts(res.data || [])).catch(() => setBankAccounts([]));
+  }, []);
 
   const loadExpenses = async () => {
     try {
@@ -81,7 +90,12 @@ const Expenses = () => {
       } else {
         await createExpense({
           ...formData,
-          created_by: 'Cashier'
+          created_by: 'Cashier',
+          ...(formData.category === 'Bank Deposit' && {
+            bank_account_id: formData.bank_account_id === 'other' ? '' : formData.bank_account_id,
+            deposit_reference_number: formData.deposit_reference_number || undefined,
+            bank_name: formData.bank_account_id === 'other' ? formData.bank_name : undefined
+          })
         });
         showToast('Expense added successfully', 'success');
       }
@@ -93,6 +107,7 @@ const Expenses = () => {
   };
 
   const handleEdit = (expense) => {
+    const hasOtherBank = expense.category === 'Bank Deposit' && !expense.bank_account_id && (expense.deposit_bank_name || expense.bank_name);
     setEditingId(expense.id);
     setFormData({
       date: expense.date,
@@ -100,7 +115,10 @@ const Expenses = () => {
       amount: expense.amount,
       payment_source: expense.payment_source,
       description: expense.description || '',
-      receipt_number: expense.receipt_number || ''
+      receipt_number: expense.receipt_number || '',
+      bank_account_id: hasOtherBank ? 'other' : (expense.bank_account_id != null ? String(expense.bank_account_id) : ''),
+      deposit_reference_number: expense.deposit_reference_number || '',
+      bank_name: expense.deposit_bank_name || expense.bank_name || ''
     });
     setShowForm(true);
   };
@@ -125,7 +143,10 @@ const Expenses = () => {
       amount: '',
       payment_source: 'cash',
       description: '',
-      receipt_number: ''
+      receipt_number: '',
+      bank_account_id: '',
+      deposit_reference_number: '',
+      bank_name: ''
     });
     setEditingId(null);
     setShowForm(false);
@@ -217,7 +238,14 @@ const Expenses = () => {
                 <label>Category *</label>
                 <select
                   value={formData.category}
-                  onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                  onChange={(e) => {
+                  const cat = e.target.value;
+                  setFormData({
+                    ...formData,
+                    category: cat,
+                    ...(cat === 'Bank Deposit' && { payment_source: 'cash' })
+                  });
+                }}
                   required
                 >
                   <option value="">Select category...</option>
@@ -249,6 +277,44 @@ const Expenses = () => {
                   ))}
                 </select>
               </div>
+              {formData.category === 'Bank Deposit' && (
+                <>
+                  <div className="form-group">
+                    <label>Bank / Account *</label>
+                    <select
+                      value={formData.bank_account_id}
+                      onChange={(e) => setFormData({ ...formData, bank_account_id: e.target.value, bank_name: e.target.value === 'other' ? formData.bank_name : '' })}
+                      required
+                    >
+                      <option value="">Select bank...</option>
+                      {bankAccounts.map((acc) => (
+                        <option key={acc.id} value={acc.id}>{acc.name}{acc.account_number ? ` (${acc.account_number})` : ''}</option>
+                      ))}
+                      <option value="other">Other (enter name below)</option>
+                    </select>
+                  </div>
+                  {formData.bank_account_id === 'other' && (
+                    <div className="form-group">
+                      <label>Bank name</label>
+                      <input
+                        type="text"
+                        value={formData.bank_name}
+                        onChange={(e) => setFormData({ ...formData, bank_name: e.target.value })}
+                        placeholder="e.g. CRDB Branch X"
+                      />
+                    </div>
+                  )}
+                  <div className="form-group">
+                    <label>Reference (optional)</label>
+                    <input
+                      type="text"
+                      value={formData.deposit_reference_number}
+                      onChange={(e) => setFormData({ ...formData, deposit_reference_number: e.target.value })}
+                      placeholder="Deposit slip / transaction ref"
+                    />
+                  </div>
+                </>
+              )}
               <div className="form-group full-width">
                 <label>Description</label>
                 <textarea
@@ -290,6 +356,7 @@ const Expenses = () => {
                 <tr>
                   <th>Date</th>
                   <th>Category</th>
+                  <th>Bank</th>
                   <th>Amount</th>
                   <th>Payment Source</th>
                   <th>Description</th>
@@ -303,6 +370,11 @@ const Expenses = () => {
                     <td>{new Date(expense.date).toLocaleDateString()}</td>
                     <td>
                       <span className="category-badge">{expense.category}</span>
+                    </td>
+                    <td className="bank-cell">
+                      {expense.category === 'Bank Deposit'
+                        ? (expense.bank_account_name || expense.deposit_bank_name || '-')
+                        : '-'}
                     </td>
                     <td className="amount-cell">
                       <strong>TSh {parseFloat(expense.amount).toLocaleString()}</strong>

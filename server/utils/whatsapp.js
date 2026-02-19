@@ -195,7 +195,7 @@ async function sendWhatsApp(phone, message, options = {}) {
           accessToken: process.env.WHATSAPP_ACCESS_TOKEN
         };
         if (!config.phoneNumberId || !config.accessToken) {
-          // Log but don't fail (for development)
+          // Log but don't fail (for development). Return success: false so callers know nothing was sent.
           console.log(`📱 WhatsApp (not sent - no API credentials): ${formatPhoneNumber(phone)}`);
           console.log(`Message: ${message}`);
           
@@ -206,7 +206,7 @@ async function sendWhatsApp(phone, message, options = {}) {
             );
           }
           
-          return { success: true, message: 'WhatsApp logged (no API credentials configured)', notificationId };
+          return { success: false, error: 'No API credentials configured', notificationId };
         }
         result = await sendWhatsAppMeta(phone, message, config);
         break;

@@ -1,11 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
-const { authenticate, requireBranchAccess } = require('../middleware/auth');
+const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
 const { getBranchFilter } = require('../utils/branchFilter');
 
+router.use(authenticate, requireBranchFeature('reports_basic'));
+
 // Get sales report by date range
-router.get('/sales', async (req, res) => {
+router.get('/sales', requireBranchAccess(), async (req, res) => {
   const { start_date, end_date } = req.query;
   
   if (!start_date || !end_date) {
@@ -35,7 +37,7 @@ router.get('/sales', async (req, res) => {
 });
 
 // Get service performance report
-router.get('/services', async (req, res) => {
+router.get('/services', requireBranchAccess(), async (req, res) => {
   const { start_date, end_date } = req.query;
   let query = `
     SELECT 
@@ -64,7 +66,7 @@ router.get('/services', async (req, res) => {
 });
 
 // Get customer statistics with loyalty points
-router.get('/customers', async (req, res) => {
+router.get('/customers', requireBranchAccess(), async (req, res) => {
   const { month, year } = req.query;
   let dateFilter = '';
   let params = [];
@@ -120,7 +122,7 @@ router.get('/customers', async (req, res) => {
 });
 
 // Get monthly loyalty points report
-router.get('/loyalty/monthly', async (req, res) => {
+router.get('/loyalty/monthly', requireBranchAccess(), async (req, res) => {
   const { month, year } = req.query;
   
   if (!month || !year) {
@@ -169,7 +171,7 @@ router.get('/loyalty/monthly', async (req, res) => {
 });
 
 // Get financial report with profit calculations (uses reconciled daily_cash_summaries)
-router.get('/financial', authenticate, requireBranchAccess(), async (req, res) => {
+router.get('/financial', requireBranchAccess(), async (req, res) => {
   const { start_date, end_date, period = 'day' } = req.query; // period: 'day', 'week', 'month'
   
   if (!start_date || !end_date) {
@@ -248,7 +250,7 @@ router.get('/financial', authenticate, requireBranchAccess(), async (req, res) =
 });
 
 // Get daily profit report (uses reconciled data)
-router.get('/profit/daily', authenticate, requireBranchAccess(), async (req, res) => {
+router.get('/profit/daily', requireBranchAccess(), async (req, res) => {
   const { start_date, end_date } = req.query;
   
   if (!start_date || !end_date) {
@@ -293,7 +295,7 @@ router.get('/profit/daily', authenticate, requireBranchAccess(), async (req, res
 });
 
 // Get overview summary (today's data from cash management)
-router.get('/overview', authenticate, requireBranchAccess(), async (req, res) => {
+router.get('/overview', requireBranchAccess(), async (req, res) => {
   const { date } = req.query;
   const today = date || new Date().toISOString().split('T')[0];
   const branchFilter = getBranchFilter(req, 'd');

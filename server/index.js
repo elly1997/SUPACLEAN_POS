@@ -36,6 +36,8 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Initialize database: db.js uses PostgreSQL when DATABASE_URL is set (Render/Supabase), else SQLite (local)
 require('./database/db');
+// Ensure bank_accounts table exists in PostgreSQL (no-op for SQLite)
+require('./database/ensureBankingSchema');
 
 // Routes - with error handling
 try {
@@ -51,6 +53,7 @@ try {
   app.use('/api/settings', require('./routes/settings'));
   app.use('/api/expenses', require('./routes/expenses'));
   app.use('/api/cash-management', require('./routes/cashManagement'));
+  app.use('/api/bank-accounts', require('./routes/bankAccounts'));
   app.use('/api/bank-deposits', require('./routes/bankDeposits'));
   app.use('/api/loyalty', require('./routes/loyalty'));
   app.use('/api/validation', require('./routes/validation'));
@@ -71,6 +74,22 @@ try {
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'SUPACLEAN POS API is running' });
+});
+
+// SMS config status (no secrets) – helps troubleshoot why SMS might not send
+app.get('/api/sms-status', (req, res) => {
+  const provider = (process.env.SMS_PROVIDER || 'africastalking').toLowerCase();
+  const hasApiKey = !!(process.env.SMS_API_KEY || (provider === 'twilio' && process.env.TWILIO_AUTH_TOKEN));
+  const hasUsername = !!(provider !== 'africastalking' || process.env.SMS_USERNAME);
+  const configured = hasApiKey && (provider !== 'africastalking' || hasUsername);
+  const hints = [];
+  if (!hasApiKey) hints.push('Set SMS_API_KEY in .env (Africa\'s Talking) or TWILIO_AUTH_TOKEN (Twilio).');
+  if (provider === 'africastalking' && !hasUsername) hints.push('Set SMS_USERNAME in .env (e.g. "sandbox" or your app username).');
+  if (configured && provider === 'africastalking') {
+    hints.push('If SMS still does not send: check Africa\'s Talking account has credit; sender ID may need to be approved for Tanzania.');
+    hints.push('Check server logs when you trigger an SMS (e.g. mark order Ready) for the exact API error.');
+  }
+  res.json({ configured, provider, hasApiKey, hasUsername, hints });
 });
 
 // Serve uploaded files (item photos, etc.)
