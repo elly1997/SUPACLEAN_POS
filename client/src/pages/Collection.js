@@ -734,7 +734,7 @@ Phone: ${mainOrder.customer_phone}
       `;
 
     const isSmallScreen = typeof window !== 'undefined' && window.innerWidth <= 600;
-    const useInPagePrint = () => {
+    const runInPagePrint = () => {
       const printContainer = document.createElement('div');
       printContainer.id = 'receipt-print-container-collection';
       printContainer.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
@@ -765,7 +765,7 @@ Phone: ${mainOrder.customer_phone}
 
     try {
       if (isSmallScreen) {
-        useInPagePrint();
+        runInPagePrint();
         return;
       }
       const printWindow = window.open('', '_blank', 'width=320,height=500,scrollbars=yes');
@@ -776,12 +776,12 @@ Phone: ${mainOrder.customer_phone}
         showToast('Receipt print dialog opened. Select your thermal printer.', 'success');
       } else {
         showToast('Using same-window print (better for built-in printer).', 'info');
-        useInPagePrint();
+        runInPagePrint();
       }
     } catch (error) {
       console.error('Error printing receipt:', error);
       showToast('Trying same-window print...', 'info');
-      useInPagePrint();
+      runInPagePrint();
     }
   };
 

@@ -823,7 +823,7 @@ Phone: ${customer.phone}
       `;
 
     const isSmallScreen = typeof window !== 'undefined' && window.innerWidth <= 600;
-    const useInPagePrint = () => {
+    const runInPagePrint = () => {
       const printContainer = document.createElement('div');
       printContainer.id = 'receipt-print-container';
       printContainer.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
@@ -858,7 +858,7 @@ Phone: ${customer.phone}
 
     try {
       if (isSmallScreen) {
-        useInPagePrint();
+        runInPagePrint();
         return;
       }
       let printWindow = null;
@@ -869,7 +869,7 @@ Phone: ${customer.phone}
       }
       if (!printWindow || printWindow.closed || typeof printWindow.closed === 'undefined') {
         showToast('Using same-window print (better for built-in printer).', 'info');
-        useInPagePrint();
+        runInPagePrint();
         return;
       }
       printWindow.document.open();
@@ -879,7 +879,7 @@ Phone: ${customer.phone}
     } catch (e) {
       console.error('Error printing:', e);
       showToast('Print failed. Trying same-window print...', 'info');
-      useInPagePrint();
+      runInPagePrint();
     }
   };
 
