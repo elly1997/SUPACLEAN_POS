@@ -291,6 +291,8 @@ The app adapts to screen size:
 - Font size and QR size adjust automatically (smaller for 58mm, larger for 80mm).
 - **On POS with in-built printer (small screen):** The app now uses **same-window printing**: the receipt is shown on screen and the print dialog opens in the same window. The **default printer** on the device is used — so **set your built-in printer as the default** in the POS device settings (e.g. Settings → Printers → set built-in thermal as default). Then when you complete an order or print from Collection, the dialog will show that printer; tap Print.
 - **If the built-in printer does not appear** in the print dialog at all, it may not be registered as a system printer. In that case: (1) Install any driver or utility that came with the POS so the built-in printer appears in the device’s printer list; (2) Set it as default; (3) Try again. Some POS devices require their own “print service” or driver to be enabled in settings.
+- **Force same-window print on tablet/larger POS:** To always use same-window print (and thus the default printer) even on wider screens, set `REACT_APP_FORCE_RECEIPT_SAME_WINDOW=true` in `.env` (and in Render **Environment** if deployed), then rebuild/redeploy.
+- **If receipt preview is blank or print fails:** The app waits for the receipt content (and QR image) to load before opening the print dialog. Set the built-in printer as **default** so it is pre-selected. If the POS has no internet, the Terms QR may not load but the receipt text still prints.
 - **Larger screens (tablet/desktop):** A new window may open for the receipt; choose your thermal printer in the dialog. If the window is blocked, the app falls back to same-window print.
 
 ## Next Steps

@@ -814,21 +814,36 @@ Phone: ${customer.phone}
             </div>
             <script>
               function doPrint() { try { window.focus(); window.print(); } catch (e) {} }
-              window.onload = function() { setTimeout(doPrint, 450); };
-              setTimeout(function() { if (document.readyState === 'complete') doPrint(); }, 1200);
               window.onafterprint = function() { setTimeout(function() { try { window.close(); } catch (e) {} }, 500); };
+              (function(){
+                var run = false;
+                function maybePrint() { if (!run) { run = true; setTimeout(doPrint, 350); } }
+                var sheet = document.querySelector('.receipt-sheet');
+                var img = sheet ? sheet.querySelector('img') : null;
+                if (img && !img.complete) {
+                  img.onload = maybePrint;
+                  img.onerror = maybePrint;
+                  setTimeout(maybePrint, 2000);
+                } else {
+                  if (document.readyState === 'complete') maybePrint();
+                  else window.onload = function() { setTimeout(maybePrint, 400); };
+                  setTimeout(maybePrint, 1800);
+                }
+              })();
             </script>
           </body>
         </html>
       `;
 
+    const forceSameWindow = typeof process !== 'undefined' && process.env && process.env.REACT_APP_FORCE_RECEIPT_SAME_WINDOW === 'true';
     const isSmallScreen = typeof window !== 'undefined' && window.innerWidth <= 600;
+    const useInPagePrint = forceSameWindow || isSmallScreen;
     const runInPagePrint = () => {
       const printContainer = document.createElement('div');
       printContainer.id = 'receipt-print-container';
       printContainer.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
       const inner = document.createElement('div');
-      inner.style.cssText = `width:${receiptWidthCss};max-width:100%;background:white;padding:${receiptPadding};font-family:'Courier New',monospace;font-size:${receiptFontSize};font-weight:600;color:#000;text-align:center;border-radius:8px`;
+      inner.style.cssText = `width:${receiptWidthCss};max-width:100%;min-height:80px;background:white;padding:${receiptPadding};font-family:'Courier New',monospace;font-size:${receiptFontSize};font-weight:600;color:#000;text-align:center;border-radius:8px`;
       const fallbackBody = isStructured
         ? (receiptTextOrData.brandTitle ? `<div class="receipt-brand" style="font-weight:bold;text-align:center;margin:${receiptBrandMargin};color:#000">${escape(receiptTextOrData.brandTitle)}</div>` : '') + `<pre class="receipt-header" style="margin:0;text-align:center;color:#000;font-weight:600">${escape(receiptTextOrData.headerText)}</pre><table class="receipt-items" style="width:100%;margin:4px 0;font-size:${receiptFontSize};border-collapse:collapse;color:#000;font-weight:600"><thead><tr><th style="text-align:center">Qty</th><th style="text-align:left">Item</th><th style="text-align:right">TSh</th></tr></thead><tbody>${receiptTextOrData.items.map((r) => `<tr><td style="text-align:center">${escape(r.qty)}</td><td class="r-desc" style="text-align:left;word-wrap:break-word;word-break:break-word;color:#000;font-weight:600">${escape(r.desc)}</td><td style="text-align:right;white-space:nowrap">${escape(r.amount)}</td></tr>`).join('')}</tbody></table><pre class="receipt-footer" style="margin:0;text-align:center;color:#000;font-weight:bold">${escape(receiptTextOrData.footerText)}</pre>`
         : `<pre style="white-space:pre-wrap;word-wrap:break-word;margin:0;color:#000;font-weight:600">${escape(receiptText)}</pre>`;
@@ -839,25 +854,40 @@ Phone: ${customer.phone}
       }
       printContainer.appendChild(inner);
       const printStyle = document.createElement('style');
-      printStyle.textContent = `#receipt-print-container .receipt-end p{font-weight:bold;color:#000}#receipt-print-container .receipt-footer{font-weight:bold;color:#000}#receipt-print-container .r-desc{color:#000;font-weight:600}@media print{@page{size:${receiptWidthCss} auto;margin:0}body *{visibility:hidden !important}#receipt-print-container,#receipt-print-container *{visibility:visible !important}#receipt-print-container{position:absolute !important;left:0 !important;top:0 !important;right:auto !important;bottom:auto !important;background:white !important;padding:${receiptPadding} !important;width:${receiptWidthCss} !important;max-width:${receiptWidthCss} !important;min-height:auto !important}#receipt-print-container>div{background:white !important}}`;
+      printStyle.textContent = `#receipt-print-container .receipt-end p{font-weight:bold;color:#000}#receipt-print-container .receipt-footer{font-weight:bold;color:#000}#receipt-print-container .r-desc{color:#000;font-weight:600}@media print{@page{size:${receiptWidthCss} auto;margin:0}body *{visibility:hidden !important}#receipt-print-container,#receipt-print-container *{visibility:visible !important}#receipt-print-container{position:absolute !important;left:0 !important;top:0 !important;right:auto !important;bottom:auto !important;background:white !important;padding:${receiptPadding} !important;width:${receiptWidthCss} !important;max-width:${receiptWidthCss} !important;min-height:1px !important}#receipt-print-container>div{background:white !important;min-height:1px !important}}`;
       document.head.appendChild(printStyle);
       document.body.appendChild(printContainer);
       const cleanup = () => {
         if (document.body.contains(printContainer)) document.body.removeChild(printContainer);
         if (document.head.contains(printStyle)) document.head.removeChild(printStyle);
       };
-      const doPrint = () => {
-        window.print();
-        setTimeout(cleanup, 1500);
+      const runPrint = () => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              window.print();
+              setTimeout(cleanup, 2000);
+            }, 400);
+          });
+        });
       };
-      if (isSmallScreen) {
+      if (useInPagePrint) {
         showToast('Printing from this screen. Use default (built-in) printer.', 'info');
       }
-      setTimeout(doPrint, 700);
+      const img = inner.querySelector('img');
+      if (img) {
+        let done = false;
+        const go = () => { if (!done) { done = true; runPrint(); } };
+        img.onload = go;
+        img.onerror = go;
+        setTimeout(go, 2200);
+      } else {
+        setTimeout(runPrint, 600);
+      }
     };
 
     try {
-      if (isSmallScreen) {
+      if (useInPagePrint) {
         runInPagePrint();
         return;
       }
