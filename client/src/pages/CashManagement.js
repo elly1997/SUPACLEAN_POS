@@ -94,31 +94,34 @@ const CashManagement = () => {
   };
 
   const handleTestReceiptPrint = () => {
-    const el = document.createElement('div');
-    el.id = 'test-receipt-print';
-    el.setAttribute('aria-hidden', 'true');
-    el.style.cssText = `position:fixed;left:0;top:0;width:${receiptWidthCss};max-width:100%;margin:auto;background:white;color:#000;padding:8px;font-family:'Courier New',monospace;font-size:10pt;text-align:center;z-index:99999;box-shadow:0 0 0 9999px rgba(0,0,0,0.8);`;
-    el.innerHTML = `
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Test receipt</title>
+      <style>
+        @page { size: ${receiptWidthCss} auto; margin: 0; }
+        body { font-family: 'Courier New', monospace; margin: 0; padding: 12px; width: ${receiptWidthCss}; max-width: 100%; color: #000; font-size: 10pt; text-align: center; }
+      </style></head><body>
       <p><strong>SUPACLEAN</strong></p>
       <p>Test receipt – PDA / thermal printer</p>
       <p>${new Date().toLocaleString()}</p>
       <p>If this prints, your POS printer is working.</p>
       <p>Select it as default in Windows for receipts.</p>
-    `;
-    const style = document.createElement('style');
-    style.textContent = `@media print{body *{visibility:hidden}#test-receipt-print,#test-receipt-print *{visibility:visible}#test-receipt-print{position:absolute!important;left:0!important;top:0!important;background:white!important;width:${receiptWidthCss}!important}}`;
-    document.head.appendChild(style);
-    document.body.appendChild(el);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        window.print();
-        setTimeout(() => {
-          if (el.parentNode) el.parentNode.removeChild(el);
-          if (style.parentNode) style.parentNode.removeChild(style);
-        }, 1000);
-      });
-    });
-    showToast('Print dialog opened. Choose your PDA printer (or set it as default).', 'info');
+      </body></html>`;
+    const w = window.open('', '_blank', 'width=320,height=400');
+    if (w) {
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+      setTimeout(() => {
+        try {
+          w.focus();
+          w.print();
+        } catch (e) {
+          console.warn('Test print:', e);
+        }
+      }, 500);
+      showToast('Print dialog opened. Choose your PDA printer (or set it as default).', 'info');
+    } else {
+      showToast('Popup blocked. Allow popups for this site to test print.', 'error');
+    }
   };
 
   const handleSaveSummary = async () => {

@@ -4,7 +4,7 @@ import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStoc
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
-import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
+import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import './Orders.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
@@ -391,11 +391,16 @@ Phone: ${receiptGroup.customer_phone}
       ? process.env.REACT_APP_PUBLIC_ORIGIN.replace(/\/$/, '')
       : (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
     const termsUrl = baseUrl ? `${baseUrl}/terms` : '';
-    const termsQrSrc = termsUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=${encodeURIComponent(termsUrl)}` : '';
+    const skipQr = typeof process !== 'undefined' && process.env && process.env.REACT_APP_RECEIPT_SKIP_QR === 'true';
+    const termsQrSrc = !skipQr && termsUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=${termsQrSize}x${termsQrSize}&data=${encodeURIComponent(termsUrl)}` : '';
     let termsQrDataUrl = '';
     if (termsQrSrc) {
+      const qrTimeoutMs = 3000;
       try {
-        const res = await fetch(termsQrSrc);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), qrTimeoutMs);
+        const res = await fetch(termsQrSrc, { signal: controller.signal });
+        clearTimeout(timeoutId);
         const blob = await res.blob();
         termsQrDataUrl = await new Promise((resolve, reject) => {
           const r = new FileReader();
@@ -404,11 +409,11 @@ Phone: ${receiptGroup.customer_phone}
           r.readAsDataURL(blob);
         });
       } catch (e) {
-        console.warn('Terms QR fetch failed', e);
+        if (e?.name !== 'AbortError') console.warn('Terms QR fetch failed', e);
       }
     }
     const termsQrBlock = termsQrDataUrl
-      ? `<div class="receipt-end"><img src="${termsQrDataUrl}" alt="Terms" width="80" height="80" /><p>Scan for Terms / Masharti</p></div>`
+      ? `<div class="receipt-end"><img src="${termsQrDataUrl}" alt="Terms" width="${termsQrSize}" height="${termsQrSize}" /><p>Scan for Terms / Masharti</p></div>`
       : '';
     const escape = (s) =>
       String(s == null ? '' : s)
@@ -472,13 +477,79 @@ Phone: ${receiptGroup.customer_phone}
               ${termsQrBlock}
             </div>
             <script>
-              window.onload = function() { setTimeout(function() { window.focus(); window.print(); }, 100); };
-              window.onafterprint = function() { setTimeout(function() { window.close(); }, 500); };
+              function doPrint() { try { window.focus(); window.print(); } catch (e) {} }
+              window.onafterprint = function() { setTimeout(function() { try { window.close(); } catch (e) {} }, 500); };
+              (function(){
+                var run = false;
+                function maybePrint() { if (!run) { run = true; setTimeout(doPrint, 350); } }
+                var sheet = document.querySelector('.receipt-sheet');
+                var img = sheet ? sheet.querySelector('img') : null;
+                if (img && !img.complete) {
+                  img.onload = maybePrint;
+                  img.onerror = maybePrint;
+                  setTimeout(maybePrint, 1200);
+                } else {
+                  if (document.readyState === 'complete') maybePrint();
+                  else window.onload = function() { setTimeout(maybePrint, 400); };
+                  setTimeout(maybePrint, 1000);
+                }
+              })();
             </script>
           </body>
         </html>
       `;
+
+    const forceSameWindow = typeof process !== 'undefined' && process.env && process.env.REACT_APP_FORCE_RECEIPT_SAME_WINDOW === 'true';
+    const isSmallScreen = typeof window !== 'undefined' && window.innerWidth <= 600;
+    const useInPagePrint = forceSameWindow || isSmallScreen;
+    const runInPagePrint = () => {
+      const printContainer = document.createElement('div');
+      printContainer.id = 'receipt-print-container-orders';
+      printContainer.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+      const inner = document.createElement('div');
+      inner.style.cssText = `width:${receiptWidthCss};max-width:100%;min-height:80px;background:white;padding:${receiptPadding};font-family:'Courier New',monospace;font-size:${receiptFontSize};font-weight:600;color:#000;text-align:center;border-radius:8px`;
+      inner.innerHTML = bodyContent + termsQrBlock;
+      if (compact) {
+        const pres = inner.querySelectorAll('pre');
+        pres.forEach((p) => { p.style.fontSize = receiptCompactFontSize; p.style.lineHeight = '1.05'; });
+      }
+      printContainer.appendChild(inner);
+      const printStyle = document.createElement('style');
+      printStyle.textContent = `#receipt-print-container-orders .receipt-end p{font-weight:bold;color:#000}#receipt-print-container-orders .receipt-footer{font-weight:bold;color:#000}#receipt-print-container-orders .r-desc{color:#000;font-weight:600}@media print{@page{size:${receiptWidthCss} auto;margin:0}body *{visibility:hidden !important}#receipt-print-container-orders,#receipt-print-container-orders *{visibility:visible !important}#receipt-print-container-orders{position:absolute !important;left:0 !important;top:0 !important;right:auto !important;bottom:auto !important;background:white !important;padding:${receiptPadding} !important;width:${receiptWidthCss} !important;max-width:${receiptWidthCss} !important;min-height:1px !important}#receipt-print-container-orders>div{background:white !important;min-height:1px !important}}`;
+      document.head.appendChild(printStyle);
+      document.body.appendChild(printContainer);
+      const cleanup = () => {
+        if (document.body.contains(printContainer)) document.body.removeChild(printContainer);
+        if (document.head.contains(printStyle)) document.head.removeChild(printStyle);
+      };
+      const runPrint = () => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              window.print();
+              setTimeout(cleanup, 2000);
+            }, 400);
+          });
+        });
+      };
+      const img = inner.querySelector('img');
+      if (img) {
+        let done = false;
+        const go = () => { if (!done) { done = true; runPrint(); } };
+        img.onload = go;
+        img.onerror = go;
+        setTimeout(go, 1000);
+      } else {
+        setTimeout(runPrint, 400);
+      }
+    };
+
     try {
+      if (useInPagePrint) {
+        runInPagePrint();
+        showToast('Printing from this screen. Use default (built-in) printer.', 'info');
+        return;
+      }
       const printWindow = window.open('', '_blank', 'width=400,height=600,scrollbars=yes');
       if (printWindow) {
         printWindow.document.open();
@@ -486,27 +557,13 @@ Phone: ${receiptGroup.customer_phone}
         printWindow.document.close();
         showToast('Receipt print dialog opened', 'success');
       } else {
-        const iframe = document.createElement('iframe');
-        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:none';
-        document.body.appendChild(iframe);
-        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-        iframeDoc.open();
-        iframeDoc.write(printHTML);
-        iframeDoc.close();
-        iframe.onload = function() {
-          setTimeout(function() {
-            iframe.contentWindow.focus();
-            iframe.contentWindow.print();
-            setTimeout(function() {
-              if (document.body.contains(iframe)) document.body.removeChild(iframe);
-            }, 2000);
-          }, 500);
-        };
-        showToast('Receipt print dialog opened', 'success');
+        showToast('Using same-window print (better for built-in printer).', 'info');
+        runInPagePrint();
       }
     } catch (error) {
       console.error('Error printing receipt:', error);
-      showToast('Error printing receipt: ' + error.message, 'error');
+      showToast('Print failed. Trying same-window print...', 'info');
+      runInPagePrint();
     }
   };
 
