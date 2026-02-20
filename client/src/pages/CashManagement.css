@@ -414,6 +414,96 @@
   color: var(--text-secondary);
 }
 
+.all-branches-notice {
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  background: var(--info-light, rgba(37, 99, 235, 0.1));
+  border: 1px solid var(--info-color, #2563eb);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.cash-range-section {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-md);
+  margin-top: 24px;
+  border: 0.5px solid var(--border-color);
+}
+
+.cash-range-section h2 {
+  font-size: 20px;
+  color: var(--text-primary);
+  margin: 0 0 4px 0;
+}
+
+.cash-range-section .subtitle {
+  margin-bottom: 16px;
+}
+
+.range-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.range-controls .form-group {
+  min-width: 140px;
+}
+
+.range-controls input[type="date"] {
+  padding: 10px 12px;
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.range-table-wrap {
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.range-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.range-table th,
+.range-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.range-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.range-table th.num,
+.range-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.range-table tbody tr:hover {
+  background: var(--bg-tertiary);
+}
+
+.range-empty {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin-top: 12px;
+}
+
 .loading,
 .error-message {
   text-align: center;

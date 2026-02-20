@@ -47,24 +47,61 @@ router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCa
 });
 
 // Get today's cash summary (with automatic calculations) (cashiers, managers, admins can view)
+// When admin and no branch selected: return consolidated totals across all branches
 router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const branchId = getEffectiveBranchId(req);
-  if (branchId == null) {
+  const today = new Date().toISOString().split('T')[0];
+  const isAdminAllBranches = req.user?.role === 'admin' && (branchId == null || branchId === '');
+
+  if (!isAdminAllBranches && branchId == null) {
     return res.status(400).json({ error: 'Select a branch to view cash management' });
   }
-  const today = new Date().toISOString().split('T')[0];
-  
-  // Get yesterday's closing balance for opening balance
+
+  if (isAdminAllBranches) {
+    try {
+      const branchRows = await db.all('SELECT id FROM branches ORDER BY id');
+      const branchIds = (branchRows || []).map((r) => r.id);
+      if (branchIds.length === 0) {
+        return res.json(emptyDailySummary(today, true));
+      }
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      const results = [];
+      for (const bid of branchIds) {
+        const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, bid]);
+        const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+        const cashSalesRow = await db.all(`
+          SELECT SUM(paid_amount) as cash_sales FROM orders
+          WHERE DATE(order_date) = ? AND payment_status = 'paid_full' AND payment_method = 'cash' AND paid_amount > 0 AND branch_id = ?
+        `, [today, bid]);
+        const cashSales = cashSalesRow[0]?.cash_sales || 0;
+        const { calculateBookSales } = require('../utils/cashValidation');
+        let bookSales = 0;
+        try {
+          bookSales = await calculateBookSales(today, bid);
+        } catch (err) {
+          bookSales = 0;
+        }
+        const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, bid);
+        results.push(result);
+      }
+      const consolidated = consolidateSummaries(results, today);
+      consolidated.all_branches = true;
+      return res.json(consolidated);
+    } catch (err) {
+      console.error('Error calculating consolidated today summary:', err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayStr = yesterday.toISOString().split('T')[0];
-  
+
   try {
     const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
-    
     const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
-    
-    // Calculate cash sales (orders paid in full with cash on order date)
     const cashSalesRow = await db.all(`
       SELECT SUM(paid_amount) as cash_sales
       FROM orders
@@ -74,10 +111,7 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       AND paid_amount > 0
       AND branch_id = ?
     `, [today, branchId]);
-    
     const cashSales = cashSalesRow[0]?.cash_sales || 0;
-    
-    // Book sales = cash received from receive-payment / collection today (daily sales report)
     const { calculateBookSales } = require('../utils/cashValidation');
     let bookSales = 0;
     try {
@@ -86,8 +120,6 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       console.error('Error calculating book sales:', err);
       bookSales = 0;
     }
-    
-    // Calculate remaining values
     const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, branchId);
     res.json(result);
   } catch (err) {
@@ -95,6 +127,50 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
     res.status(500).json({ error: err.message });
   }
 });
+
+function emptyDailySummary(date, allBranches = false) {
+  return {
+    date,
+    opening_balance: 0,
+    cash_sales: 0,
+    book_sales: 0,
+    card_sales: 0,
+    mobile_money_sales: 0,
+    bank_deposits: 0,
+    bank_payments: 0,
+    mpesa_received: 0,
+    mpesa_paid: 0,
+    expenses_from_cash: 0,
+    expenses_from_bank: 0,
+    expenses_from_mpesa: 0,
+    closing_balance: 0,
+    is_reconciled: false,
+    all_branches: allBranches
+  };
+}
+
+function consolidateSummaries(results, date) {
+  const sum = (key) => results.reduce((acc, r) => acc + (parseFloat(r[key]) || 0), 0);
+  const anyReconciled = results.some((r) => r.is_reconciled);
+  return {
+    date,
+    opening_balance: sum('opening_balance'),
+    cash_sales: sum('cash_sales'),
+    book_sales: sum('book_sales'),
+    card_sales: sum('card_sales'),
+    mobile_money_sales: sum('mobile_money_sales'),
+    bank_deposits: sum('bank_deposits'),
+    bank_payments: sum('bank_payments'),
+    mpesa_received: sum('mpesa_received'),
+    mpesa_paid: sum('mpesa_paid'),
+    expenses_from_cash: sum('expenses_from_cash'),
+    expenses_from_bank: sum('expenses_from_bank'),
+    expenses_from_mpesa: sum('expenses_from_mpesa'),
+    cash_in_hand: sum('cash_in_hand'),
+    closing_balance: sum('closing_balance'),
+    is_reconciled: anyReconciled
+  };
+}
 
 async function calculateRemaining(date, openingBalance, cashSales, bookSales, branchId) {
   const { calculateMobileMoneyReceived, calculateCardReceived } = require('../utils/cashValidation');
@@ -477,18 +553,53 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
   }
 });
 
-// Get cash summary range
+// Get cash summary range (single branch or consolidated for admin when no branch)
 router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { start_date, end_date } = req.query;
   const branchId = getEffectiveBranchId(req);
-  if (branchId == null) {
-    return res.status(400).json({ error: 'Select a branch to view cash range' });
-  }
+  const isAdminAllBranches = req.user?.role === 'admin' && (branchId == null || branchId === '');
+
   if (!start_date || !end_date) {
     return res.status(400).json({ error: 'start_date and end_date are required' });
   }
-  
+  if (!isAdminAllBranches && branchId == null) {
+    return res.status(400).json({ error: 'Select a branch to view cash range' });
+  }
+
   try {
+    if (isAdminAllBranches) {
+      const rows = await db.all(
+        `SELECT date,
+          SUM(COALESCE(opening_balance, 0)) as opening_balance,
+          SUM(COALESCE(cash_sales, 0)) as cash_sales,
+          SUM(COALESCE(book_sales, 0)) as book_sales,
+          SUM(COALESCE(card_sales, 0)) as card_sales,
+          SUM(COALESCE(mobile_money_sales, 0)) as mobile_money_sales,
+          SUM(COALESCE(bank_deposits, 0)) as bank_deposits,
+          SUM(COALESCE(expenses_from_cash, 0)) as expenses_from_cash,
+          SUM(COALESCE(closing_balance, 0)) as closing_balance,
+          MAX(CASE WHEN is_reconciled = 1 THEN 1 ELSE 0 END) as is_reconciled
+         FROM daily_cash_summaries
+         WHERE date >= ? AND date <= ?
+         GROUP BY date
+         ORDER BY date DESC`,
+        [start_date, end_date]
+      );
+      const normalized = (rows || []).map((r) => ({
+        date: r.date,
+        opening_balance: r.opening_balance,
+        cash_sales: r.cash_sales,
+        book_sales: r.book_sales,
+        card_sales: r.card_sales,
+        mobile_money_sales: r.mobile_money_sales,
+        bank_deposits: r.bank_deposits,
+        expenses_from_cash: r.expenses_from_cash,
+        closing_balance: r.closing_balance,
+        is_reconciled: !!r.is_reconciled,
+        all_branches: true
+      }));
+      return res.json(normalized);
+    }
     const rows = await db.all(
       'SELECT * FROM daily_cash_summaries WHERE date >= ? AND date <= ? AND branch_id = ? ORDER BY date DESC',
       [start_date, end_date, branchId]

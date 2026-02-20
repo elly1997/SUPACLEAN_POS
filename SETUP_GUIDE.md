@@ -295,6 +295,36 @@ The app adapts to screen size:
 - **If receipt preview is blank or print fails:** The app waits for the receipt content (and QR image) to load before opening the print dialog. Set the built-in printer as **default** so it is pre-selected. If the POS has no internet, the Terms QR may not load but the receipt text still prints.
 - **Larger screens (tablet/desktop):** A new window may open for the receipt; choose your thermal printer in the dialog. If the window is blocked, the app falls back to same-window print.
 
+### PDA POS connected via USB to your PC
+
+When the PDA is connected to your PC with a USB cable, receipt printing goes through **Windows**. The app only sends “print” to the browser; Windows (and the driver) send the job to the PDA.
+
+**1. Check that Windows sees the PDA**
+- Press **Win + X** → **Device Manager**. Look under **Print queues** or **Other devices** for your PDA or a “USB printing support” / “POS” device. If you see a yellow warning, the driver may be missing.
+- **Settings → Bluetooth & devices → Printers & scanners**. Your PDA thermal printer should appear in the list. If it doesn’t, install the driver from the manufacturer (CD, download, or Windows Update).
+
+**2. Install the PDA printer driver (if needed)**
+- Use the driver or utility that came with the PDA (or from the manufacturer’s website). Some PDAs use a generic “POS” or “Receipt” printer driver; others have a specific model name. After installing, the printer should show under **Printers & scanners**.
+
+**3. Set the PDA as the default printer**
+- **Settings → Bluetooth & devices → Printers & scanners** → click your PDA printer → **Open queue** (or **Manage**) → **Set as default**. Then when the app opens the print dialog, the PDA will be pre-selected.
+
+**4. Test from the app**
+- In the app, go to **Cash Management** and click **🖨️ Test receipt print**. The system print dialog will open. Confirm that your PDA printer appears in the list, select it if it’s not default, and click **Print**. If a short test receipt prints, the link from PC to PDA is working; real order/collection receipts will use the same path.
+
+**5. If the PDA does not appear**
+- Reconnect the USB cable and try another port (prefer a direct PC USB port, not a hub).
+- In Device Manager, uninstall the device (if it appears with a warning), then **Action → Scan for hardware changes** or reconnect the cable.
+- Ensure the PDA is powered on and not in “charge only” mode; some devices have a setting for “USB printing” or “PC link”.
+
+**6. If the PDA appears but nothing prints**
+- In **Printers & scanners**, open the PDA printer → **Print a test page**. If that fails, the issue is driver/Windows, not the app.
+- In the app, set **REACT_APP_FORCE_RECEIPT_SAME_WINDOW=true** in `.env` and rebuild so receipts always use the same window (and thus the default printer).
+
+**7. If print preview gets stuck on “Loading…”**
+- The receipt includes a small QR image (Terms link). On slow or offline PDAs, loading that can hang the preview. Set **REACT_APP_RECEIPT_SKIP_QR=true** in `.env` (and in Render **Environment** if deployed), then **rebuild the client**. Receipts will print text-only with no QR, and the preview should open quickly.
+- The app also times out the QR fetch after 3 seconds and opens the print dialog with text-only if the QR fails, so preview should no longer block indefinitely.
+
 ## Next Steps
 
 After setup:

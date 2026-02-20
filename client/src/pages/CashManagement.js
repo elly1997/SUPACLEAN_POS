@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit, getActiveBankAccounts } from '../api/api';
+import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit, getActiveBankAccounts, getCashSummaryRange } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { receiptWidthCss } from '../utils/receiptPrintConfig';
 import './CashManagement.css';
 
 const CashManagement = () => {
@@ -23,7 +24,12 @@ const CashManagement = () => {
   });
   const [activeBankAccounts, setActiveBankAccounts] = useState([]);
   const [manualWhatsAppReport, setManualWhatsAppReport] = useState(null);
+  const [reportStartDate, setReportStartDate] = useState('');
+  const [reportEndDate, setReportEndDate] = useState('');
+  const [rangeData, setRangeData] = useState([]);
+  const [rangeLoading, setRangeLoading] = useState(false);
   const today = new Date().toISOString().split('T')[0];
+  const isAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
 
   useEffect(() => {
     loadData();
@@ -35,13 +41,6 @@ const CashManagement = () => {
 
   const loadData = async () => {
     setErrorMessage(null);
-    if (isAdmin && (selectedBranchId == null || selectedBranchId === '')) {
-      setSummary(null);
-      setBankDeposits([]);
-      setLoading(false);
-      setErrorMessage('Please select a branch from the dropdown above to view cash management.');
-      return;
-    }
     setLoading(true);
     try {
       const [summaryRes, depositsRes] = await Promise.all([
@@ -57,7 +56,7 @@ const CashManagement = () => {
     } catch (error) {
       console.error('Error loading cash summary:', error);
       const errorMsg = error.response?.data?.error || error.message || 'Network Error';
-      if (errorMsg.includes('Select a branch')) {
+      if (errorMsg.includes('Select a branch') && !isAllBranches) {
         setErrorMessage('Please select a branch from the dropdown above to view cash management.');
       } else {
         setErrorMessage(errorMsg);
@@ -72,6 +71,54 @@ const CashManagement = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadRangeReport = async () => {
+    const start = reportStartDate || today;
+    const end = reportEndDate || today;
+    if (start > end) {
+      showToast('Start date must be before or equal to end date.', 'error');
+      return;
+    }
+    setRangeLoading(true);
+    setRangeData([]);
+    try {
+      const res = await getCashSummaryRange(start, end);
+      setRangeData(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      showToast('Error loading report: ' + (err.response?.data?.error || err.message), 'error');
+      setRangeData([]);
+    } finally {
+      setRangeLoading(false);
+    }
+  };
+
+  const handleTestReceiptPrint = () => {
+    const el = document.createElement('div');
+    el.id = 'test-receipt-print';
+    el.setAttribute('aria-hidden', 'true');
+    el.style.cssText = `position:fixed;left:0;top:0;width:${receiptWidthCss};max-width:100%;margin:auto;background:white;color:#000;padding:8px;font-family:'Courier New',monospace;font-size:10pt;text-align:center;z-index:99999;box-shadow:0 0 0 9999px rgba(0,0,0,0.8);`;
+    el.innerHTML = `
+      <p><strong>SUPACLEAN</strong></p>
+      <p>Test receipt – PDA / thermal printer</p>
+      <p>${new Date().toLocaleString()}</p>
+      <p>If this prints, your POS printer is working.</p>
+      <p>Select it as default in Windows for receipts.</p>
+    `;
+    const style = document.createElement('style');
+    style.textContent = `@media print{body *{visibility:hidden}#test-receipt-print,#test-receipt-print *{visibility:visible}#test-receipt-print{position:absolute!important;left:0!important;top:0!important;background:white!important;width:${receiptWidthCss}!important}}`;
+    document.head.appendChild(style);
+    document.body.appendChild(el);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.print();
+        setTimeout(() => {
+          if (el.parentNode) el.parentNode.removeChild(el);
+          if (style.parentNode) style.parentNode.removeChild(style);
+        }, 1000);
+      });
+    });
+    showToast('Print dialog opened. Choose your PDA printer (or set it as default).', 'info');
   };
 
   const handleSaveSummary = async () => {
@@ -152,11 +199,11 @@ const CashManagement = () => {
         <div className="error-message">
           {errorMessage || 'Unable to load cash summary'}
         </div>
-        {errorMessage && (isAdmin && (selectedBranchId == null || selectedBranchId === '') ? null : (
+        {errorMessage && (
           <button onClick={loadData} className="btn-secondary" type="button" style={{ marginTop: '1rem' }}>
             🔄 Try again
           </button>
-        ))}
+        )}
       </div>
     );
   }
@@ -185,13 +232,19 @@ const CashManagement = () => {
       <div className="page-header">
         <div>
           <h1>💵 Cash Management</h1>
-          <p className="subtitle">Daily cash summary - {new Date(today).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+          <p className="subtitle">
+            {summary.all_branches ? 'All branches (consolidated) · ' : ''}
+            Daily cash summary - {new Date(today).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+          </p>
         </div>
         <div className="header-actions">
+          <button onClick={handleTestReceiptPrint} className="btn-secondary" type="button" title="Open print dialog to test PDA/thermal printer">
+            🖨️ Test receipt print
+          </button>
           <button onClick={loadData} className="btn-secondary" type="button">
             🔄 Refresh
           </button>
-          {!summary.is_reconciled && (
+          {!summary.all_branches && !summary.is_reconciled && (
             <button onClick={handleReconcile} className="btn-success" type="button">
               ✅ Reconcile & send to director
             </button>
@@ -312,17 +365,25 @@ const CashManagement = () => {
         </div>
       </div>
 
+      {summary.all_branches && (
+        <div className="all-branches-notice" role="status">
+          Viewing consolidated totals for all branches. Select a branch above to reconcile or add deposits.
+        </div>
+      )}
+
       {/* Bank Deposits Section */}
       <div className="deposits-section">
         <div className="section-header">
           <h2>🏦 Bank Deposits</h2>
-          <button 
-            onClick={() => setShowDepositForm(!showDepositForm)} 
-            className="btn-primary btn-small"
-            type="button"
-          >
-            {showDepositForm ? 'Cancel' : '+ Add Deposit'}
-          </button>
+          {!summary.all_branches && (
+            <button 
+              onClick={() => setShowDepositForm(!showDepositForm)} 
+              className="btn-primary btn-small"
+              type="button"
+            >
+              {showDepositForm ? 'Cancel' : '+ Add Deposit'}
+            </button>
+          )}
         </div>
 
         {showDepositForm && (
@@ -410,8 +471,8 @@ const CashManagement = () => {
         )}
       </div>
 
-      {/* Action Buttons */}
-      {!summary.is_reconciled && (
+      {/* Action Buttons - only for single branch */}
+      {!summary.all_branches && !summary.is_reconciled && (
         <div className="action-buttons">
           <button onClick={handleSaveSummary} className="btn-primary btn-large" disabled={saving}>
             {saving ? 'Saving...' : '💾 Save Summary'}
@@ -419,12 +480,80 @@ const CashManagement = () => {
         </div>
       )}
 
-      {summary.is_reconciled && (
+      {summary.is_reconciled && (summary.all_branches ? (
+        <div className="reconciled-badge">
+          <span>✅ One or more branches reconciled for this day</span>
+        </div>
+      ) : (
         <div className="reconciled-badge">
           <span>✅ This day has been reconciled</span>
           <small>Reconciled by: {summary.reconciled_by || 'Cashier'}</small>
         </div>
-      )}
+      ))}
+
+      {/* Cashflow report by date range */}
+      <div className="cash-range-section">
+        <h2>📅 Cashflow report by date</h2>
+        <p className="subtitle">View consolidated {summary.all_branches ? 'all-branches ' : ''}totals for a date range</p>
+        <div className="range-controls">
+          <div className="form-group">
+            <label>Start date</label>
+            <input
+              type="date"
+              value={reportStartDate}
+              onChange={(e) => setReportStartDate(e.target.value)}
+              max={today}
+            />
+          </div>
+          <div className="form-group">
+            <label>End date</label>
+            <input
+              type="date"
+              value={reportEndDate}
+              onChange={(e) => setReportEndDate(e.target.value)}
+              max={today}
+            />
+          </div>
+          <button type="button" className="btn-primary" onClick={loadRangeReport} disabled={rangeLoading}>
+            {rangeLoading ? 'Loading...' : 'View report'}
+          </button>
+        </div>
+        {rangeData.length > 0 && (
+          <div className="range-table-wrap">
+            <table className="range-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th className="num">Opening</th>
+                  <th className="num">Cash sales</th>
+                  <th className="num">Book sales</th>
+                  <th className="num">Card & M-Pesa</th>
+                  <th className="num">Expenses (cash)</th>
+                  <th className="num">Bank deposits</th>
+                  <th className="num">Closing</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rangeData.map((row) => (
+                  <tr key={row.date}>
+                    <td>{new Date(row.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                    <td className="num">{(parseFloat(row.opening_balance) || 0).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.cash_sales) || 0).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.book_sales) || 0).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.card_sales || 0) + parseFloat(row.mobile_money_sales || 0)).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.expenses_from_cash) || 0).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.bank_deposits) || 0).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.closing_balance) || 0).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {rangeData.length === 0 && !rangeLoading && reportStartDate && reportEndDate && (
+          <p className="range-empty">No summary data for this range. Ensure dates have been reconciled or saved per branch.</p>
+        )}
+      </div>
     </div>
   );
 };

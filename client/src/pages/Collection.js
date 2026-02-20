@@ -638,11 +638,16 @@ Phone: ${mainOrder.customer_phone}
       ? process.env.REACT_APP_PUBLIC_ORIGIN.replace(/\/$/, '')
       : (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
     const termsUrl = baseUrl ? `${baseUrl}/terms` : '';
-    const termsQrSrc = termsUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=${termsQrSize}x${termsQrSize}&data=${encodeURIComponent(termsUrl)}` : '';
+    const skipQr = typeof process !== 'undefined' && process.env && process.env.REACT_APP_RECEIPT_SKIP_QR === 'true';
+    const termsQrSrc = !skipQr && termsUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=${termsQrSize}x${termsQrSize}&data=${encodeURIComponent(termsUrl)}` : '';
     let termsQrDataUrl = '';
     if (termsQrSrc) {
+      const qrTimeoutMs = 3000;
       try {
-        const res = await fetch(termsQrSrc);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), qrTimeoutMs);
+        const res = await fetch(termsQrSrc, { signal: controller.signal });
+        clearTimeout(timeoutId);
         const blob = await res.blob();
         termsQrDataUrl = await new Promise((resolve, reject) => {
           const r = new FileReader();
@@ -651,7 +656,7 @@ Phone: ${mainOrder.customer_phone}
           r.readAsDataURL(blob);
         });
       } catch (e) {
-        console.warn('Terms QR fetch failed', e);
+        if (e?.name !== 'AbortError') console.warn('Terms QR fetch failed', e);
       }
     }
     const termsQrBlock = termsQrDataUrl
@@ -734,11 +739,11 @@ Phone: ${mainOrder.customer_phone}
                 if (img && !img.complete) {
                   img.onload = maybePrint;
                   img.onerror = maybePrint;
-                  setTimeout(maybePrint, 2000);
+                  setTimeout(maybePrint, 1200);
                 } else {
                   if (document.readyState === 'complete') maybePrint();
                   else window.onload = function() { setTimeout(maybePrint, 400); };
-                  setTimeout(maybePrint, 1800);
+                  setTimeout(maybePrint, 1000);
                 }
               })();
             </script>
@@ -788,9 +793,9 @@ Phone: ${mainOrder.customer_phone}
         const go = () => { if (!done) { done = true; runPrint(); } };
         img.onload = go;
         img.onerror = go;
-        setTimeout(go, 2200);
+        setTimeout(go, 1000);
       } else {
-        setTimeout(runPrint, 600);
+        setTimeout(runPrint, 400);
       }
     };
 
