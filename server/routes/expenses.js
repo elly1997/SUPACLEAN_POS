@@ -48,14 +48,17 @@ router.get('/', requireBranchAccess(), requirePermission('canManageExpenses'), a
   }
 });
 
-// Get expense by ID (managers and admins can view)
+// Get expense by ID (managers and admins can view); branch users only their branch
 router.get('/:id', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
   const { id } = req.params;
+  const branchFilter = getBranchFilter(req, 'e');
+  const params = [id];
+  const whereClause = branchFilter.clause ? ` AND ${branchFilter.clause.replace(/^AND\s+/, '').replace(/e\./g, 'e.')}` : '';
   
   try {
     const row = await db.get(
-      'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = $1',
-      [id]
+      `SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = ? ${whereClause}`,
+      branchFilter.params.length ? [...params, ...branchFilter.params] : params
     );
     if (!row) {
       return res.status(404).json({ error: 'Expense not found' });
@@ -85,9 +88,13 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
     return res.status(400).json({ error: 'Date, category, amount, and payment_source are required' });
   }
   
-  const branchId = getEffectiveBranchId(req) || req.user?.branchId || null;
-  if (!branchId && req.user?.role !== 'admin') {
-    return res.status(400).json({ error: 'Branch assignment required for expense creation' });
+  const branchId = getEffectiveBranchId(req) ?? req.user?.branchId ?? req.branch?.id ?? null;
+  if (!branchId) {
+    return res.status(400).json({
+      error: req.user?.role === 'admin'
+        ? 'Select a branch in the header to record expenses, or ensure branch is set.'
+        : 'Your account is not assigned to a branch. Contact the administrator to assign your account to a branch before recording expenses.'
+    });
   }
   
   if (category === 'Bank Deposit') {

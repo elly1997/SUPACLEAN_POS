@@ -198,6 +198,16 @@ If port 5000 or 3000 is in use:
 - Try: `npm cache clean --force`
 - Then: `npm install` in both root and `client/` folders
 
+### Branch users see only Dashboard (other tabs not loading)
+- Ensure each branch user has a **branch assigned** in **Admin → Branches → Users** (edit user → select Branch).
+- Ensure the branch has **features enabled** in **Admin → Branches → Manage privileges** (e.g. New Order, Orders, Collection, Expenses, Cash Management, etc.).
+- If a user logs in and only Dashboard appears, their branch may not have those features turned on. Enable the required features for their branch and have them log in again.
+
+### Expenses: "Branch assignment required" or "expenses and branch id not in place"
+- **Branch users:** Each branch user must be **assigned to a branch** in **Admin → Branches → Users**. If the user has no branch, they cannot record expenses. Edit the user and select their branch.
+- **Admin:** When recording expenses as admin, **select a branch** in the branch dropdown (top of the app) before adding an expense. Expenses are always recorded under a specific branch.
+- **Branch isolation:** Expenses recorded in a branch stay in that branch. Branch users only see their branch's expenses. Admin sees consolidated expenses for all branches (or can select one branch to filter).
+
 ## Support
 
 For issues or questions:

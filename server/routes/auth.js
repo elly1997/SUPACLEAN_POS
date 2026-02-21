@@ -163,7 +163,7 @@ router.get('/verify', async (req, res) => {
         role: session.role,
         branchId: session.branch_id,
         branch: session.branch_id ? {
-          id: session.branch_table_id,
+          id: session.branch_table_id ?? session.branch_id,
           name: session.name,
           code: session.code,
           branchType: session.branch_type

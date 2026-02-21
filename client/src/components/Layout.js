@@ -14,6 +14,7 @@ const Layout = ({ children }) => {
   const [isMobile, setIsMobile] = useState(false);
   const { theme, toggleTheme } = useTheme();
   const { user, branch, logout, verifySession, isAdmin, hasPermission, selectedBranchId, setSelectedBranch } = useAuth();
+  const branchId = branch?.id ?? user?.branchId;
   const [availableFeatures, setAvailableFeatures] = useState([]);
   const [branches, setBranches] = useState([]);
 
@@ -26,14 +27,14 @@ const Layout = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    if (branch?.id) {
-      fetchBranchFeatures(branch.id);
+    if (branchId) {
+      fetchBranchFeatures(branchId);
     } else if (isAdmin) {
       setAvailableFeatures(['all']); // Admin sees all; no branch feature filter
     } else {
       setAvailableFeatures([]); // Non-admin without branch: no features until loaded
     }
-  }, [branch, isAdmin]);
+  }, [branchId, isAdmin]);
 
   useEffect(() => {
     if (!isAdmin) return;
