@@ -304,7 +304,7 @@ const NewOrder = () => {
         setCustomers([]);
         setShowCustomerDropdown(false);
       }
-    }, 300);
+    }, 400);
     return () => clearTimeout(timer);
   }, [searchTerm, loadCustomers]);
 
@@ -842,7 +842,7 @@ Phone: ${customer.phone}
 
     const forceSameWindow = typeof process !== 'undefined' && process.env && process.env.REACT_APP_FORCE_RECEIPT_SAME_WINDOW === 'true';
     const isSmallScreen = typeof window !== 'undefined' && window.innerWidth <= 600;
-    const useInPagePrint = forceSameWindow || isSmallScreen;
+    const sameWindowPrint = forceSameWindow || isSmallScreen;
     const runInPagePrint = () => {
       const printContainer = document.createElement('div');
       printContainer.id = 'receipt-print-container';
@@ -876,7 +876,7 @@ Phone: ${customer.phone}
           });
         });
       };
-      if (useInPagePrint) {
+      if (sameWindowPrint) {
         showToast('Printing from this screen. Use default (built-in) printer.', 'info');
       }
       const img = inner.querySelector('img');
@@ -892,7 +892,7 @@ Phone: ${customer.phone}
     };
 
     try {
-      if (useInPagePrint) {
+      if (sameWindowPrint) {
         runInPagePrint();
         return;
       }
@@ -974,7 +974,7 @@ Phone: ${customer.phone}
     } else {
       // Add new item to cart
       // For items, we need to find a default service or use the first available service
-      const defaultService = services.find(s => s.name.toLowerCase().includes('regular')) || services[0];
+      const defaultService = services.find(s => (s.name || '').toLowerCase().includes('regular')) || services[0];
       
       let expressMultiplier = 0;
       if (defaultDeliveryType === 'same_day') {
@@ -1109,7 +1109,7 @@ Phone: ${customer.phone}
                             }}
                           >
                             <div className="customer-avatar-mini">
-                              {customer.name.charAt(0).toUpperCase()}
+                              {(customer.name || '?').charAt(0).toUpperCase()}
                             </div>
                             <div className="customer-dropdown-details">
                               <strong>{customer.name}</strong>
@@ -1134,7 +1134,7 @@ Phone: ${customer.phone}
                   <div className="selected-customer-compact">
                     <div className="customer-info-compact">
                       <div className="avatar-medium">
-                        {selectedCustomer.name.charAt(0).toUpperCase()}
+                        {(selectedCustomer.name || '?').charAt(0).toUpperCase()}
                       </div>
                       <div className="customer-info-text">
                         <strong>{selectedCustomer.name}</strong>

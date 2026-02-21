@@ -97,7 +97,7 @@ const Collection = () => {
         setAutocompleteSuggestions([]);
         setShowAutocomplete(false);
       }
-    }, 300); // 300ms debounce
+    }, 400); // 400ms debounce
 
     return () => clearTimeout(timer);
   }, [phoneNumber, searchByPhone]);
@@ -753,7 +753,7 @@ Phone: ${mainOrder.customer_phone}
 
     const forceSameWindow = typeof process !== 'undefined' && process.env && process.env.REACT_APP_FORCE_RECEIPT_SAME_WINDOW === 'true';
     const isSmallScreen = typeof window !== 'undefined' && window.innerWidth <= 600;
-    const useInPagePrint = forceSameWindow || isSmallScreen;
+    const sameWindowPrint = forceSameWindow || isSmallScreen;
     const runInPagePrint = () => {
       const printContainer = document.createElement('div');
       printContainer.id = 'receipt-print-container-collection';
@@ -784,7 +784,7 @@ Phone: ${mainOrder.customer_phone}
           });
         });
       };
-      if (useInPagePrint) {
+      if (sameWindowPrint) {
         showToast('Printing from this screen. Use default (built-in) printer.', 'info');
       }
       const img = inner.querySelector('img');
@@ -800,7 +800,7 @@ Phone: ${mainOrder.customer_phone}
     };
 
     try {
-      if (useInPagePrint) {
+      if (sameWindowPrint) {
         runInPagePrint();
         return;
       }
@@ -853,7 +853,7 @@ ${order.weight_kg ? `Weight: ${order.weight_kg} kg` : ''}
 ───────────────────────────────────
 Total Amount: TSh ${roundMoney(order.total_amount || 0).toLocaleString()}
 Paid: TSh ${roundMoney(order.paid_amount || 0).toLocaleString()}
-Status: ${order.status.toUpperCase()}
+Status: ${(order.status || '').toUpperCase()}
 ───────────────────────────────────
 
 ${order.special_instructions ? `Notes: ${order.special_instructions}\n` : ''}
@@ -963,7 +963,7 @@ Thank you for choosing SUPACLEAN!
                         <td className="text-muted">{queueOrder.customer_phone}</td>
                         <td>{itemCount > 1 ? `${itemCount} items` : '1'}</td>
                         <td className="queue-service-cell">{queueOrder.service_name}</td>
-                        <td>TSh {queueOrder.total_amount.toLocaleString()}</td>
+                        <td>TSh {(queueOrder.total_amount ?? 0).toLocaleString()}</td>
                         <td className={balance > 0 ? 'queue-balance-cell' : ''}>
                           {balance > 0 ? `TSh ${balance.toLocaleString()}` : '—'}
                         </td>

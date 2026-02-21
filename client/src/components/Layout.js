@@ -60,10 +60,12 @@ const Layout = ({ children }) => {
       const enabledFeatures = (response.data || [])
         .filter(f => f.is_enabled === true || f.is_enabled === 1)
         .map(f => f.feature_key);
-      setAvailableFeatures(enabledFeatures);
+      // Fallback: if branch has no features configured (e.g. legacy branches), grant all so branch users see tabs
+      setAvailableFeatures(enabledFeatures.length > 0 ? enabledFeatures : ['all']);
     } catch (error) {
       console.error('Error fetching branch features:', error);
-      setAvailableFeatures([]); // On error, don't grant all; user may need to refresh
+      // On error for branch users: grant all so they can still use the app
+      setAvailableFeatures(branchId ? ['all'] : []);
     }
   };
 

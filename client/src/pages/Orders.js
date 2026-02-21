@@ -51,26 +51,29 @@ const Orders = () => {
     paymentStatus: '',
     overdueOnly: false
   });
+  const [debouncedSearchFilters, setDebouncedSearchFilters] = useState(searchFilters);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [exportingUncollected, setExportingUncollected] = useState(false);
   const [showExportPopup, setShowExportPopup] = useState(false);
 
-  const loadOrders = useCallback(async (append = false, offsetOverride = undefined) => {
+  const loadOrders = useCallback(async (append = false, offsetOverride = undefined, filtersOverride = null, filterOverride = null) => {
+    const f = filtersOverride ?? debouncedSearchFilters;
+    const statusFilter = filterOverride ?? filter;
     const offset = append ? (offsetOverride ?? 0) : 0;
     if (append) setLoadingMore(true);
     else setLoading(true);
     try {
       const params = { limit: ORDERS_PAGE_SIZE, offset };
       if (selectedBranchId) params.branch_id = selectedBranchId;
-      if (filter !== 'all') params.status = filter;
-      if (searchFilters.customer) params.customer = searchFilters.customer;
-      if (searchFilters.dateFrom) params.date_from = searchFilters.dateFrom;
-      if (searchFilters.dateTo) params.date_to = searchFilters.dateTo;
-      if (searchFilters.minAmount) params.min_amount = searchFilters.minAmount;
-      if (searchFilters.maxAmount) params.max_amount = searchFilters.maxAmount;
-      if (searchFilters.paymentStatus) params.payment_status = searchFilters.paymentStatus;
-      if (searchFilters.overdueOnly) params.overdue_only = 'true';
+      if (statusFilter !== 'all') params.status = statusFilter;
+      if (f.customer) params.customer = f.customer;
+      if (f.dateFrom) params.date_from = f.dateFrom;
+      if (f.dateTo) params.date_to = f.dateTo;
+      if (f.minAmount) params.min_amount = f.minAmount;
+      if (f.maxAmount) params.max_amount = f.maxAmount;
+      if (f.paymentStatus) params.payment_status = f.paymentStatus;
+      if (f.overdueOnly) params.overdue_only = 'true';
 
       const res = await getOrders(params);
       const data = res.data || [];
@@ -90,7 +93,12 @@ const Orders = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [filter, searchFilters, selectedBranchId, showToast]);
+  }, [filter, debouncedSearchFilters, selectedBranchId, showToast]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchFilters(searchFilters), 400);
+    return () => clearTimeout(timer);
+  }, [searchFilters]);
 
   useEffect(() => {
     loadOrders(false);
@@ -101,11 +109,12 @@ const Orders = () => {
   };
 
   const handleApplyFilters = () => {
-    loadOrders(false);
+    setDebouncedSearchFilters(searchFilters);
+    loadOrders(false, undefined, searchFilters);
   };
 
   const handleClearFilters = () => {
-    setSearchFilters({
+    const cleared = {
       customer: '',
       dateFrom: '',
       dateTo: '',
@@ -113,9 +122,11 @@ const Orders = () => {
       maxAmount: '',
       paymentStatus: '',
       overdueOnly: false
-    });
+    };
+    setSearchFilters(cleared);
+    setDebouncedSearchFilters(cleared);
     setFilter('all');
-    setTimeout(() => loadOrders(false), 100);
+    loadOrders(false, undefined, cleared, 'all');
   };
 
   const handleStatusUpdate = async (orderId, newStatus) => {
@@ -500,14 +511,33 @@ Phone: ${receiptGroup.customer_phone}
       `;
 
     try {
-      const printWindow = window.open('', '_blank', 'width=400,height=600,scrollbars=yes');
-      if (printWindow) {
+      const isPDA = typeof window !== 'undefined' && window.innerWidth <= 768;
+      const printWindow = !isPDA ? window.open('', '_blank', 'width=400,height=600,scrollbars=yes') : null;
+      if (printWindow && !printWindow.closed) {
         printWindow.document.open();
         printWindow.document.write(printHTML);
         printWindow.document.close();
-        showToast('Receipt opened in new window. Select your printer and print.', 'success');
+        showToast('Receipt opened. Select your thermal printer.', 'success');
       } else {
-        showToast('Allow popups for this site to print receipts, then try again.', 'error');
+        // PDA / popup blocked: use iframe so we print only receipt content, never the main page
+        const iframe = document.createElement('iframe');
+        iframe.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;border:none;visibility:hidden';
+        document.body.appendChild(iframe);
+        const doc = iframe.contentWindow.document;
+        doc.open();
+        doc.write(printHTML);
+        doc.close();
+        const cleanup = () => {
+          try { if (iframe.parentNode) iframe.parentNode.removeChild(iframe); } catch (e) {}
+        };
+        iframe.contentWindow.onload = () => {
+          setTimeout(() => {
+            try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) {}
+            setTimeout(cleanup, 1500);
+          }, 400);
+        };
+        setTimeout(cleanup, 3000);
+        showToast('Print dialog opened. Choose your thermal printer.', 'info');
       }
     } catch (error) {
       console.error('Error printing receipt:', error);
@@ -601,13 +631,13 @@ Phone: ${receiptGroup.customer_phone}
       if (selectedBranchId) params.branch_id = selectedBranchId;
       if (filter !== 'all') params.status = filter;
       Object.assign(params, {
-        date_from: searchFilters.dateFrom || undefined,
-        date_to: searchFilters.dateTo || undefined,
-        min_amount: searchFilters.minAmount || undefined,
-        max_amount: searchFilters.maxAmount || undefined,
-        payment_status: searchFilters.paymentStatus || undefined,
-        overdue_only: searchFilters.overdueOnly ? 'true' : undefined,
-        customer: searchFilters.customer || undefined,
+        date_from: debouncedSearchFilters.dateFrom || undefined,
+        date_to: debouncedSearchFilters.dateTo || undefined,
+        min_amount: debouncedSearchFilters.minAmount || undefined,
+        max_amount: debouncedSearchFilters.maxAmount || undefined,
+        payment_status: debouncedSearchFilters.paymentStatus || undefined,
+        overdue_only: debouncedSearchFilters.overdueOnly ? 'true' : undefined,
+        customer: debouncedSearchFilters.customer || undefined,
       });
       const res = await getOrders(params);
       const data = res.data || [];

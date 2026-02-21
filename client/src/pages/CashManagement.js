@@ -103,24 +103,33 @@ const CashManagement = () => {
       <p>Test receipt – PDA / thermal printer</p>
       <p>${new Date().toLocaleString()}</p>
       <p>If this prints, your POS printer is working.</p>
-      <p>Select it as default in Windows for receipts.</p>
       </body></html>`;
-    const w = window.open('', '_blank', 'width=320,height=400');
-    if (w) {
+    const isPDA = typeof window !== 'undefined' && window.innerWidth <= 768;
+    const w = !isPDA ? window.open('', '_blank', 'width=320,height=400') : null;
+    if (w && !w.closed) {
       w.document.open();
       w.document.write(html);
       w.document.close();
       setTimeout(() => {
-        try {
-          w.focus();
-          w.print();
-        } catch (e) {
-          console.warn('Test print:', e);
-        }
+        try { w.focus(); w.print(); } catch (e) { console.warn('Test print:', e); }
       }, 500);
-      showToast('Print dialog opened. Choose your PDA printer (or set it as default).', 'info');
+      showToast('Print dialog opened. Choose your PDA printer.', 'info');
     } else {
-      showToast('Popup blocked. Allow popups for this site to test print.', 'error');
+      // PDA / popup blocked: use iframe so only test receipt prints, never the main page
+      const iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;border:none;visibility:hidden';
+      document.body.appendChild(iframe);
+      const doc = iframe.contentWindow.document;
+      doc.open();
+      doc.write(html);
+      doc.close();
+      iframe.contentWindow.onload = () => {
+        setTimeout(() => {
+          try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) {}
+          setTimeout(() => { try { iframe.parentNode.removeChild(iframe); } catch (e) {} }, 1500);
+        }, 400);
+      };
+      showToast('Print dialog opened. Choose your PDA printer.', 'info');
     }
   };
 

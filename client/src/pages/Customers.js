@@ -18,9 +18,10 @@ const CUSTOMERS_EXPORT_COLUMNS = [
 
 const Customers = () => {
   const { showToast, ToastContainer } = useToast();
-  const { branch, hasPermission } = useAuth();
+  const { branch, hasPermission, selectedBranchId } = useAuth();
   const [customers, setCustomers] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
@@ -50,7 +51,7 @@ const Customers = () => {
     try {
       if (append) setLoadingMore(true);
       else setLoading(true);
-      const res = await getCustomers(searchTerm, { limit: CUSTOMERS_PAGE_SIZE, offset, light: true });
+      const res = await getCustomers(debouncedSearchTerm, { limit: CUSTOMERS_PAGE_SIZE, offset, light: true });
       const data = res.data || [];
       if (append) setCustomers(prev => [...prev, ...data]);
       else setCustomers(data);
@@ -69,17 +70,21 @@ const Customers = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [searchTerm, showToast]);
+  }, [debouncedSearchTerm, showToast]);
 
   useEffect(() => {
-    if (searchTerm === '' && typeof navigator !== 'undefined' && navigator.onLine) {
+    const timer = setTimeout(() => setDebouncedSearchTerm(searchTerm), 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    if (debouncedSearchTerm === '' && typeof navigator !== 'undefined' && navigator.onLine) {
       checkServerConnection().then(result => {
         if (!result.connected) showToast('Server connection issue: ' + result.details, 'error');
       });
     }
-    const timer = setTimeout(() => loadCustomers(false), searchTerm === '' ? 0 : 200);
-    return () => clearTimeout(timer);
-  }, [searchTerm, loadCustomers, showToast]);
+    loadCustomers(false);
+  }, [debouncedSearchTerm, loadCustomers, showToast, selectedBranchId]);
 
   const handleCreateCustomer = async (e) => {
     e.preventDefault();
@@ -198,7 +203,7 @@ const Customers = () => {
   const handleExportCustomers = async (format) => {
     setExporting(true);
     try {
-      const res = await getCustomers(searchTerm, { limit: 500, offset: 0, light: false });
+      const res = await getCustomers(debouncedSearchTerm, { limit: 500, offset: 0, light: false });
       const data = res.data || [];
       if (data.length === 0) {
         showToast('No customers to export', 'info');
@@ -471,7 +476,7 @@ const Customers = () => {
                       <td>
                         <div className="customer-cell">
                           <div className="customer-avatar-table">
-                            {customer.name.charAt(0).toUpperCase()}
+                            {(customer.name || '?').charAt(0).toUpperCase()}
                           </div>
                           <strong>{customer.name}</strong>
                         </div>

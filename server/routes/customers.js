@@ -53,8 +53,8 @@ router.get('/', async (req, res) => {
     const whereConditions = [];
     const params = [];
     if (effectiveBranchId != null) {
-      whereConditions.push('c.id IN (SELECT DISTINCT customer_id FROM orders WHERE branch_id = ?)');
-      params.push(effectiveBranchId);
+      whereConditions.push('(c.primary_branch_id = ? OR (c.primary_branch_id IS NULL AND c.id IN (SELECT DISTINCT customer_id FROM orders WHERE branch_id = ?)))');
+      params.push(effectiveBranchId, effectiveBranchId);
     }
     if (search) {
       whereConditions.push('(c.name ILIKE ? OR c.phone ILIKE ?)');
@@ -112,8 +112,8 @@ router.get('/', async (req, res) => {
 
   const whereConditions = [];
   if (effectiveBranchId != null) {
-    whereConditions.push('c.id IN (SELECT DISTINCT customer_id FROM orders WHERE branch_id = ?)');
-    params.push(effectiveBranchId);
+    whereConditions.push('(c.primary_branch_id = ? OR (c.primary_branch_id IS NULL AND c.id IN (SELECT DISTINCT customer_id FROM orders WHERE branch_id = ?)))');
+    params.push(effectiveBranchId, effectiveBranchId);
   }
   if (search) {
     whereConditions.push('(c.name ILIKE ? OR c.phone ILIKE ?)');
@@ -189,17 +189,24 @@ router.post('/quick-add', requirePermission('canCreateOrders'), async (req, res)
   }
 });
 
-// Create new customer (managers and admins only). Find-or-create: if phone exists, return that customer so all branches can use it.
+// Create new customer (managers and admins only). Assigns primary_branch_id so customer only appears in that branch.
 router.post('/', requireBranchAccess(), requirePermission('canManageCustomers'), async (req, res) => {
   const { name, phone, email, address } = req.body;
+  const branchId = getEffectiveBranchId(req) ?? req.user?.branchId ?? req.branch?.id ?? null;
 
   if (!name || !phone) {
     return res.status(400).json({ error: 'Name and phone are required' });
+  }
+  if (!branchId && req.user?.role !== 'admin') {
+    return res.status(400).json({ error: 'Your account is not assigned to a branch. Contact the administrator before adding customers.' });
   }
 
   try {
     const existing = await findCustomerByPhone(phone);
     if (existing) {
+      if (branchId && existing.primary_branch_id != null && existing.primary_branch_id !== branchId) {
+        return res.status(400).json({ error: 'This phone number is already registered to a customer in another branch.' });
+      }
       return res.status(200).json({
         id: existing.id,
         name: existing.name,
@@ -211,8 +218,12 @@ router.post('/', requireBranchAccess(), requirePermission('canManageCustomers'),
       });
     }
     const result = await db.run(
-      'INSERT INTO customers (name, phone, email, address) VALUES (?, ?, ?, ?) RETURNING id',
-      [name.trim(), phone.trim(), email ? email.trim() || null : null, address ? address.trim() || null : null]
+      branchId
+        ? 'INSERT INTO customers (name, phone, email, address, primary_branch_id) VALUES (?, ?, ?, ?, ?) RETURNING id'
+        : 'INSERT INTO customers (name, phone, email, address) VALUES (?, ?, ?, ?) RETURNING id',
+      branchId
+        ? [name.trim(), phone.trim(), email ? email.trim() || null : null, address ? address.trim() || null : null, branchId]
+        : [name.trim(), phone.trim(), email ? email.trim() || null : null, address ? address.trim() || null : null]
     );
     const id = result?.row?.id ?? result?.lastID;
     res.status(201).json({ id, name: name.trim(), phone: phone.trim(), email: email || null, address: address || null });
