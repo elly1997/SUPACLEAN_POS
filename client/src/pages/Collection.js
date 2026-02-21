@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getOrderByReceipt, collectOrder, receivePayment, getCustomers, searchOrdersByCustomer, getCollectionQueue, getOrders, getReceiptQRCode } from '../api/api';
+import { getOrderByReceipt, collectOrder, receivePayment, getCustomers, searchOrdersByCustomer, getCollectionQueue } from '../api/api';
 import { useToast } from '../hooks/useToast';
+import { useAuth } from '../contexts/AuthContext';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import './Collection.css';
 
@@ -24,8 +25,9 @@ function getReceiptTotals(order, allReceiptOrders) {
 const formatReceiptMoney = (n) => (n != null && !Number.isNaN(n) ? `TSh ${Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'TSh 0');
 
 const Collection = () => {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const { showToast, ToastContainer } = useToast();
+  const { branch } = useAuth();
   const [receiptNumber, setReceiptNumber] = useState(searchParams.get('receipt') || '');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [searchByPhone, setSearchByPhone] = useState(false);
@@ -575,7 +577,7 @@ const Collection = () => {
 
     const itemsToShow = orders.length > 0 ? orders : (mainOrder.all_items || [mainOrder]);
     const useCompact = itemsToShow.length > RECEIPT_COMPACT_THRESHOLD;
-    const branchLabel = mainOrder.branch_name || (mainOrder.branch_id ? `Branch ID ${mainOrder.branch_id}` : 'Arusha');
+    const branchLabel = mainOrder.branch_name || (branch?.id === mainOrder.branch_id ? branch?.name : null) || (mainOrder.branch_id ? `Branch ID ${mainOrder.branch_id}` : null) || 'Arusha';
     const branchLine = (mainOrder.branch_name || mainOrder.branch_id) ? `Branch: ${branchLabel}\n` : '';
 
     const headerText = useCompact

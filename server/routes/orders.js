@@ -146,6 +146,7 @@ router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
   // First, get all ready orders
   let query = `
     SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
+           b.name as branch_name,
            CASE 
              WHEN o.estimated_collection_date IS NOT NULL AND o.estimated_collection_date < CURRENT_TIMESTAMP THEN 1
              ELSE 0
@@ -158,6 +159,7 @@ router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
     FROM orders o
     JOIN services s ON o.service_id = s.id
     JOIN customers c ON o.customer_id = c.id
+    LEFT JOIN branches b ON o.branch_id = b.id
     WHERE o.status = 'ready'
     ${branchFilter.clause}
   `;
@@ -354,10 +356,12 @@ router.get('/search/customer', requireBranchAccess(), async (req, res) => {
 
   let query = `
     SELECT o.*, s.name as service_name, s.description as service_description,
-           c.name as customer_name, c.phone as customer_phone, c.email as customer_email
+           c.name as customer_name, c.phone as customer_phone, c.email as customer_email,
+           b.name as branch_name
     FROM orders o
     JOIN services s ON o.service_id = s.id
     JOIN customers c ON o.customer_id = c.id
+    LEFT JOIN branches b ON o.branch_id = b.id
     WHERE 1=1
     ${branchFilter.clause}
   `;

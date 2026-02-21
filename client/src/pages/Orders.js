@@ -334,7 +334,7 @@ const Orders = () => {
 
       const useCompact = receiptOrders.length > RECEIPT_COMPACT_THRESHOLD;
       const firstOrder = receiptOrders[0];
-      const branchLabel = firstOrder?.branch_name || (firstOrder?.branch_id ? `Branch ID ${firstOrder.branch_id}` : 'Arusha');
+      const branchLabel = firstOrder?.branch_name || (branch?.id === firstOrder?.branch_id ? branch?.name : null) || (firstOrder?.branch_id ? `Branch ID ${firstOrder.branch_id}` : null) || 'Arusha';
       const branchLine = (firstOrder?.branch_name || firstOrder?.branch_id) ? `Branch: ${branchLabel}\n` : '';
 
       const headerText = useCompact

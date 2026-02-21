@@ -80,7 +80,7 @@ const ColorInput = React.memo(({ value: propValue, onChange, itemId }) => {
 
 const NewOrder = () => {
   const { showToast, ToastContainer } = useToast();
-  const { selectedBranchId } = useAuth();
+  const { selectedBranchId, branch } = useAuth();
   const [services, setServices] = useState([]);
   const [items, setItems] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -663,7 +663,7 @@ const NewOrder = () => {
       : '';
 
     const useCompact = receipts.length > RECEIPT_COMPACT_THRESHOLD;
-    const branchLabel = receipts[0]?.order?.branch_name || (receipts[0]?.order?.branch_id ? `Branch ID ${receipts[0].order.branch_id}` : 'Arusha');
+    const branchLabel = receipts[0]?.order?.branch_name || (branch?.id === receipts[0]?.order?.branch_id ? branch?.name : null) || (receipts[0]?.order?.branch_id ? `Branch ID ${receipts[0].order.branch_id}` : null) || 'Arusha';
     const branchLine = (receipts[0]?.order?.branch_name || receipts[0]?.order?.branch_id) ? `Branch: ${branchLabel}\n` : '';
 
     const headerText = useCompact
