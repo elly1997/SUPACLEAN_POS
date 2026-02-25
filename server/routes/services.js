@@ -11,7 +11,7 @@ router.get('/', async (req, res) => {
     
     if (include_inactive !== 'true') {
       query += ' WHERE is_active = $1';
-      params.push(true);
+      params.push(1);  // Use integer 1 instead of boolean true for PostgreSQL INTEGER column
     }
     query += ' ORDER BY name';
     
