@@ -307,9 +307,11 @@ const Reports = () => {
           Showing data from last sync — {new Date(lastSyncedAt).toLocaleString()}
         </div>
       )}
-      <div className="page-header">
-        <h1>Reports & Analytics</h1>
-        <p>View business insights and statistics</p>
+      <div className="page-header page-header-modern">
+        <div>
+          <h1>Reports & Analytics</h1>
+          <p className="subtitle">View business insights and statistics</p>
+        </div>
       </div>
 
       <div className="reports-tabs-wrap">

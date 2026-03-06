@@ -54,23 +54,64 @@ const Collection = () => {
   const autocompleteRef = useRef(null);
 
   useEffect(() => {
-    if (receiptNumber && searchParams.get('receipt')) {
-      handleSearchByReceipt();
-    }
-    if (searchInputRef.current) {
-      searchInputRef.current.focus();
-    }
     loadQueue();
-    
-    // Auto-refresh queue every 30 seconds
     const queueInterval = setInterval(() => {
-      if (showQueue) {
-        loadQueue();
-      }
+      if (showQueue) loadQueue();
     }, 30000);
-    
     return () => clearInterval(queueInterval);
   }, [showQueue]);
+
+  // Focus search input on mount so cashier can type or scan immediately
+  useEffect(() => {
+    const t = setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 150);
+    return () => clearTimeout(t);
+  }, []);
+
+  // When URL has ?receipt=XXX (e.g. from Dashboard deep link), ensure search runs
+  useEffect(() => {
+    const r = searchParams.get('receipt');
+    if (!r || !r.trim()) return;
+    setReceiptNumber(r);
+    setSearchByPhone(false);
+    const run = async () => {
+      setLoading(true);
+      setError('');
+      setOrder(null);
+      setShowAutocomplete(false);
+      try {
+        const singleRes = await getOrderByReceipt(r.trim());
+        const mainOrder = singleRes.data;
+        if (!mainOrder) {
+          setError('Order not found');
+          setOrder(null);
+          setAllReceiptOrders([]);
+          return;
+        }
+        if (mainOrder.all_items && mainOrder.all_items.length > 0) {
+          setAllReceiptOrders(mainOrder.all_items);
+          setOrder(mainOrder);
+          setSearchedByCustomer(false);
+          showToast(`Receipt found (${mainOrder.all_items.length} items)`, 'success');
+        } else {
+          setOrder(mainOrder);
+          setAllReceiptOrders([mainOrder]);
+          setSearchedByCustomer(false);
+          showToast('Order found', 'success');
+        }
+      } catch (err) {
+        const errorMsg = err.response?.data?.error || 'Order not found';
+        setError(errorMsg);
+        setOrder(null);
+        setAllReceiptOrders([]);
+        showToast(errorMsg, 'error');
+      } finally {
+        setLoading(false);
+      }
+    };
+    run();
+  }, [searchParams]);
 
   // Autocomplete: Fetch customers as user types (debounced)
   useEffect(() => {
@@ -1025,6 +1066,7 @@ Thank you for choosing SUPACLEAN!
                 type="text"
                 placeholder={searchByPhone ? "Enter customer phone number or name..." : "Enter Receipt Number (e.g., 5-21-01 (26))"}
                 value={searchByPhone ? phoneNumber : receiptNumber}
+                aria-label={searchByPhone ? "Search by customer phone or name" : "Receipt number"}
                 onChange={(e) => {
                   if (searchByPhone) {
                     setPhoneNumber(e.target.value);

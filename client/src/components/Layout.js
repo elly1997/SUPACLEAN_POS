@@ -81,19 +81,44 @@ const Layout = ({ children }) => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
-  // Base menu items: each maps to a branch feature (admin privileges) and optionally role permission
-  const baseMenuItems = [
-    { path: '/dashboard', label: 'Dashboard', icon: '📊', permission: 'canViewDashboard', feature: null },
-    { path: '/new-order', label: 'New Order', icon: '➕', permission: 'canCreateOrders', feature: 'new_order' },
-    { path: '/orders', label: 'Orders', icon: '📋', permission: ['canCreateOrders', 'canManageOrders'], feature: ['new_order', 'order_processing'] },
-    { path: '/collection', label: 'Collection', icon: '✅', permission: 'canManageOrders', feature: 'collection' },
-    { path: '/customers', label: 'Customers', icon: '👥', permission: null, feature: 'customers' },
-    { path: '/price-list', label: 'Price List', icon: '💰', permission: null, feature: 'price_list_view' },
-    { path: '/cash-management', label: 'Cash Management', icon: '💵', permission: 'canManageCash', feature: 'cash_management' },
-    { path: '/expenses', label: 'Expenses', icon: '📝', permission: 'canManageExpenses', feature: 'expenses' },
-    { path: '/reports', label: 'Reports', icon: '📈', permission: 'canViewReports', feature: 'reports_basic' },
-    { path: '/monthly-billing', label: 'Monthly Billing', icon: '📄', permission: 'canCreateOrders', feature: 'new_order' },
-    { path: '/cleaning-services', label: 'Cleaning Services', icon: '🧹', feature: 'cleaning_services', permission: null },
+  // Base menu items by workflow group
+  const menuGroups = [
+    {
+      label: null,
+      items: [
+        { path: '/dashboard', label: 'Dashboard', icon: '📊', permission: 'canViewDashboard', feature: null },
+      ]
+    },
+    {
+      label: 'Counter',
+      items: [
+        { path: '/new-order', label: 'New Order', icon: '➕', permission: 'canCreateOrders', feature: 'new_order' },
+        { path: '/collection', label: 'Collection', icon: '✅', permission: 'canManageOrders', feature: 'collection' },
+      ]
+    },
+    {
+      label: 'Orders & customers',
+      items: [
+        { path: '/orders', label: 'Orders', icon: '📋', permission: ['canCreateOrders', 'canManageOrders'], feature: ['new_order', 'order_processing'] },
+        { path: '/customers', label: 'Customers', icon: '👥', permission: null, feature: 'customers' },
+        { path: '/price-list', label: 'Price List', icon: '💰', permission: null, feature: 'price_list_view' },
+        { path: '/monthly-billing', label: 'Monthly Billing', icon: '📄', permission: 'canCreateOrders', feature: 'new_order' },
+      ]
+    },
+    {
+      label: 'Money & reports',
+      items: [
+        { path: '/cash-management', label: 'Cash Management', icon: '💵', permission: 'canManageCash', feature: 'cash_management' },
+        { path: '/expenses', label: 'Expenses', icon: '📝', permission: 'canManageExpenses', feature: 'expenses' },
+        { path: '/reports', label: 'Reports', icon: '📈', permission: 'canViewReports', feature: 'reports_basic' },
+      ]
+    },
+    {
+      label: null,
+      items: [
+        { path: '/cleaning-services', label: 'Cleaning Services', icon: '🧹', feature: 'cleaning_services', permission: null },
+      ]
+    },
   ];
 
   const hasAnyPermission = (permOrPerms) => {
@@ -101,18 +126,27 @@ const Layout = ({ children }) => {
     if (Array.isArray(permOrPerms)) return permOrPerms.some(p => hasPermission(p));
     return hasPermission(permOrPerms);
   };
-  // Filter: admin sees all; others need BOTH role permission AND branch feature (when set)
-  const menuItems = baseMenuItems.filter(item => {
+
+  const filterItem = (item) => {
     if (isAdmin) return true;
     if (item.feature && !hasFeature(item.feature)) return false;
     if (item.permission && !hasAnyPermission(item.permission)) return false;
     return true;
-  });
+  };
 
-  // Add admin menu items
+  const filteredGroups = menuGroups.map(grp => ({
+    ...grp,
+    items: grp.items.filter(filterItem),
+  })).filter(grp => grp.items.length > 0);
+
   if (isAdmin) {
-    menuItems.push({ path: '/admin/branches', label: 'Branches', icon: '🏢', feature: 'admin' });
-    menuItems.push({ path: '/admin/banking', label: 'Banking', icon: '🏦', feature: 'admin' });
+    filteredGroups.push({
+      label: 'Admin',
+      items: [
+        { path: '/admin/branches', label: 'Branches', icon: '🏢', feature: 'admin' },
+        { path: '/admin/banking', label: 'Banking', icon: '🏦', feature: 'admin' },
+      ]
+    });
   }
 
   return (
@@ -156,16 +190,23 @@ const Layout = ({ children }) => {
             <p className="user-info">{user.fullName} ({user.role})</p>
           )}
         </div>
-        <nav className="sidebar-nav">
-          {menuItems.map((item) => (
-            <Link
-              key={item.path}
-              to={item.path}
-              className={`nav-item ${location.pathname === item.path ? 'active' : ''}`}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span className="nav-label">{item.label}</span>
-            </Link>
+        <nav className="sidebar-nav" aria-label="Main navigation">
+          {filteredGroups.map((group, idx) => (
+            <div key={group.label || `group-${idx}`} className="nav-group">
+              {group.label && (
+                <div className="nav-group-label" aria-hidden="true">{group.label}</div>
+              )}
+              {group.items.map((item) => (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={`nav-item ${location.pathname === item.path ? 'active' : ''}`}
+                >
+                  <span className="nav-icon">{item.icon}</span>
+                  <span className="nav-label">{item.label}</span>
+                </Link>
+              ))}
+            </div>
           ))}
         </nav>
         <div className="sidebar-footer">

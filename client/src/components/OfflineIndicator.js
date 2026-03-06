@@ -38,7 +38,8 @@ export default function OfflineIndicator({ onBackOnline }) {
   if (isOnline) return null;
   return (
     <div className="offline-indicator" role="status" aria-live="polite">
-      <span className="offline-dot" /> You're offline. Data will sync when connection is back.
+      <span className="offline-dot" aria-hidden="true" />
+      <span>You&apos;re offline. Actions will be queued and synced when connection is back.</span>
     </div>
   );
 }

@@ -201,7 +201,7 @@ const CashManagement = () => {
   };
 
   if (loading) {
-    return <div className="loading">Loading cash summary...</div>;
+    return <div className="loading" role="status" aria-live="polite">Loading cash summary...</div>;
   }
 
   if (!summary) {
@@ -241,9 +241,9 @@ const CashManagement = () => {
           <button type="button" className="btn-link muted" onClick={() => setManualWhatsAppReport(null)} aria-label="Dismiss">Dismiss</button>
         </div>
       )}
-      <div className="page-header">
+      <div className="page-header page-header-modern">
         <div>
-          <h1>💵 Cash Management</h1>
+          <h1>Cash Management</h1>
           <p className="subtitle">
             {summary.all_branches ? 'All branches (consolidated) · ' : ''}
             Daily cash summary - {new Date(today).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}

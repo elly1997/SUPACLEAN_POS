@@ -1,33 +1,35 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { getDailySummary, getOrders, updateOrderStatus, getCollectionQueue } from '../api/api';
 import { useToast } from '../hooks/useToast';
+import { useAuth } from '../contexts/AuthContext';
 import './Dashboard.css';
 
 const Dashboard = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
+  const { selectedBranchId } = useAuth();
   const [summary, setSummary] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
   const [readyOrders, setReadyOrders] = useState([]);
   const [readyQueue, setReadyQueue] = useState([]); // Collection queue (grouped by receipt)
   const [loading, setLoading] = useState(true);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const [readySearchTerm, setReadySearchTerm] = useState('');
+  const [pendingSearchTerm, setPendingSearchTerm] = useState('');
+  const [readySearchInput, setReadySearchInput] = useState('');
+  const [pendingSearchInput, setPendingSearchInput] = useState('');
   const today = new Date().toISOString().split('T')[0];
 
-  useEffect(() => {
-    loadDashboardData();
-    const interval = setInterval(loadDashboardData, 30000); // Refresh every 30 seconds
-    return () => clearInterval(interval);
-  }, []);
-
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
     try {
+      const readyCustomer = readySearchTerm.trim() || undefined;
+      const pendingCustomer = pendingSearchTerm.trim() || undefined;
       const [summaryRes, pendingRes, readyRes, queueRes] = await Promise.all([
         getDailySummary(today),
-        getOrders({ status: 'pending' }),
-        getOrders({ status: 'ready' }),
-        getCollectionQueue({ limit: 10 }) // Get top 10 ready orders (grouped by receipt)
+        getOrders({ status: 'pending', ...(pendingCustomer && { customer: pendingCustomer }) }),
+        getOrders({ status: 'ready', ...(readyCustomer && { customer: readyCustomer }) }),
+        getCollectionQueue({ limit: 20, ...(readyCustomer && { customer: readyCustomer }) })
       ]);
 
       setSummary(summaryRes.data);
@@ -49,7 +51,23 @@ const Dashboard = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [today, readySearchTerm, pendingSearchTerm, selectedBranchId]);
+
+  useEffect(() => {
+    loadDashboardData();
+    const interval = setInterval(loadDashboardData, 30000); // Refresh every 30 seconds
+    return () => clearInterval(interval);
+  }, [loadDashboardData]);
+
+  // Debounce search terms so we don't refetch on every keystroke
+  useEffect(() => {
+    const t = setTimeout(() => setReadySearchTerm(readySearchInput), 400);
+    return () => clearTimeout(t);
+  }, [readySearchInput]);
+  useEffect(() => {
+    const t = setTimeout(() => setPendingSearchTerm(pendingSearchInput), 400);
+    return () => clearTimeout(t);
+  }, [pendingSearchInput]);
 
   const handleQuickAction = (action) => {
     if (action === 'new-order') {
@@ -130,12 +148,22 @@ const Dashboard = () => {
           <h1>Dashboard</h1>
           <p className="subtitle">Today's overview - {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
         </div>
-        <button 
-          className="btn-primary btn-large"
-          onClick={() => handleQuickAction('new-order')}
-        >
-          ➕ New Order
-        </button>
+        <div className="header-actions">
+          <button
+            type="button"
+            className="btn-secondary btn-large"
+            onClick={() => navigate('/collection')}
+          >
+            Go to Collection
+          </button>
+          <button
+            type="button"
+            className="btn-primary btn-large"
+            onClick={() => handleQuickAction('new-order')}
+          >
+            New Order
+          </button>
+        </div>
       </div>
 
       <div className="stats-grid-modern">
@@ -193,77 +221,85 @@ const Dashboard = () => {
                 </span>
               )}
             </div>
-            {readyQueue.length > 5 && (
-              <button className="btn-link" onClick={() => navigate('/collection')}>
-                View All →
-              </button>
-            )}
+            <button className="btn-link" onClick={() => navigate('/collection')}>
+              View in Collection →
+            </button>
+          </div>
+          <div className="dashboard-search-wrap">
+            <span className="dashboard-search-icon" aria-hidden>🔍</span>
+            <input
+              type="text"
+              className="dashboard-search-input"
+              placeholder="Search by customer name or phone..."
+              value={readySearchInput}
+              onChange={(e) => setReadySearchInput(e.target.value)}
+              aria-label="Search ready orders by customer name"
+            />
           </div>
           {readyQueue.length > 0 ? (
-            <div className="orders-list-modern">
-              {readyQueue.slice(0, 5).map(receipt => {
-                const balance = (receipt.total_amount || 0) - (receipt.paid_amount || 0);
-                const isOverdue = receipt.is_overdue;
-                const hoursOverdue = receipt.hours_overdue || 0;
-                const itemCount = receipt.receipt_item_count || 1;
-                
-                return (
-                  <div 
-                    key={receipt.receipt_number} 
-                    className={`order-card-modern ready ${isOverdue ? 'overdue' : ''}`}
-                  >
-                    <div className="order-info">
-                      <div className={`receipt-badge ${isOverdue ? 'overdue-badge' : ''}`}>
-                        {receipt.receipt_number}
-                      </div>
-                      <div>
-                        <strong>{receipt.customer_name}</strong>
-                        <span>{receipt.customer_phone}</span>
-                        {itemCount > 1 && (
-                          <span className="item-count-badge">📦 {itemCount} items</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="order-meta">
-                      <div className="order-details">
-                        <div className="amount">TSh {receipt.total_amount.toLocaleString()}</div>
-                        {balance > 0 && (
-                          <div className="balance-due">Balance: TSh {balance.toLocaleString()}</div>
-                        )}
-                        {isOverdue && hoursOverdue > 0 && (
-                          <div className="overdue-indicator">
-                            ⚠️ {hoursOverdue}h overdue
-                          </div>
-                        )}
-                        {!isOverdue && receipt.estimated_collection_date && (
-                          <div className="time-remaining">
-                            {(() => {
-                              const estDate = new Date(receipt.estimated_collection_date);
-                              const now = new Date();
-                              const diffHours = Math.floor((estDate - now) / (1000 * 60 * 60));
-                              if (diffHours <= 2 && diffHours > 0) {
-                                return `⏰ ${diffHours}h remaining`;
-                              }
-                              return null;
-                            })()}
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        className="btn-small btn-success"
-                        onClick={() => navigate(`/collection?receipt=${receipt.receipt_number}`)}
-                      >
-                        Collect
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="dashboard-table-wrap">
+              <table className="dashboard-table">
+                <thead>
+                  <tr>
+                    <th>Receipt</th>
+                    <th>Customer</th>
+                    <th>Phone</th>
+                    <th>Items</th>
+                    <th>Total</th>
+                    <th>Balance</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {readyQueue.map(receipt => {
+                    const balance = (receipt.total_amount || 0) - (receipt.paid_amount || 0);
+                    const isOverdue = receipt.is_overdue;
+                    const hoursOverdue = receipt.hours_overdue || 0;
+                    const itemCount = receipt.receipt_item_count || 1;
+                    const timeRemaining = !isOverdue && receipt.estimated_collection_date ? (() => {
+                      const estDate = new Date(receipt.estimated_collection_date);
+                      const now = new Date();
+                      const diffHours = Math.floor((estDate - now) / (1000 * 60 * 60));
+                      if (diffHours <= 2 && diffHours > 0) return `${diffHours}h left`;
+                      return null;
+                    })() : null;
+                    return (
+                      <tr key={receipt.receipt_number} className={isOverdue ? 'row-overdue' : ''}>
+                        <td>
+                          <Link to={`/collection?receipt=${encodeURIComponent(receipt.receipt_number)}`} className={`receipt-badge receipt-link ${isOverdue ? 'overdue-badge' : ''}`} title="Open in Collection">
+                            {receipt.receipt_number}
+                          </Link>
+                        </td>
+                        <td><strong>{receipt.customer_name}</strong></td>
+                        <td className="text-muted">{receipt.customer_phone}</td>
+                        <td>{itemCount}</td>
+                        <td className="amount-cell">TSh {(receipt.total_amount || 0).toLocaleString()}</td>
+                        <td>{balance > 0 ? <span className="balance-due">TSh {balance.toLocaleString()}</span> : '—'}</td>
+                        <td>
+                          {isOverdue && hoursOverdue > 0 && <span className="overdue-indicator">⚠️ {hoursOverdue}h overdue</span>}
+                          {timeRemaining && <span className="time-remaining">⏰ {timeRemaining}</span>}
+                          {!isOverdue && !timeRemaining && '—'}
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn-small btn-success btn-table-action"
+                            onClick={() => navigate(`/collection?receipt=${receipt.receipt_number}`)}
+                          >
+                            Collect
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           ) : (
             <div className="empty-state-modern">
               <div className="empty-icon">📭</div>
-              <p>No orders ready for collection</p>
+              <p>{readySearchInput.trim() ? 'No ready orders match that name' : 'No orders ready for collection'}</p>
             </div>
           )}
         </div>
@@ -271,51 +307,70 @@ const Dashboard = () => {
         <div className="dashboard-card">
           <div className="card-header">
             <h2>⏳ Pending Orders ({groupedPending.length})</h2>
-            {groupedPending.length > 5 && (
-              <button className="btn-link" onClick={() => navigate('/orders')}>
-                View All →
-              </button>
-            )}
+            <button className="btn-link" onClick={() => navigate('/orders')}>
+              View in Orders →
+            </button>
+          </div>
+          <div className="dashboard-search-wrap">
+            <span className="dashboard-search-icon" aria-hidden>🔍</span>
+            <input
+              type="text"
+              className="dashboard-search-input"
+              placeholder="Search by customer name or phone..."
+              value={pendingSearchInput}
+              onChange={(e) => setPendingSearchInput(e.target.value)}
+              aria-label="Search pending orders by customer name"
+            />
           </div>
           {groupedPending.length > 0 ? (
-            <div className="orders-list-modern">
-              {groupedPending.slice(0, 5).map((receiptGroup) => (
-                <div key={receiptGroup.receipt_number} className="order-card-modern pending">
-                  <div className="order-info">
-                    <div className="receipt-badge">{receiptGroup.receipt_number}</div>
-                    <div>
-                      <strong>{receiptGroup.customer_name}</strong>
-                      <span>{receiptGroup.service_name || 'Regular Service'}</span>
-                      {receiptGroup.items.length > 1 && (
-                        <span className="item-count-badge">📦 {receiptGroup.items.length} items</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="order-meta">
-                    <div className="amount">TSh {receiptGroup.total_amount.toLocaleString()}</div>
-                    <div className="quick-actions">
-                      <button
-                        className="btn-small btn-secondary"
-                        onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}
-                        title="View receipt and item details"
-                      >
-                        View receipt
-                      </button>
-                      <button
-                        className="btn-small btn-success"
-                        onClick={() => handleReceiptStatusUpdate(receiptGroup, 'ready')}
-                      >
-                        Ready
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            <div className="dashboard-table-wrap">
+              <table className="dashboard-table">
+                <thead>
+                  <tr>
+                    <th>Receipt</th>
+                    <th>Customer</th>
+                    <th>Phone</th>
+                    <th>Items</th>
+                    <th>Total</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupedPending.map((receiptGroup) => (
+                    <tr key={receiptGroup.receipt_number}>
+                      <td><span className="receipt-badge">{receiptGroup.receipt_number}</span></td>
+                      <td><strong>{receiptGroup.customer_name}</strong></td>
+                      <td className="text-muted">{receiptGroup.customer_phone}</td>
+                      <td>{receiptGroup.items.length}</td>
+                      <td className="amount-cell">TSh {(receiptGroup.total_amount || 0).toLocaleString()}</td>
+                      <td>
+                        <div className="quick-actions">
+                          <button
+                            type="button"
+                            className="btn-small btn-secondary btn-table-action"
+                            onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}
+                            title="View receipt"
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-small btn-success btn-table-action"
+                            onClick={() => handleReceiptStatusUpdate(receiptGroup, 'ready')}
+                          >
+                            Mark Ready
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           ) : (
             <div className="empty-state-modern">
               <div className="empty-icon">✨</div>
-              <p>No pending orders</p>
+              <p>{pendingSearchInput.trim() ? 'No pending orders match that name' : 'No pending orders'}</p>
             </div>
           )}
         </div>

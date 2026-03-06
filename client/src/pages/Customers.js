@@ -398,8 +398,9 @@ const Customers = () => {
           <tbody>
             {customers.length === 0 ? (
               <tr>
-                <td colSpan="8" className="empty-state">
-                  No customers found
+                <td colSpan="8" className="empty-state-modern-cell">
+                  <p className="empty-state-title">No customers found</p>
+                  <p className="empty-state-hint">Try a different search or add a new customer above.</p>
                 </td>
               </tr>
             ) : (

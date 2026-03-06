@@ -110,6 +110,8 @@ const NewOrder = () => {
   const [itemSearchTerm, setItemSearchTerm] = useState('');
   const searchInputRef = useRef(null);
   const itemSearchInputRef = useRef(null);
+  const itemsScrollRef = useRef(null);
+  const itemsPanelWheelCleanup = useRef(null);
 
   // Define all callbacks before using them in useEffect hooks
   const loadServices = useCallback(async () => {
@@ -269,7 +271,7 @@ const NewOrder = () => {
     }
   }, []);
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts: Ctrl+N reset, F2 or Ctrl+F focus item search
   useEffect(() => {
     const handleKeyPress = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'n' && !e.target.tagName.match(/INPUT|TEXTAREA|SELECT/)) {
@@ -278,6 +280,10 @@ const NewOrder = () => {
       }
       if (e.key === 'Escape' && showNewCustomer) {
         setShowNewCustomer(false);
+      }
+      if (e.key === 'F2' && !e.target.tagName.match(/INPUT|TEXTAREA|SELECT/)) {
+        e.preventDefault();
+        itemSearchInputRef.current?.focus();
       }
     };
     window.addEventListener('keydown', handleKeyPress);
@@ -368,6 +374,54 @@ const NewOrder = () => {
       searchInputRef.current.focus();
     }
   }, [showNewCustomer]);
+
+  // Focus customer search on initial mount so cashier can type immediately
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (searchInputRef.current && !showNewCustomer) searchInputRef.current.focus();
+    }, 100);
+    return () => clearTimeout(t);
+  }, []);
+
+  const setItemsScrollRef = useCallback((el) => {
+    itemsScrollRef.current = el;
+  }, []);
+
+  // Whole Items & Services panel: wheel anywhere in the box scrolls the list (user-friendly region)
+  const setItemsPanelRef = useCallback((el) => {
+    if (itemsPanelWheelCleanup.current) {
+      itemsPanelWheelCleanup.current();
+      itemsPanelWheelCleanup.current = null;
+    }
+    if (!el) return;
+    const onWheel = (e) => {
+      const scrollEl = el.querySelector('.items-scroll-wrap');
+      if (!scrollEl) return;
+      const { scrollTop, scrollHeight, clientHeight } = scrollEl;
+      const canScrollUp = scrollTop > 0 && e.deltaY < 0;
+      const canScrollDown = scrollTop + clientHeight < scrollHeight - 1 && e.deltaY > 0;
+      if (canScrollUp || canScrollDown) {
+        e.preventDefault();
+        e.stopPropagation();
+        let step = e.deltaY;
+        if (e.deltaMode === 1) step *= 40;
+        else if (e.deltaMode === 2) step *= clientHeight * 0.8;
+        else step *= 3.5;
+        scrollEl.scrollTop += step;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    itemsPanelWheelCleanup.current = () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (itemsPanelWheelCleanup.current) {
+        itemsPanelWheelCleanup.current();
+        itemsPanelWheelCleanup.current = null;
+      }
+    };
+  }, []);
 
   const filteredItems = useMemo(() => {
     const q = (itemSearchTerm || '').trim().toLowerCase();
@@ -1052,6 +1106,7 @@ Phone: ${customer.phone}
                       type="text"
                       placeholder={selectedCustomer ? selectedCustomer.name : (searchByPhone ? "Phone number..." : "Customer name...")}
                       value={selectedCustomer && !searchTerm ? selectedCustomer.name : searchTerm}
+                      aria-label={searchByPhone ? "Search customer by phone" : "Search customer by name"}
                       onChange={(e) => {
                         const value = e.target.value;
                         setSearchTerm(value);
@@ -1206,7 +1261,12 @@ Phone: ${customer.phone}
             )}
           </div>
 
-          <div className="panel-section panel-section-items">
+          <div
+            ref={setItemsPanelRef}
+            className="panel-section panel-section-items"
+            role="region"
+            aria-label="Items and services"
+          >
             <div className="items-header-sticky">
               <h2 className="section-title section-title-no-sticky">
                 <span>🧺</span> {items.length > 0 ? 'Items & Services' : 'Services'}
@@ -1249,6 +1309,7 @@ Phone: ${customer.phone}
                   onChange={(e) => setItemSearchTerm(e.target.value)}
                   className="items-search-input"
                   aria-label="Quick search items and services"
+                  title="Search items and services (F2)"
                 />
                 {itemSearchTerm.trim() && (
                   <button
@@ -1263,6 +1324,12 @@ Phone: ${customer.phone}
               </div>
             </div>
 
+            <div
+              ref={setItemsScrollRef}
+              className="items-scroll-wrap"
+              role="region"
+              aria-label="Items and services list"
+            >
             {/* Show Items if available, otherwise show Services */}
             {items.length > 0 ? (
               <>
@@ -1270,110 +1337,100 @@ Phone: ${customer.phone}
                   <h3 style={{ marginBottom: '12px', fontSize: '14px', color: 'var(--text-secondary)' }}>
                     📋 Items (from Price List){itemSearchTerm.trim() ? ` · ${filteredItems.length} match` : ''}
                   </h3>
-                  <div className="services-grid-modern">
+                  <ul className="items-services-list" aria-label="Items from price list">
                     {filteredItems.length === 0 ? (
-                      <p className="items-search-empty">
-                        {itemSearchTerm.trim() ? `No items match "${itemSearchTerm.trim()}"` : 'No items in price list.'}
-                      </p>
+                      <li className="items-search-empty-row">
+                        <span>{itemSearchTerm.trim() ? `No items match "${itemSearchTerm.trim()}"` : 'No items in price list.'}</span>
+                      </li>
                     ) : (
                       filteredItems.map(item => {
                         const itemInCart = orderItems.find(orderItem => orderItem.item_id === item.id);
                         const itemCount = itemInCart ? itemInCart.quantity : 0;
                         return (
-                          <div
+                          <li
                             key={`item-${item.id}`}
-                            className={`service-card-modern ${itemCount > 0 ? 'in-cart' : ''}`}
+                            className={`items-services-list-row ${itemCount > 0 ? 'in-cart' : ''}`}
                             onClick={() => handleItemClick(item)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleItemClick(item); } }}
                           >
-                            <div className="service-icon">{getItemIcon(item.name, item.category)}</div>
-                            <h3>{item.name}</h3>
-                            <div className="service-price">TSh {parseFloat(item.price || item.base_price || 0).toLocaleString()}</div>
-                            {item.category && (
-                              <small style={{ textTransform: 'capitalize' }}>{item.category}</small>
-                            )}
-                            {itemCount > 0 && (
-                              <div className="cart-badge">{itemCount}</div>
-                            )}
-                          </div>
+                            <span className="list-row-icon" aria-hidden>{getItemIcon(item.name, item.category)}</span>
+                            <span className="list-row-name">{item.name}{item.category ? ` · ${String(item.category).toLowerCase()}` : ''}</span>
+                            <span className="list-row-price">TSh {parseFloat(item.price || item.base_price || 0).toLocaleString()}</span>
+                            {itemCount > 0 && <span className="list-row-qty">{itemCount}</span>}
+                          </li>
                         );
                       })
                     )}
-                  </div>
+                  </ul>
                 </div>
                 
-                {/* Also show services as delivery service types */}
                 {services.length > 0 && (
                   <div className="items-section" style={{ marginTop: '24px' }}>
                     <h3 style={{ marginBottom: '12px', fontSize: '14px', color: 'var(--text-secondary)' }}>
                       🚚 Delivery Services{itemSearchTerm.trim() ? ` · ${filteredServices.length} match` : ''}
                     </h3>
-                    <div className="services-grid-modern">
+                    <ul className="items-services-list" aria-label="Delivery services">
                       {filteredServices.length === 0 ? (
-                        <p className="items-search-empty">No services match "{itemSearchTerm.trim()}"</p>
+                        <li className="items-search-empty-row"><span>No services match "{itemSearchTerm.trim()}"</span></li>
                       ) : (
                         filteredServices.map(service => {
                           const itemInCart = orderItems.find(item => item.service_id === service.id);
                           const itemCount = itemInCart ? itemInCart.quantity : 0;
+                          const extra = [service.price_per_kg > 0 && `+${service.price_per_kg.toLocaleString()}/kg`, service.price_per_item > 0 && `+${service.price_per_item.toLocaleString()}/item`].filter(Boolean).join(' ');
                           return (
-                            <div
+                            <li
                               key={`service-${service.id}`}
-                              className={`service-card-modern ${itemCount > 0 ? 'in-cart' : ''}`}
+                              className={`items-services-list-row ${itemCount > 0 ? 'in-cart' : ''}`}
                               onClick={() => handleServiceClick(service)}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleServiceClick(service); } }}
                             >
-                              <div className="service-icon">{getServiceIcon(service.name)}</div>
-                              <h3>{service.name}</h3>
-                              <div className="service-price">TSh {service.base_price.toLocaleString()}</div>
-                              {service.price_per_kg > 0 && (
-                                <small>+ {service.price_per_kg.toLocaleString()}/kg</small>
-                              )}
-                              {service.price_per_item > 0 && (
-                                <small>+ {service.price_per_item.toLocaleString()}/item</small>
-                              )}
-                              {itemCount > 0 && (
-                                <div className="cart-badge">{itemCount}</div>
-                              )}
-                            </div>
+                              <span className="list-row-icon" aria-hidden>{getServiceIcon(service.name)}</span>
+                              <span className="list-row-name">{service.name}{extra ? ` · ${extra}` : ''}</span>
+                              <span className="list-row-price">TSh {service.base_price.toLocaleString()}</span>
+                              {itemCount > 0 && <span className="list-row-qty">{itemCount}</span>}
+                            </li>
                           );
                         })
                       )}
-                    </div>
+                    </ul>
                   </div>
                 )}
               </>
             ) : (
-              <div className="services-grid-modern">
+              <ul className="items-services-list" aria-label="Services">
                 {filteredServices.length === 0 ? (
-                  <p className="items-search-empty">
-                    {itemSearchTerm.trim() ? `No services match "${itemSearchTerm.trim()}"` : 'No services available.'}
-                  </p>
+                  <li className="items-search-empty-row">
+                    <span>{itemSearchTerm.trim() ? `No services match "${itemSearchTerm.trim()}"` : 'No services available.'}</span>
+                  </li>
                 ) : (
                   filteredServices.map(service => {
                     const itemInCart = orderItems.find(item => item.service_id === service.id);
                     const itemCount = itemInCart ? itemInCart.quantity : 0;
+                    const extra = [service.price_per_kg > 0 && `+${service.price_per_kg.toLocaleString()}/kg`, service.price_per_item > 0 && `+${service.price_per_item.toLocaleString()}/item`].filter(Boolean).join(' ');
                     return (
-                      <div
+                      <li
                         key={service.id}
-                        className={`service-card-modern ${itemCount > 0 ? 'in-cart' : ''}`}
+                        className={`items-services-list-row ${itemCount > 0 ? 'in-cart' : ''}`}
                         onClick={() => handleServiceClick(service)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleServiceClick(service); } }}
                       >
-                        <div className="service-icon">{getServiceIcon(service.name)}</div>
-                        <h3>{service.name}</h3>
-                        <div className="service-price">TSh {service.base_price.toLocaleString()}</div>
-                        {service.price_per_kg > 0 && (
-                          <small>+ {service.price_per_kg.toLocaleString()}/kg</small>
-                        )}
-                        {service.price_per_item > 0 && (
-                          <small>+ {service.price_per_item.toLocaleString()}/item</small>
-                        )}
-                        {itemCount > 0 && (
-                          <div className="cart-badge">{itemCount}</div>
-                        )}
-                      </div>
+                        <span className="list-row-icon" aria-hidden>{getServiceIcon(service.name)}</span>
+                        <span className="list-row-name">{service.name}{extra ? ` · ${extra}` : ''}</span>
+                        <span className="list-row-price">TSh {service.base_price.toLocaleString()}</span>
+                        {itemCount > 0 && <span className="list-row-qty">{itemCount}</span>}
+                      </li>
                     );
                   })
                 )}
-              </div>
+              </ul>
             )}
+            </div>
           </div>
         </div>
 

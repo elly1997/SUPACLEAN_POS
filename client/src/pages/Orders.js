@@ -861,9 +861,12 @@ Phone: ${receiptGroup.customer_phone}
       </div>
 
       {loading ? (
-        <div className="loading">Loading orders...</div>
+        <div className="loading" role="status" aria-live="polite">Loading orders...</div>
       ) : consolidatedOrders.length === 0 ? (
-        <div className="empty-state">No orders found</div>
+        <div className="empty-state-modern" role="status">
+          <p className="empty-state-title">No orders match your filters</p>
+          <p className="empty-state-hint">Try clearing filters above or create a new order from the Dashboard.</p>
+        </div>
       ) : (
         <>
         <div className="orders-table">

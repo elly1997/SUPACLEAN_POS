@@ -254,11 +254,27 @@
   outline: none;
 }
 
-.empty-state {
+.empty-state,
+.empty-state-modern-cell {
   text-align: center;
   padding: 40px 20px;
   color: var(--text-muted);
   font-style: italic;
+}
+
+.empty-state-modern-cell .empty-state-title {
+  margin: 0 0 8px 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-style: normal;
+}
+
+.empty-state-modern-cell .empty-state-hint {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-muted);
+  font-style: normal;
 }
 
 .loading {
