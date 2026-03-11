@@ -137,6 +137,99 @@
   border-left: 4px solid var(--danger-color);
 }
 
+.customer-receipts-table-wrap {
+  margin-bottom: 20px;
+}
+
+.receipts-table-title {
+  font-size: 16px;
+  margin: 0 0 10px 0;
+  color: var(--text-primary);
+}
+
+.customer-receipts-table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.customer-receipts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.customer-receipts-table th,
+.customer-receipts-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.customer-receipts-table th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.customer-receipts-table tbody tr {
+  cursor: pointer;
+}
+
+.customer-receipts-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.customer-receipts-table tbody tr.selected-receipt-row {
+  background: rgba(0, 122, 255, 0.12);
+}
+
+.receipt-detail-table-section {
+  margin-bottom: 20px;
+}
+
+.receipt-detail-table-section h3 {
+  font-size: 15px;
+  margin: 0 0 8px 0;
+  color: var(--text-primary);
+}
+
+.receipt-detail-table {
+  width: 100%;
+  max-width: 480px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.receipt-detail-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.receipt-detail-table td:first-child {
+  color: var(--text-secondary);
+  width: 140px;
+}
+
+.receipt-items-table-scroll {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.receipt-items-table th,
+.receipt-items-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.receipt-items-table th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
 .order-details-card-modern {
   background: var(--bg-secondary);
   border-radius: var(--radius-lg);
@@ -338,6 +431,13 @@
   gap: 12px;
 }
 
+.queue-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .queue-overdue-count {
   background: rgba(239, 68, 68, 0.1);
   color: #ef4444;
@@ -351,6 +451,52 @@
   font-size: 20px;
   color: var(--text-primary);
   margin: 0;
+}
+
+.queue-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.queue-list-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.queue-list-card:hover {
+  background: var(--bg-hover);
+}
+
+.queue-list-card.selected {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.2);
+}
+
+.queue-list-card.overdue {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.queue-list-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.queue-list-card-body {
+  font-size: 13px;
+}
+
+.queue-list-card-body p {
+  margin: 4px 0;
 }
 
 /* Queue table (spreadsheet-like) */

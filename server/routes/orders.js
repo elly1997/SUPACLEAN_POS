@@ -138,12 +138,12 @@ router.get('/', requireBranchAccess(), async (req, res) => {
   }
 });
 
-// Get collection queue (ready orders with queue info) - grouped by receipt number
+// Get collection queue (ready orders with queue info) - grouped by receipt number. Branch-scoped; optional customer name/phone search.
 router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
-  const { limit = 20, overdue_only } = req.query;
+  const { limit = 20, overdue_only, customer } = req.query;
   const branchFilter = getBranchFilter(req, 'o');
   
-  // First, get all ready orders
+  // First, get all ready orders (branch-filtered; optional name/phone filter)
   let query = `
     SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
            b.name as branch_name,
@@ -166,6 +166,12 @@ router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
   
   let params = [...branchFilter.params];
   
+  if (customer && String(customer).trim()) {
+    query += ' AND (c.name ILIKE ? OR c.phone ILIKE ?)';
+    const customerSearch = `%${String(customer).trim()}%`;
+    params.push(customerSearch, customerSearch);
+  }
+  
   if (overdue_only === 'true') {
     query += ` AND o.estimated_collection_date IS NOT NULL AND o.estimated_collection_date < CURRENT_TIMESTAMP`;
   }
@@ -174,6 +180,11 @@ router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
     is_overdue DESC,
     CASE WHEN o.estimated_collection_date IS NOT NULL THEN o.estimated_collection_date ELSE o.ready_date END ASC`;
   
+  // Cap rows at DB level to avoid loading thousands of orders (scalability + faster response)
+  const maxRows = Math.min(Math.max(parseInt(limit, 10) || 20, 20) * 25, 500);
+  query += ' LIMIT ?';
+  params.push(maxRows);
+
   try {
     const allOrders = await db.all(query, params);
     
@@ -320,12 +331,15 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), a
     });
     const itemsDescription = itemParts.join('; ');
 
+    const estimatedDate = first.estimated_collection_date || null;
     const message = generateOrderReceiptSms(
+      receiptNumber,
       customerName,
       customerId,
       itemsDescription,
       receiptTotal,
-      paymentStatus
+      paymentStatus,
+      estimatedDate
     );
 
     const result = await sendSmsWithWhatsAppFallback(customerPhone, message, {
@@ -630,31 +644,8 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
 
           const receipt = formatReceipt(order, customer, service);
 
-          // Send SMS when order is recorded and receipt is printed (default on; set SEND_ORDER_CONFIRMATION_SMS=false to disable)
-          const sendConfirmationSms = process.env.SEND_ORDER_CONFIRMATION_SMS !== 'false';
-          if (sendConfirmationSms && customer.phone) {
-            const smsEnabled = customer.sms_notifications_enabled !== 0;
-            if (smsEnabled) {
-              const { generateOrderConfirmation } = require('../utils/sms');
-              const confirmationMessage = generateOrderConfirmation(
-                finalReceiptNumber,
-                customer.name,
-                total_amount,
-                estimated_collection_date
-              );
-              sendSmsWithWhatsAppFallback(customer.phone, confirmationMessage, {
-                customerId: customer.id,
-                orderId: orderId,
-                notificationType: 'order_confirmation'
-              }).then(result => {
-                if (result.success) {
-                  console.log(`✅ Order confirmation SMS sent via ${result.channel || 'sms'} to ${customer.phone}`);
-                }
-              }).catch(err => {
-                console.error('Error sending order confirmation SMS:', err);
-              });
-            }
-          }
+          // Only one SMS after receipt: sent by client after printing (POST /orders/receipt/:receiptNumber/send-receipt-sms).
+          // No duplicate order-confirmation SMS here.
 
           res.json({
             order,

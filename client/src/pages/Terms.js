@@ -2,6 +2,8 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import './Terms.css';
 
+const TERMS_PDF_URL = process.env.REACT_APP_TERMS_PDF_URL || '';
+
 const TERMS_CONTENT = [
   {
     title: 'MASHARTI YA HUDUMA',
@@ -49,6 +51,20 @@ const Terms = () => {
           <p className="terms-subtitle">Laundry & Dry Cleaning · Arusha, Tanzania</p>
           <h2>MASHARTI YA HUDUMA</h2>
         </header>
+
+        {TERMS_PDF_URL && (
+          <section className="terms-pdf-section">
+            <p className="terms-pdf-label">Terms & conditions (PDF):</p>
+            <iframe
+              title="Terms and Conditions PDF"
+              src={TERMS_PDF_URL}
+              className="terms-pdf-iframe"
+            />
+            <a href={TERMS_PDF_URL} target="_blank" rel="noopener noreferrer" className="terms-pdf-link">
+              Open PDF in new tab
+            </a>
+          </section>
+        )}
 
         <section className="terms-body">
           {TERMS_CONTENT.map((section, sIdx) => (

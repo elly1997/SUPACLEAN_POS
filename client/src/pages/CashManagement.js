@@ -264,116 +264,102 @@ const CashManagement = () => {
         </div>
       </div>
 
-      <div className="cash-summary-grid">
-        {/* Opening Balance */}
-        <div className="summary-card opening">
-          <div className="card-icon">🌅</div>
-          <div className="card-content">
-            <h3>Opening Balance</h3>
-            <div className="amount">TSh {parseFloat(summary.opening_balance || 0).toLocaleString()}</div>
-            <small>From previous day's closing balance</small>
-          </div>
-        </div>
-
-        {/* Cash Sales */}
-        <div className="summary-card income">
-          <div className="card-icon">💰</div>
-          <div className="card-content">
-            <h3>Cash Sales</h3>
-            <div className="amount">TSh {parseFloat(summary.cash_sales || 0).toLocaleString()}</div>
-            <small>Paid in full with cash today</small>
-          </div>
-        </div>
-
-        {/* Book Sales */}
-        <div className="summary-card income">
-          <div className="card-icon">📖</div>
-          <div className="card-content">
-            <h3>Book Sales</h3>
-            <div className="amount">TSh {parseFloat(summary.book_sales || 0).toLocaleString()}</div>
-            <small>Collections from unpaid orders</small>
-          </div>
-        </div>
-
-        {/* Other Payments */}
-        <div className="summary-card info">
-          <div className="card-icon">💳</div>
-          <div className="card-content">
-            <h3>Card & M-Pesa</h3>
-            <div className="amount">TSh {parseFloat((summary.card_sales || 0) + (summary.mobile_money_sales || 0)).toLocaleString()}</div>
-            <small>Card: {parseFloat(summary.card_sales || 0).toLocaleString()} | M-Pesa: {parseFloat(summary.mobile_money_sales || 0).toLocaleString()}</small>
-          </div>
-        </div>
-
-        {/* Expenses from Cash */}
-        <div className="summary-card expense">
-          <div className="card-icon">📝</div>
-          <div className="card-content">
-            <h3>Expenses (Cash)</h3>
-            <div className="amount">TSh {parseFloat(summary.expenses_from_cash || 0).toLocaleString()}</div>
-            <small>Paid from cash</small>
-          </div>
-        </div>
-
-        {/* Bank Deposits */}
-        <div className="summary-card expense">
-          <div className="card-icon">🏦</div>
-          <div className="card-content">
-            <h3>Bank Deposits</h3>
-            <div className="amount">TSh {parseFloat(summary.bank_deposits || 0).toLocaleString()}</div>
-            <small>Deposited to bank</small>
-          </div>
-        </div>
-
-        {/* Cash in Hand */}
-        <div className="summary-card total">
-          <div className="card-icon">💵</div>
-          <div className="card-content">
-            <h3>Cash in Hand</h3>
-            <div className="amount-large">TSh {parseFloat(cashInHand).toLocaleString()}</div>
-            <small>Opening + Sales - Expenses - Deposits</small>
-          </div>
-        </div>
-
-        {/* Closing Balance */}
-        <div className="summary-card total">
-          <div className="card-icon">🏁</div>
-          <div className="card-content">
-            <h3>Closing Balance</h3>
-            <div className="amount-large">TSh {parseFloat(summary.closing_balance || cashInHand).toLocaleString()}</div>
-            <small>{summary.is_reconciled ? '✅ Reconciled' : 'Pending reconciliation'}</small>
-          </div>
+      {/* Daily summary as table for data density and scalability */}
+      <div className="cash-summary-table-section">
+        <h2>Daily cash summary</h2>
+        <div className="cash-summary-table-wrap">
+          <table className="cash-summary-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th className="num">Amount (TSh)</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>🌅 Opening Balance</td>
+                <td className="num">{parseFloat(summary.opening_balance || 0).toLocaleString()}</td>
+                <td className="text-muted">From previous day&apos;s closing balance</td>
+              </tr>
+              <tr>
+                <td>💰 Cash Sales</td>
+                <td className="num">{parseFloat(summary.cash_sales || 0).toLocaleString()}</td>
+                <td className="text-muted">Paid in full with cash today</td>
+              </tr>
+              <tr>
+                <td>📖 Book Sales</td>
+                <td className="num">{parseFloat(summary.book_sales || 0).toLocaleString()}</td>
+                <td className="text-muted">Collections from unpaid orders</td>
+              </tr>
+              <tr>
+                <td>💳 Card & M-Pesa</td>
+                <td className="num">{parseFloat((summary.card_sales || 0) + (summary.mobile_money_sales || 0)).toLocaleString()}</td>
+                <td className="text-muted">Card: {parseFloat(summary.card_sales || 0).toLocaleString()} | M-Pesa: {parseFloat(summary.mobile_money_sales || 0).toLocaleString()}</td>
+              </tr>
+              <tr>
+                <td>📝 Expenses (Cash)</td>
+                <td className="num">- {parseFloat(summary.expenses_from_cash || 0).toLocaleString()}</td>
+                <td className="text-muted">Paid from cash</td>
+              </tr>
+              <tr>
+                <td>🏦 Bank Deposits</td>
+                <td className="num">- {parseFloat(summary.bank_deposits || 0).toLocaleString()}</td>
+                <td className="text-muted">Deposited to bank</td>
+              </tr>
+              <tr className="total-row">
+                <td><strong>💵 Cash in Hand</strong></td>
+                <td className="num"><strong>TSh {parseFloat(cashInHand).toLocaleString()}</strong></td>
+                <td className="text-muted">Opening + Sales - Expenses - Deposits</td>
+              </tr>
+              <tr className="total-row">
+                <td><strong>🏁 Closing Balance</strong></td>
+                <td className="num"><strong>TSh {parseFloat(summary.closing_balance || cashInHand).toLocaleString()}</strong></td>
+                <td className="text-muted">{summary.is_reconciled ? '✅ Reconciled' : 'Pending reconciliation'}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
-      {/* Calculation Breakdown */}
+      {/* Calculation Breakdown as table */}
       <div className="breakdown-card">
         <h2>Calculation Breakdown</h2>
-        <div className="breakdown-list">
-          <div className="breakdown-item">
-            <span>Opening Balance</span>
-            <span className="value positive">+ {parseFloat(summary.opening_balance || 0).toLocaleString()}</span>
-          </div>
-          <div className="breakdown-item">
-            <span>Cash Sales</span>
-            <span className="value positive">+ {parseFloat(summary.cash_sales || 0).toLocaleString()}</span>
-          </div>
-          <div className="breakdown-item">
-            <span>Book Sales (Collections)</span>
-            <span className="value positive">+ {parseFloat(summary.book_sales || 0).toLocaleString()}</span>
-          </div>
-          <div className="breakdown-item">
-            <span>Expenses from Cash</span>
-            <span className="value negative">- {parseFloat(summary.expenses_from_cash || 0).toLocaleString()}</span>
-          </div>
-          <div className="breakdown-item">
-            <span>Bank Deposits</span>
-            <span className="value negative">- {parseFloat(summary.bank_deposits || 0).toLocaleString()}</span>
-          </div>
-          <div className="breakdown-item total-line">
-            <span><strong>Cash in Hand</strong></span>
-            <span className="value total"><strong>TSh {parseFloat(cashInHand).toLocaleString()}</strong></span>
-          </div>
+        <div className="breakdown-table-wrap">
+          <table className="breakdown-table">
+            <thead>
+              <tr>
+                <th>Line</th>
+                <th className="num">Value (TSh)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Opening Balance</td>
+                <td className="num value-positive">+ {parseFloat(summary.opening_balance || 0).toLocaleString()}</td>
+              </tr>
+              <tr>
+                <td>Cash Sales</td>
+                <td className="num value-positive">+ {parseFloat(summary.cash_sales || 0).toLocaleString()}</td>
+              </tr>
+              <tr>
+                <td>Book Sales (Collections)</td>
+                <td className="num value-positive">+ {parseFloat(summary.book_sales || 0).toLocaleString()}</td>
+              </tr>
+              <tr>
+                <td>Expenses from Cash</td>
+                <td className="num value-negative">- {parseFloat(summary.expenses_from_cash || 0).toLocaleString()}</td>
+              </tr>
+              <tr>
+                <td>Bank Deposits</td>
+                <td className="num value-negative">- {parseFloat(summary.bank_deposits || 0).toLocaleString()}</td>
+              </tr>
+              <tr className="breakdown-total-row">
+                <td><strong>Cash in Hand</strong></td>
+                <td className="num"><strong>TSh {parseFloat(cashInHand).toLocaleString()}</strong></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -464,17 +450,27 @@ const CashManagement = () => {
         )}
 
         {bankDeposits.length > 0 ? (
-          <div className="deposits-list">
-            {bankDeposits.map(deposit => (
-              <div key={deposit.id} className="deposit-item">
-                <div className="deposit-info">
-                  <strong>TSh {parseFloat(deposit.amount).toLocaleString()}</strong>
-                  {(deposit.bank_account_name || deposit.bank_name) && <span>{deposit.bank_account_name || deposit.bank_name}</span>}
-                  {deposit.reference_number && <span className="reference">Ref: {deposit.reference_number}</span>}
-                </div>
-                {deposit.notes && <div className="deposit-notes">{deposit.notes}</div>}
-              </div>
-            ))}
+          <div className="deposits-table-wrap">
+            <table className="deposits-table">
+              <thead>
+                <tr>
+                  <th className="num">Amount (TSh)</th>
+                  <th>Bank / Account</th>
+                  <th>Reference</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bankDeposits.map(deposit => (
+                  <tr key={deposit.id}>
+                    <td className="num"><strong>{parseFloat(deposit.amount).toLocaleString()}</strong></td>
+                    <td>{deposit.bank_account_name || deposit.bank_name || '—'}</td>
+                    <td>{deposit.reference_number ? <span className="reference">{deposit.reference_number}</span> : '—'}</td>
+                    <td className="deposit-notes-cell">{deposit.notes || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         ) : (
           <div className="empty-state">

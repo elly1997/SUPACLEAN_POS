@@ -6,10 +6,9 @@ The POS can send SMS to customers (order ready, collection reminder, receipt, ba
 
 ## How it works in the app
 
-- **New order created & receipt printed** → Order confirmation SMS sent automatically to the customer (receipt number, amount, est. ready date). Disable with `SEND_ORDER_CONFIRMATION_SMS=false` in `.env`.
-- **Order marked “Ready”** → SMS sent automatically (if configured and customer has SMS enabled).
-- **Send receipt SMS** → From Orders or after creating an order (optional; detailed receipt text).
-- **Collection reminder** → From Orders or Collection page.
+- **After printing receipt (new order)** → **One** receipt SMS only, sent automatically (detailed but brief: receipt, items, total, payment status, est. ready date, and Terms & Conditions link if `TERMS_AND_CONDITIONS_URL` is set).
+- **Order marked “Ready”** → One SMS advising customer to collect, including the delivery-requests number (0752757635).
+- **Collection reminder** → From Orders or Collection page; message includes how many days items have been in storage since the due date.
 - **Balance reminder** → From Customers page.
 
 If no SMS provider is configured, messages are **logged only** (no real SMS sent).
@@ -39,6 +38,8 @@ If no SMS provider is configured, messages are **logged only** (no real SMS sent
    | `SMS_USERNAME`  | `sandbox` for testing; your Africa's Talking app username for production | Yes    |
    | `SMS_API_URL`   | Leave empty for live; for sandbox use: `https://api.sandbox.africastalking.com/version1/messaging` | No (optional) |
    | `SMS_SENDER_ID` | Sender name (e.g. `SUPACLEAN`); may be ignored in sandbox              | No       |
+   | `TERMS_AND_CONDITIONS_URL` | Full URL for T&C (e.g. `https://yoursite.com/terms`); included in receipt SMS | No       |
+   | `SMS_INCLUDE_SWAHILI`      | Set to `false` to send English only; default is to include Swahili translation in the same SMS | No       |
 
 4. **Restart / redeploy**
    - Local: restart the server.
@@ -124,10 +125,20 @@ If SMS is not sending, work through this list:
 
 ---
 
+## Swahili (Kiswahili) in the same SMS
+
+Receipt, ready, and collection-reminder SMS include a **Swahili translation** in the same message (English first, then “— Kiswahili:” and the Swahili text). To send **English only**, set `SMS_INCLUDE_SWAHILI=false` in the server `.env`.
+
+## Terms & Conditions link and PDF
+
+- Set **TERMS_AND_CONDITIONS_URL** in server `.env` to the full URL customers see in the receipt SMS (e.g. `https://yoursite.com/terms`).
+- The **Terms** page (`/terms`) shows the conditions in the app; optionally set **REACT_APP_TERMS_PDF_URL** in the client (e.g. in Render Environment) to a PDF URL to show an embedded PDF view on that page.
+- Receipt SMS includes the T&C link only when `TERMS_AND_CONDITIONS_URL` is set.
+
 ## Where SMS is sent from in code
 
-- **Server:** `server/utils/sms.js` – `sendSMS()`; supports Africa's Talking and Twilio based on `SMS_PROVIDER` and env vars.
-- **Notifications:** `server/utils/notifications.js` – uses `sendSMS()` for “ready”, “reminder”, “confirmation”, etc.
-- **Routes:** e.g. order ready, send receipt SMS, send reminder – all go through the same SMS layer.
+- **Server:** `server/utils/sms.js` – `sendSMS()`; message generators for receipt (with T&C link), ready (with delivery number), reminder (days in storage).
+- **Notifications:** `server/utils/notifications.js` – uses `sendSMS()` for “ready”, “reminder”, etc.
+- **Routes:** Order create no longer sends a second SMS; one receipt SMS is sent by the client after printing (`POST /orders/receipt/:receiptNumber/send-receipt-sms`). Order ready and send-reminder use the same SMS layer.
 
 To add another carrier, add a new branch in `server/utils/sms.js` (e.g. `if (provider === 'yourcarrier')`) and call the carrier’s HTTP API, then set the env vars and document them in this file.

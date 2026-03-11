@@ -116,6 +116,7 @@ SMS notifications (order ready, receipt, reminders, balance reminder) use **Afri
 - **SMS_API_KEY** – Your Africa's Talking API key (already set).
 - **SMS_USERNAME** – Use `sandbox` for testing; for **production** replace with your Africa's Talking app username from the [dashboard](https://account.africastalking.com).
 - **SMS_SENDER_ID** – Sender name (e.g. `SUPACLEAN`); request an alphanumeric sender in Africa's Talking for production.
+- **TERMS_AND_CONDITIONS_URL** – (Optional) Full URL for your Terms page (e.g. `https://yoursite.com/terms`). When set, the receipt SMS includes this link. On the client, set **REACT_APP_TERMS_PDF_URL** to a PDF URL to show an embedded PDF on the Terms page.
 
 **For production (live SMS):** In `.env` set `SMS_USERNAME` to your Africa's Talking app username (not `sandbox`), ensure you have credit, and remove or comment out `SMS_API_URL` so the app uses the live API.
 

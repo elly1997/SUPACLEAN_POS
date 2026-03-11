@@ -71,7 +71,7 @@ async function sendNotification(options) {
       message = generateCollectionReminder(
         orderData.receiptNumber,
         customerName,
-        orderData.hoursOverdue || 0
+        orderData.daysOverdue ?? 0
       );
       break;
     case 'balance_reminder':
@@ -173,12 +173,7 @@ async function sendCollectionReminder(customerId, orderId, channels = ['sms']) {
   return new Promise((resolve, reject) => {
     db.get(
       `SELECT o.*, c.name as customer_name, c.phone as customer_phone,
-              c.sms_notifications_enabled,
-              CASE 
-                WHEN o.estimated_collection_date IS NOT NULL AND datetime(o.estimated_collection_date) < datetime('now') THEN 
-                  CAST((julianday('now') - julianday(o.estimated_collection_date)) * 24 AS INTEGER)
-                ELSE 0
-              END as hours_overdue
+              c.sms_notifications_enabled
        FROM orders o
        JOIN customers c ON o.customer_id = c.id
        WHERE o.id = ?`,
@@ -204,6 +199,15 @@ async function sendCollectionReminder(customerId, orderId, channels = ['sms']) {
           });
         }
 
+        let daysOverdue = 0;
+        if (order.estimated_collection_date) {
+          const due = new Date(order.estimated_collection_date);
+          const now = new Date();
+          if (due < now) {
+            daysOverdue = Math.floor((now - due) / (24 * 60 * 60 * 1000));
+          }
+        }
+
         try {
           const result = await sendNotification({
             customerId: order.customer_id,
@@ -213,7 +217,7 @@ async function sendCollectionReminder(customerId, orderId, channels = ['sms']) {
             notificationType: 'reminder',
             orderData: {
               receiptNumber: order.receipt_number,
-              hoursOverdue: order.hours_overdue || 0,
+              daysOverdue,
               estimatedDate: order.estimated_collection_date
             },
             channels: actualChannels

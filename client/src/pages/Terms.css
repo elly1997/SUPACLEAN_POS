@@ -40,6 +40,40 @@
   margin: 0;
 }
 
+.terms-pdf-section {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+}
+
+.terms-pdf-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary, #666);
+  margin: 0 0 8px 0;
+}
+
+.terms-pdf-iframe {
+  width: 100%;
+  height: 480px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.12));
+  border-radius: 8px;
+  background: #f9f9f9;
+}
+
+.terms-pdf-link {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--primary-color, #007AFF);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.terms-pdf-link:hover {
+  text-decoration: underline;
+}
+
 .terms-body {
   font-size: 15px;
   line-height: 1.6;

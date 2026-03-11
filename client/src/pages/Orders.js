@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, receivePayment, sendCollectionReminder } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { useListViewPreference } from '../hooks/useListViewPreference';
+import ListViewToggle from '../components/ListViewToggle';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import './Orders.css';
@@ -28,6 +30,7 @@ const Orders = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
   const { branch, selectedBranchId } = useAuth();
+  const [listView, setListView] = useListViewPreference();
   const [orders, setOrders] = useState([]);
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(true);
@@ -102,7 +105,7 @@ const Orders = () => {
 
   useEffect(() => {
     loadOrders(false);
-  }, [filter, loadOrders]);
+  }, [filter, debouncedSearchFilters, loadOrders]);
 
   const handleFilterChange = (key, value) => {
     setSearchFilters(prev => ({ ...prev, [key]: value }));
@@ -752,6 +755,31 @@ Phone: ${receiptGroup.customer_phone}
       </div>
 
       <div className="orders-filters-section">
+        <div className="orders-quick-search">
+          <label className="orders-search-label" htmlFor="orders-quick-search-input">
+            <span className="orders-search-icon">🔍</span>
+            Search
+          </label>
+          <input
+            id="orders-quick-search-input"
+            type="text"
+            className="orders-quick-search-input"
+            placeholder="Customer name or phone..."
+            value={searchFilters.customer}
+            onChange={(e) => handleFilterChange('customer', e.target.value)}
+            aria-label="Search orders by customer name or phone"
+          />
+          {searchFilters.customer && (
+            <button
+              type="button"
+              className="orders-search-clear"
+              onClick={() => handleFilterChange('customer', '')}
+              aria-label="Clear search"
+            >
+              ✕
+            </button>
+          )}
+        </div>
         <div className="orders-filters">
           {['all', 'pending', 'ready', 'collected'].map(status => (
               <button
@@ -768,6 +796,7 @@ Phone: ${receiptGroup.customer_phone}
           >
             {showAdvancedFilters ? '🔽 Hide Filters' : '🔍 Advanced Filters'}
           </button>
+          <ListViewToggle view={listView} setView={setListView} />
         </div>
 
         {showAdvancedFilters && (
@@ -867,6 +896,56 @@ Phone: ${receiptGroup.customer_phone}
           <p className="empty-state-title">No orders match your filters</p>
           <p className="empty-state-hint">Try clearing filters above or create a new order from the Dashboard.</p>
         </div>
+      ) : listView === 'card' ? (
+        <>
+        <div className="orders-cards-grid">
+          {consolidatedOrders.map((receiptGroup) => {
+            const balance = receiptGroup.total_amount - receiptGroup.paid_amount;
+            const itemCount = receiptGroup.items.length;
+            return (
+              <div key={receiptGroup.receipt_number} className="orders-list-card">
+                <div className="orders-list-card-header">
+                  <strong>{receiptGroup.receipt_number}</strong>
+                  <span
+                    className="status-badge"
+                    style={{ backgroundColor: getStatusColor(receiptGroup.status === 'processing' ? 'pending' : receiptGroup.status), fontSize: '11px' }}
+                  >
+                    {receiptGroup.status === 'processing' ? 'Pending' : receiptGroup.status}
+                  </span>
+                </div>
+                <div className="orders-list-card-body">
+                  <p><strong>{receiptGroup.customer_name}</strong></p>
+                  <p className="text-muted">{receiptGroup.customer_phone}</p>
+                  <p>{itemCount} item(s) · TSh {receiptGroup.total_amount.toLocaleString()}</p>
+                  <p>{balance > 0 ? <span style={{ color: 'var(--warning-color)', fontWeight: 'bold' }}>Balance TSh {balance.toLocaleString()}</span> : <span style={{ color: 'var(--success-color)' }}>Paid</span>}</p>
+                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Est: {formatDateTime(receiptGroup.estimated_collection_date)}</p>
+                </div>
+                <div className="orders-list-card-actions">
+                  {receiptGroup.status === 'pending' || receiptGroup.status === 'processing' ? (
+                    <button className="btn-small btn-success" onClick={() => receiptGroup.items.forEach(item => handleStatusUpdate(item.id, 'ready'))}>Mark Ready</button>
+                  ) : receiptGroup.status === 'ready' ? (
+                    <>
+                      <button className="btn-small btn-warning" onClick={() => receiptGroup.items.forEach(item => handleStatusUpdate(item.id, 'collected'))} disabled={balance > 0} title={balance > 0 ? 'Pay first' : 'Collect'}>Collect</button>
+                      <button className="btn-small btn-secondary" onClick={() => receiptGroup.items.forEach(item => handleSendReminder(item.id))} disabled={sendingReminder !== null}>{sendingReminder ? '⏳' : '📱 Remind'}</button>
+                    </>
+                  ) : null}
+                  {balance > 0 && (
+                    <button className="btn-small btn-primary" onClick={() => { setSelectedOrderForPayment({ ...receiptGroup.items[0], total_amount: receiptGroup.total_amount, paid_amount: receiptGroup.paid_amount }); setPaymentAmount(balance.toString()); setShowReceivePaymentModal(true); }}>💰 Pay</button>
+                  )}
+                  <button className="btn-small btn-secondary" onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}>View</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {hasMore && !loading && (
+          <div className="load-more-row" style={{ padding: '12px', textAlign: 'center' }}>
+            <button type="button" className="btn-secondary" onClick={() => loadOrders(true, orders.length)} disabled={loadingMore}>
+              {loadingMore ? 'Loading…' : 'Load more orders'}
+            </button>
+          </div>
+        )}
+        </>
       ) : (
         <>
         <div className="orders-table">

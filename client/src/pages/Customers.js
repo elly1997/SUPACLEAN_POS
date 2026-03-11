@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getCustomers, createCustomer, updateCustomer, uploadCustomersExcel, checkServerConnection, sendBalanceReminder } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { useListViewPreference } from '../hooks/useListViewPreference';
+import ListViewToggle from '../components/ListViewToggle';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import './Customers.css';
 
@@ -19,6 +21,7 @@ const CUSTOMERS_EXPORT_COLUMNS = [
 const Customers = () => {
   const { showToast, ToastContainer } = useToast();
   const { branch, hasPermission, selectedBranchId } = useAuth();
+  const [listView, setListView] = useListViewPreference();
   const [customers, setCustomers] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
@@ -323,6 +326,7 @@ const Customers = () => {
             autoComplete="off"
           />
         </div>
+        <ListViewToggle view={listView} setView={setListView} />
       </div>
 
       {showNewCustomer && (
@@ -381,6 +385,71 @@ const Customers = () => {
         </div>
       )}
 
+      {listView === 'card' ? (
+        <div className="customers-cards-container">
+          {editingId && editingCustomer && (
+            <div className="customers-edit-card-inline">
+              <h3>Edit customer</h3>
+              <div className="form-row">
+                <input className="edit-input" value={editingCustomer.name} onChange={(e) => setEditingCustomer({ ...editingCustomer, name: e.target.value })} placeholder="Name" />
+                <input className="edit-input" value={editingCustomer.phone} onChange={(e) => setEditingCustomer({ ...editingCustomer, phone: e.target.value })} placeholder="Phone" />
+                <input className="edit-input" value={editingCustomer.email || ''} onChange={(e) => setEditingCustomer({ ...editingCustomer, email: e.target.value })} placeholder="Email" />
+                <input className="edit-input" value={editingCustomer.address || ''} onChange={(e) => setEditingCustomer({ ...editingCustomer, address: e.target.value })} placeholder="Address" />
+              </div>
+              <div className="form-row">
+                <input className="edit-input" value={editingCustomer.tags || ''} onChange={(e) => setEditingCustomer({ ...editingCustomer, tags: e.target.value })} placeholder="Tags (comma-separated)" style={{ flex: 1 }} />
+                <button type="button" className="btn-small btn-success" onClick={() => handleSave(editingId)}>✓ Save</button>
+                <button type="button" className="btn-small btn-secondary" onClick={handleCancelEdit}>✕ Cancel</button>
+              </div>
+            </div>
+          )}
+          {customers.length === 0 ? (
+            <div className="empty-state-modern">
+              <p className="empty-state-title">No customers found</p>
+              <p className="empty-state-hint">Try a different search or add a new customer above.</p>
+            </div>
+          ) : (
+            <div className="customers-cards-grid">
+              {customers.map(customer => {
+                const balance = customer.outstanding_balance || 0;
+                return (
+                  <div key={customer.id} className="customers-list-card">
+                    <div className="customers-list-card-header">
+                      <div className="customer-avatar-table">{(customer.name || '?').charAt(0).toUpperCase()}</div>
+                      <strong>{customer.name}</strong>
+                    </div>
+                    <div className="customers-list-card-body">
+                      <p>{customer.phone}</p>
+                      <p className="text-muted">{customer.email || '—'}</p>
+                      <p className="text-muted">{customer.address || '—'}</p>
+                      <p>{balance > 0 ? <span style={{ color: 'var(--warning-color)', fontWeight: 'bold' }}>TSh {balance.toLocaleString()}</span> : <span style={{ color: 'var(--success-color)' }}>TSh 0</span>}</p>
+                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
+                        {parseTags(customer.tags).length > 0 ? parseTags(customer.tags).map((tag, idx) => <span key={idx} className="tag-badge">{tag}</span>) : <span className="text-muted">No tags</span>}
+                      </div>
+                    </div>
+                    <div className="customers-list-card-actions">
+                      {hasPermission('canManageCustomers') && editingId !== customer.id && (
+                        <button type="button" className="btn-small btn-primary" onClick={() => handleEdit(customer)}>✏️ Edit</button>
+                      )}
+                      {balance > 0 && (
+                        <button type="button" className="btn-small btn-warning" onClick={() => handleSendBalanceReminder(customer.id)} disabled={sendingReminder === customer.id}>📱 Remind</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {hasMore && !loading && listView === 'card' && (
+            <div className="load-more-row" style={{ padding: '12px', textAlign: 'center' }}>
+              <button type="button" className="btn-secondary" onClick={() => loadCustomers(true, customers.length)} disabled={loadingMore}>
+                {loadingMore ? 'Loading…' : 'Load more customers'}
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+      <>
       <div className="customers-table-container">
         <table className="customers-table">
           <thead>
@@ -610,6 +679,8 @@ const Customers = () => {
             {loadingMore ? 'Loading…' : 'Load more customers'}
           </button>
         </div>
+      )}
+      </>
       )}
     </div>
   );

@@ -172,14 +172,20 @@ async function sendSMS(phone, message, options = {}) {
   }
 }
 
+/** Delivery numbers shown in ready SMS (English and Swahili) */
+const DELIVERY_PHONE_1 = '0713370421';
+const DELIVERY_PHONE_2 = '0752757635';
+
+/** Include Swahili translation in same SMS (set SMS_INCLUDE_SWAHILI=false to disable) */
+function includeSwahili() {
+  return process.env.SMS_INCLUDE_SWAHILI !== 'false';
+}
+
 function generateReadyNotification(receiptNumber, customerName, estimatedDate = null) {
-  let message = `Hello ${customerName}, your laundry is ready for collection! Receipt No: ${receiptNumber}`;
-  if (estimatedDate) {
-    const date = new Date(estimatedDate);
-    const dateStr = date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    message += `. Est. collection: ${dateStr}`;
+  let message = `Hello ${customerName}, your laundry is ready for collection. Receipt: ${receiptNumber}. Please come or send someone to our office to collect. For delivery or transport call ${DELIVERY_PHONE_1} or ${DELIVERY_PHONE_2}. Thank you - SUPACLEAN`;
+  if (includeSwahili()) {
+    message += `\n\n— Kiswahili: Habari ${customerName}, unakumbushwa nguo zako/blankets (Risiti: ${receiptNumber}) zipo tayari kuchukuliwa tafadhali fika au tuma mtu katika ofisi zetu ili kulichukua kuepuka usumbufu. Kwa mahitaji ya usafiri au kuletewa piga ${DELIVERY_PHONE_1} au ${DELIVERY_PHONE_2}. Karibu sana -SUPACLEAN-`;
   }
-  message += `. Thank you - SUPACLEAN`;
   return message;
 }
 
@@ -195,7 +201,7 @@ function generateOrderConfirmation(receiptNumber, customerName, totalAmount, est
 }
 
 /**
- * Format payment_status for display in SMS
+ * Format payment_status for display in SMS (English)
  */
 function formatPaymentStatusForSms(status) {
   const map = {
@@ -208,28 +214,88 @@ function formatPaymentStatusForSms(status) {
 }
 
 /**
- * Order receipt SMS – sent after creating order and printing receipt.
- * Includes: customer name, customer ID, item descriptions, total amount, payment status.
+ * Format payment_status for Swahili SMS
+ */
+function formatPaymentStatusForSmsSwahili(status) {
+  const map = {
+    paid_full: 'Imelipwa',
+    not_paid: 'Haijalipwa',
+    advance: 'Mapema',
+    credit: 'Mkopo'
+  };
+  return map[status] || (status || 'Haijalipwa');
+}
+
+/**
+ * Terms & Conditions URL for SMS (set TERMS_AND_CONDITIONS_URL in .env for full URL, e.g. https://yoursite.com/terms)
+ */
+function getTermsAndConditionsUrl() {
+  return process.env.TERMS_AND_CONDITIONS_URL || '';
+}
+
+/**
+ * Order receipt SMS – sent once after printing receipt. Detailed but brief; includes T&C link.
  *
+ * @param {string} receiptNumber
  * @param {string} customerName
  * @param {string|number} customerId
  * @param {string} itemsDescription - e.g. "2x Wash & Fold (Blue); 1x Iron (Shirts)"
  * @param {number} totalAmount - Total in TSh
  * @param {string} paymentStatus - paid_full, not_paid, advance, credit
+ * @param {string} [estimatedDate] - Optional estimated collection date for SMS
  */
-function generateOrderReceiptSms(customerName, customerId, itemsDescription, totalAmount, paymentStatus) {
+function generateOrderReceiptSms(receiptNumber, customerName, customerId, itemsDescription, totalAmount, paymentStatus, estimatedDate = null) {
   const amountStr = typeof totalAmount === 'number' ? totalAmount.toLocaleString() : String(totalAmount);
   const statusStr = formatPaymentStatusForSms(paymentStatus);
+  const statusStrSw = formatPaymentStatusForSmsSwahili(paymentStatus);
   const items = (itemsDescription && itemsDescription.trim()) ? itemsDescription.trim() : 'Order items';
-  return `SUPACLEAN: Receipt for ${customerName} (ID:${customerId}). ${items}. Total TSh ${amountStr}. Status: ${statusStr}. Thank you.`;
+  const termsUrl = getTermsAndConditionsUrl();
+  let msg = `SUPACLEAN: Hi ${customerName}. Receipt: ${receiptNumber}. ${items}. Total TSh ${amountStr}. ${statusStr}.`;
+  if (estimatedDate) {
+    const d = new Date(estimatedDate);
+    const estStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    msg += ` Est. ready: ${estStr}.`;
+  }
+  if (termsUrl) {
+    msg += ` T&C: ${termsUrl}`;
+  }
+  msg += ' Thank you.';
+  if (includeSwahili()) {
+    let sw = `\n\n— Kiswahili: SUPACLEAN: Habari ${customerName}. Risiti: ${receiptNumber}. ${items}. Jumla TSh ${amountStr}. ${statusStrSw}.`;
+    if (estimatedDate) {
+      const d = new Date(estimatedDate);
+      const estStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      sw += ` Tarehe ya kukua: ${estStr}.`;
+    }
+    if (termsUrl) {
+      sw += ` Masharti: ${termsUrl}`;
+    }
+    sw += ' Asante.';
+    msg += sw;
+  }
+  return msg;
 }
 
-function generateCollectionReminder(receiptNumber, customerName, hoursOverdue = 0) {
-  let message = `Hello ${customerName}, reminder: Your laundry (Receipt: ${receiptNumber}) is ready for collection`;
-  if (hoursOverdue > 0) {
-    message += ` (overdue by ${hoursOverdue} hour${hoursOverdue > 1 ? 's' : ''})`;
+/**
+ * Collection reminder SMS – shows how many days items have been in storage since the due date.
+ * @param {string} receiptNumber
+ * @param {string} customerName
+ * @param {number} daysOverdue - Days since estimated_collection_date (due date)
+ */
+function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0) {
+  let message = `Hello ${customerName}, reminder: Your laundry (Receipt: ${receiptNumber}) is ready for collection.`;
+  if (daysOverdue > 0) {
+    message += ` Your items have been in our storage for ${daysOverdue} day${daysOverdue > 1 ? 's' : ''} since the due date. Please collect.`;
   }
-  message += `. Thank you - SUPACLEAN`;
+  message += ` Thank you - SUPACLEAN`;
+  if (includeSwahili()) {
+    let sw = `\n\n— Kiswahili: Habari ${customerName}, ukumbusho: Nguo zako (Risiti: ${receiptNumber}) tayari kuchukuliwa.`;
+    if (daysOverdue > 0) {
+      sw += ` Bidhaa zako zimekuwa kwenye ghala yetu siku ${daysOverdue} tangu tarehe ya ushiriki. Tafadhali zikachukue.`;
+    }
+    sw += ' Asante - SUPACLEAN';
+    message += sw;
+  }
   return message;
 }
 
@@ -266,5 +332,7 @@ module.exports = {
   generateInvoiceReminder,
   generatePaymentNoticeShort,
   generateOrderReceiptSms,
-  formatPaymentStatusForSms
+  getTermsAndConditionsUrl,
+  formatPaymentStatusForSms,
+  formatPaymentStatusForSmsSwahili
 };

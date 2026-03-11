@@ -3,12 +3,15 @@ import { useNavigate, Link } from 'react-router-dom';
 import { getDailySummary, getOrders, updateOrderStatus, getCollectionQueue } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { useListViewPreference } from '../hooks/useListViewPreference';
+import ListViewToggle from '../components/ListViewToggle';
 import './Dashboard.css';
 
 const Dashboard = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
   const { selectedBranchId } = useAuth();
+  const [listView, setListView] = useListViewPreference();
   const [summary, setSummary] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
   const [readyOrders, setReadyOrders] = useState([]);
@@ -204,10 +207,11 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="dashboard-reports-link-wrap">
+      <div className="dashboard-reports-link-wrap" style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
         <button type="button" className="btn-link dashboard-reports-link" onClick={viewInReports}>
           📈 View in Reports (last 7 days)
         </button>
+        <ListViewToggle view={listView} setView={setListView} />
       </div>
 
       <div className="dashboard-grid">
@@ -237,65 +241,105 @@ const Dashboard = () => {
             />
           </div>
           {readyQueue.length > 0 ? (
-            <div className="dashboard-table-wrap">
-              <table className="dashboard-table">
-                <thead>
-                  <tr>
-                    <th>Receipt</th>
-                    <th>Customer</th>
-                    <th>Phone</th>
-                    <th>Items</th>
-                    <th>Total</th>
-                    <th>Balance</th>
-                    <th>Status</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {readyQueue.map(receipt => {
-                    const balance = (receipt.total_amount || 0) - (receipt.paid_amount || 0);
-                    const isOverdue = receipt.is_overdue;
-                    const hoursOverdue = receipt.hours_overdue || 0;
-                    const itemCount = receipt.receipt_item_count || 1;
-                    const timeRemaining = !isOverdue && receipt.estimated_collection_date ? (() => {
-                      const estDate = new Date(receipt.estimated_collection_date);
-                      const now = new Date();
-                      const diffHours = Math.floor((estDate - now) / (1000 * 60 * 60));
-                      if (diffHours <= 2 && diffHours > 0) return `${diffHours}h left`;
-                      return null;
-                    })() : null;
-                    return (
-                      <tr key={receipt.receipt_number} className={isOverdue ? 'row-overdue' : ''}>
-                        <td>
-                          <Link to={`/collection?receipt=${encodeURIComponent(receipt.receipt_number)}`} className={`receipt-badge receipt-link ${isOverdue ? 'overdue-badge' : ''}`} title="Open in Collection">
-                            {receipt.receipt_number}
-                          </Link>
-                        </td>
-                        <td><strong>{receipt.customer_name}</strong></td>
-                        <td className="text-muted">{receipt.customer_phone}</td>
-                        <td>{itemCount}</td>
-                        <td className="amount-cell">TSh {(receipt.total_amount || 0).toLocaleString()}</td>
-                        <td>{balance > 0 ? <span className="balance-due">TSh {balance.toLocaleString()}</span> : '—'}</td>
-                        <td>
-                          {isOverdue && hoursOverdue > 0 && <span className="overdue-indicator">⚠️ {hoursOverdue}h overdue</span>}
-                          {timeRemaining && <span className="time-remaining">⏰ {timeRemaining}</span>}
-                          {!isOverdue && !timeRemaining && '—'}
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="btn-small btn-success btn-table-action"
-                            onClick={() => navigate(`/collection?receipt=${receipt.receipt_number}`)}
-                          >
-                            Collect
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            listView === 'card' ? (
+              <div className="dashboard-cards-grid">
+                {readyQueue.map(receipt => {
+                  const balance = (receipt.total_amount || 0) - (receipt.paid_amount || 0);
+                  const isOverdue = receipt.is_overdue;
+                  const hoursOverdue = receipt.hours_overdue || 0;
+                  const itemCount = receipt.receipt_item_count || 1;
+                  const timeRemaining = !isOverdue && receipt.estimated_collection_date ? (() => {
+                    const estDate = new Date(receipt.estimated_collection_date);
+                    const now = new Date();
+                    const diffHours = Math.floor((estDate - now) / (1000 * 60 * 60));
+                    if (diffHours <= 2 && diffHours > 0) return `${diffHours}h left`;
+                    return null;
+                  })() : null;
+                  return (
+                    <div key={receipt.receipt_number} className={`dashboard-list-card ${isOverdue ? 'overdue' : ''}`}>
+                      <div className="dashboard-list-card-header">
+                        <Link to={`/collection?receipt=${encodeURIComponent(receipt.receipt_number)}`} className={`receipt-badge receipt-link ${isOverdue ? 'overdue-badge' : ''}`}>
+                          {receipt.receipt_number}
+                        </Link>
+                        {isOverdue && hoursOverdue > 0 && <span className="overdue-indicator">⚠️ {hoursOverdue}h overdue</span>}
+                        {timeRemaining && <span className="time-remaining">⏰ {timeRemaining}</span>}
+                      </div>
+                      <div className="dashboard-list-card-body">
+                        <p><strong>{receipt.customer_name}</strong></p>
+                        <p className="text-muted">{receipt.customer_phone}</p>
+                        <p>{itemCount} item(s) · TSh {(receipt.total_amount || 0).toLocaleString()}</p>
+                        <p>{balance > 0 ? <span className="balance-due">Balance TSh {balance.toLocaleString()}</span> : 'Paid'}</p>
+                      </div>
+                      <div className="dashboard-list-card-actions">
+                        <button type="button" className="btn-small btn-success" onClick={() => navigate(`/collection?receipt=${receipt.receipt_number}`)}>
+                          Collect
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="dashboard-table-wrap">
+                <table className="dashboard-table">
+                  <thead>
+                    <tr>
+                      <th>Receipt</th>
+                      <th>Customer</th>
+                      <th>Phone</th>
+                      <th>Items</th>
+                      <th>Total</th>
+                      <th>Balance</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {readyQueue.map(receipt => {
+                      const balance = (receipt.total_amount || 0) - (receipt.paid_amount || 0);
+                      const isOverdue = receipt.is_overdue;
+                      const hoursOverdue = receipt.hours_overdue || 0;
+                      const itemCount = receipt.receipt_item_count || 1;
+                      const timeRemaining = !isOverdue && receipt.estimated_collection_date ? (() => {
+                        const estDate = new Date(receipt.estimated_collection_date);
+                        const now = new Date();
+                        const diffHours = Math.floor((estDate - now) / (1000 * 60 * 60));
+                        if (diffHours <= 2 && diffHours > 0) return `${diffHours}h left`;
+                        return null;
+                      })() : null;
+                      return (
+                        <tr key={receipt.receipt_number} className={isOverdue ? 'row-overdue' : ''}>
+                          <td>
+                            <Link to={`/collection?receipt=${encodeURIComponent(receipt.receipt_number)}`} className={`receipt-badge receipt-link ${isOverdue ? 'overdue-badge' : ''}`} title="Open in Collection">
+                              {receipt.receipt_number}
+                            </Link>
+                          </td>
+                          <td><strong>{receipt.customer_name}</strong></td>
+                          <td className="text-muted">{receipt.customer_phone}</td>
+                          <td>{itemCount}</td>
+                          <td className="amount-cell">TSh {(receipt.total_amount || 0).toLocaleString()}</td>
+                          <td>{balance > 0 ? <span className="balance-due">TSh {balance.toLocaleString()}</span> : '—'}</td>
+                          <td>
+                            {isOverdue && hoursOverdue > 0 && <span className="overdue-indicator">⚠️ {hoursOverdue}h overdue</span>}
+                            {timeRemaining && <span className="time-remaining">⏰ {timeRemaining}</span>}
+                            {!isOverdue && !timeRemaining && '—'}
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="btn-small btn-success btn-table-action"
+                              onClick={() => navigate(`/collection?receipt=${receipt.receipt_number}`)}
+                            >
+                              Collect
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
           ) : (
             <div className="empty-state-modern">
               <div className="empty-icon">📭</div>
@@ -323,50 +367,71 @@ const Dashboard = () => {
             />
           </div>
           {groupedPending.length > 0 ? (
-            <div className="dashboard-table-wrap">
-              <table className="dashboard-table">
-                <thead>
-                  <tr>
-                    <th>Receipt</th>
-                    <th>Customer</th>
-                    <th>Phone</th>
-                    <th>Items</th>
-                    <th>Total</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {groupedPending.map((receiptGroup) => (
-                    <tr key={receiptGroup.receipt_number}>
-                      <td><span className="receipt-badge">{receiptGroup.receipt_number}</span></td>
-                      <td><strong>{receiptGroup.customer_name}</strong></td>
-                      <td className="text-muted">{receiptGroup.customer_phone}</td>
-                      <td>{receiptGroup.items.length}</td>
-                      <td className="amount-cell">TSh {(receiptGroup.total_amount || 0).toLocaleString()}</td>
-                      <td>
-                        <div className="quick-actions">
-                          <button
-                            type="button"
-                            className="btn-small btn-secondary btn-table-action"
-                            onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}
-                            title="View receipt"
-                          >
-                            View
-                          </button>
-                          <button
-                            type="button"
-                            className="btn-small btn-success btn-table-action"
-                            onClick={() => handleReceiptStatusUpdate(receiptGroup, 'ready')}
-                          >
-                            Mark Ready
-                          </button>
-                        </div>
-                      </td>
+            listView === 'card' ? (
+              <div className="dashboard-cards-grid">
+                {groupedPending.map((receiptGroup) => (
+                  <div key={receiptGroup.receipt_number} className="dashboard-list-card">
+                    <div className="dashboard-list-card-header">
+                      <span className="receipt-badge">{receiptGroup.receipt_number}</span>
+                    </div>
+                    <div className="dashboard-list-card-body">
+                      <p><strong>{receiptGroup.customer_name}</strong></p>
+                      <p className="text-muted">{receiptGroup.customer_phone}</p>
+                      <p>{receiptGroup.items.length} item(s) · TSh {(receiptGroup.total_amount || 0).toLocaleString()}</p>
+                    </div>
+                    <div className="dashboard-list-card-actions">
+                      <button type="button" className="btn-small btn-secondary" onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}>View</button>
+                      <button type="button" className="btn-small btn-success" onClick={() => handleReceiptStatusUpdate(receiptGroup, 'ready')}>Mark Ready</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="dashboard-table-wrap">
+                <table className="dashboard-table">
+                  <thead>
+                    <tr>
+                      <th>Receipt</th>
+                      <th>Customer</th>
+                      <th>Phone</th>
+                      <th>Items</th>
+                      <th>Total</th>
+                      <th>Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {groupedPending.map((receiptGroup) => (
+                      <tr key={receiptGroup.receipt_number}>
+                        <td><span className="receipt-badge">{receiptGroup.receipt_number}</span></td>
+                        <td><strong>{receiptGroup.customer_name}</strong></td>
+                        <td className="text-muted">{receiptGroup.customer_phone}</td>
+                        <td>{receiptGroup.items.length}</td>
+                        <td className="amount-cell">TSh {(receiptGroup.total_amount || 0).toLocaleString()}</td>
+                        <td>
+                          <div className="quick-actions">
+                            <button
+                              type="button"
+                              className="btn-small btn-secondary btn-table-action"
+                              onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}
+                              title="View receipt"
+                            >
+                              View
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-small btn-success btn-table-action"
+                              onClick={() => handleReceiptStatusUpdate(receiptGroup, 'ready')}
+                            >
+                              Mark Ready
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
           ) : (
             <div className="empty-state-modern">
               <div className="empty-icon">✨</div>

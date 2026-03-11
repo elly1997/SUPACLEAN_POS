@@ -1,0 +1,38 @@
+.list-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md, 8px);
+  overflow: hidden;
+  background: var(--bg-tertiary, #f0f0f5);
+}
+
+[data-theme="dark"] .list-view-toggle {
+  background: rgba(44, 44, 46, 0.6);
+}
+
+.list-view-toggle .toggle-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background, color 0.15s ease;
+}
+
+.list-view-toggle .toggle-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.list-view-toggle .toggle-btn.active {
+  background: var(--primary-color);
+  color: #fff;
+}
+
+.list-view-toggle .toggle-btn + .toggle-btn {
+  border-left: 1px solid var(--border-color);
+}

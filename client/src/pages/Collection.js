@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { getOrderByReceipt, collectOrder, receivePayment, getCustomers, searchOrdersByCustomer, getCollectionQueue } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { useListViewPreference } from '../hooks/useListViewPreference';
+import ListViewToggle from '../components/ListViewToggle';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import './Collection.css';
 
@@ -28,6 +30,7 @@ const Collection = () => {
   const [searchParams] = useSearchParams();
   const { showToast, ToastContainer } = useToast();
   const { branch } = useAuth();
+  const [listView, setListView] = useListViewPreference();
   const [receiptNumber, setReceiptNumber] = useState(searchParams.get('receipt') || '');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [searchByPhone, setSearchByPhone] = useState(false);
@@ -50,8 +53,66 @@ const Collection = () => {
   const [autocompleteSuggestions, setAutocompleteSuggestions] = useState([]);
   const [showAutocomplete, setShowAutocomplete] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const [queueSearch, setQueueSearch] = useState('');
+  const [queueSearchDebounced, setQueueSearchDebounced] = useState('');
+  const [customerReceiptsList, setCustomerReceiptsList] = useState([]); // All receipts for current customer (when searched by customer)
   const searchInputRef = useRef(null);
   const autocompleteRef = useRef(null);
+
+  /** Group order rows by receipt_number for table display */
+  const groupOrdersByReceipt = (orders) => {
+    if (!orders || !orders.length) return [];
+    const byReceipt = {};
+    orders.forEach((row) => {
+      const rn = row.receipt_number;
+      if (!byReceipt[rn]) {
+        byReceipt[rn] = {
+          receipt_number: rn,
+          customer_name: row.customer_name,
+          customer_phone: row.customer_phone,
+          order_date: row.order_date,
+          estimated_collection_date: row.estimated_collection_date,
+          status: row.status,
+          collected_date: row.collected_date,
+          payment_method: row.payment_method,
+          ready_date: row.ready_date,
+          items: [],
+          total_amount: 0,
+          paid_amount: 0
+        };
+      }
+      byReceipt[rn].items.push(row);
+      byReceipt[rn].total_amount += parseFloat(row.total_amount) || 0;
+    });
+    return Object.values(byReceipt).map((g) => ({
+      ...g,
+      paid_amount: g.items[0]?.paid_amount != null ? parseFloat(g.items[0].paid_amount) : 0,
+      item_count: g.items.length
+    }));
+  };
+
+  useEffect(() => {
+    const t = setTimeout(() => setQueueSearchDebounced(queueSearch), 400);
+    return () => clearTimeout(t);
+  }, [queueSearch]);
+
+  const loadQueue = useCallback(async () => {
+    try {
+      setQueueLoading(true);
+      const params = { limit: 20 };
+      if (queueSearchDebounced && queueSearchDebounced.trim()) {
+        params.customer = queueSearchDebounced.trim();
+      }
+      const res = await getCollectionQueue(params);
+      setQueueOrders(res.data || []);
+      if (res.fromCache && res.syncedAt) setLastSyncedAt(res.syncedAt); else setLastSyncedAt(null);
+    } catch (error) {
+      console.error('Error loading queue:', error);
+      setQueueOrders([]);
+    } finally {
+      setQueueLoading(false);
+    }
+  }, [queueSearchDebounced]);
 
   useEffect(() => {
     loadQueue();
@@ -59,7 +120,7 @@ const Collection = () => {
       if (showQueue) loadQueue();
     }, 30000);
     return () => clearInterval(queueInterval);
-  }, [showQueue]);
+  }, [showQueue, loadQueue]);
 
   // Focus search input on mount so cashier can type or scan immediately
   useEffect(() => {
@@ -79,6 +140,7 @@ const Collection = () => {
       setLoading(true);
       setError('');
       setOrder(null);
+      setCustomerReceiptsList([]);
       setShowAutocomplete(false);
       try {
         const singleRes = await getOrderByReceipt(r.trim());
@@ -162,20 +224,6 @@ const Collection = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const loadQueue = async () => {
-    try {
-      setQueueLoading(true);
-      const res = await getCollectionQueue({ limit: 20 });
-      setQueueOrders(res.data || []);
-      if (res.fromCache && res.syncedAt) setLastSyncedAt(res.syncedAt); else setLastSyncedAt(null);
-    } catch (error) {
-      console.error('Error loading queue:', error);
-      setQueueOrders([]);
-    } finally {
-      setQueueLoading(false);
-    }
-  };
-
   const handleSearchByReceipt = async () => {
     if (!receiptNumber.trim()) {
       setError('Please enter a receipt number');
@@ -185,8 +233,9 @@ const Collection = () => {
     setLoading(true);
     setError('');
     setOrder(null);
-    setSearchedByCustomer(false); // Receipt search, not customer search
-    setShowAutocomplete(false); // Close autocomplete
+    setSearchedByCustomer(false);
+    setCustomerReceiptsList([]);
+    setShowAutocomplete(false);
 
     try {
       // Case-insensitive receipt search (backend handles case-insensitivity)
@@ -232,179 +281,113 @@ const Collection = () => {
     setLoading(true);
     setError('');
     setOrder(null);
+    setCustomerReceiptsList([]);
     setShowCustomerResults(false);
-    setShowAutocomplete(false); // Close autocomplete
-    setSearchedByCustomer(true); // Mark as customer search
+    setShowAutocomplete(false);
+    setSearchedByCustomer(true);
 
     try {
-      // Case-insensitive search - search term is already trimmed
       const searchTerm = phoneNumber.trim();
       const customersRes = await getCustomers(searchTerm);
       const matchingCustomers = customersRes.data || [];
-      
+
       if (matchingCustomers.length > 1) {
-        // Show customer list in compact table format
         setCustomerSearchResults(matchingCustomers);
         setShowCustomerResults(true);
         setLoading(false);
         return;
       }
-      
-      // If only one customer or no customers, proceed with order search
+
       const isPhone = /\d/.test(searchTerm);
-      const params = isPhone 
-        ? { phone: searchTerm, status: 'ready' }
-        : { name: searchTerm, status: 'ready' };
-      
-      const res = await searchOrdersByCustomer(params);
-      
-      if (!res.data || res.data.length === 0) {
-        // Try without status filter if no ready orders found
-        const allParams = isPhone ? { phone: searchTerm } : { name: searchTerm };
-        const allRes = await searchOrdersByCustomer(allParams);
-        
-        if (!allRes.data || allRes.data.length === 0) {
-          throw new Error('No orders found for this customer');
-        }
-        
-        // If found but not ready, show the latest order and fetch all items
-        const latestOrder = allRes.data[0];
-        try {
-          const receiptRes = await getOrderByReceipt(latestOrder.receipt_number);
-          const receiptOrder = receiptRes.data;
-          if (receiptOrder && receiptOrder.all_items) {
-            setAllReceiptOrders(receiptOrder.all_items);
-            setOrder(receiptOrder);
-            const itemCount = receiptOrder.receipt_item_count || receiptOrder.all_items.length;
-            if (latestOrder.status !== 'ready') {
-              showToast(`Found receipt (${itemCount} ${itemCount === 1 ? 'item' : 'items'}) but status is ${latestOrder.status}.`, 'warning');
-            } else {
-              showToast(`Receipt found (${itemCount} ${itemCount === 1 ? 'item' : 'items'})`, 'success');
-            }
-          } else {
-            setOrder(latestOrder);
-            setAllReceiptOrders([latestOrder]);
-            if (latestOrder.status !== 'ready') {
-              showToast(`Found order but status is ${latestOrder.status}. Latest order shown.`, 'warning');
-            } else {
-              showToast('Order found', 'success');
-            }
-          }
-        } catch (err) {
-          setOrder(latestOrder);
-          setAllReceiptOrders([latestOrder]);
-          if (latestOrder.status !== 'ready') {
-            showToast(`Found order but status is ${latestOrder.status}. Latest order shown.`, 'warning');
-          } else {
-            showToast('Order found', 'success');
-          }
-        }
-      } else {
-        // Found ready orders, get the most recent one and fetch all items for its receipt
-        const latestOrder = res.data[0];
-        // Fetch all items for this receipt
-        try {
-          const receiptRes = await getOrderByReceipt(latestOrder.receipt_number);
-          const receiptOrder = receiptRes.data;
-          if (receiptOrder && receiptOrder.all_items) {
-            setAllReceiptOrders(receiptOrder.all_items);
-            setOrder(receiptOrder);
-            const itemCount = receiptOrder.receipt_item_count || receiptOrder.all_items.length;
-            if (res.data.length > 1) {
-              showToast(`Found ${res.data.length} ready orders. Showing receipt with ${itemCount} ${itemCount === 1 ? 'item' : 'items'}.`, 'info');
-            } else {
-              showToast(`Receipt found (${itemCount} ${itemCount === 1 ? 'item' : 'items'})`, 'success');
-            }
-          } else {
-            setOrder(latestOrder);
-            setAllReceiptOrders([latestOrder]);
-            if (res.data.length > 1) {
-              showToast(`Found ${res.data.length} ready orders. Showing the most recent.`, 'info');
-            } else {
-              showToast('Order found', 'success');
-            }
-          }
-        } catch (err) {
-          // Fallback to single order
-          setOrder(latestOrder);
-          setAllReceiptOrders([latestOrder]);
-          if (res.data.length > 1) {
-            showToast(`Found ${res.data.length} ready orders. Showing the most recent.`, 'info');
-          } else {
-            showToast('Order found', 'success');
-          }
-        }
+      const allParams = isPhone ? { phone: searchTerm } : { name: searchTerm };
+      const allRes = await searchOrdersByCustomer(allParams);
+
+      if (!allRes.data || allRes.data.length === 0) {
+        throw new Error('No orders found for this customer');
       }
+
+      const groups = groupOrdersByReceipt(allRes.data);
+      setCustomerReceiptsList(groups);
+
+      const first = groups[0];
+      try {
+        const receiptRes = await getOrderByReceipt(first.receipt_number);
+        const receiptOrder = receiptRes.data;
+        if (receiptOrder && receiptOrder.all_items) {
+          setAllReceiptOrders(receiptOrder.all_items);
+          setOrder(receiptOrder);
+        } else {
+          setOrder(first.items[0]);
+          setAllReceiptOrders(first.items);
+        }
+      } catch (err) {
+        setOrder(first.items[0]);
+        setAllReceiptOrders(first.items);
+      }
+      setReceiptNumber(first.receipt_number);
+      showToast(groups.length === 1 ? '1 receipt found' : `${groups.length} receipts found. Select one below.`, 'success');
     } catch (err) {
       const errorMsg = err.response?.data?.error || err.message || 'No orders found';
       setError(errorMsg);
       showToast(errorMsg, 'error');
       setOrder(null);
+      setCustomerReceiptsList([]);
     } finally {
       setLoading(false);
     }
   };
-  
+
   const handleSelectCustomer = async (customer) => {
     setShowCustomerResults(false);
     setPhoneNumber(customer.phone);
-    // Search for orders for this customer
+    setCustomerReceiptsList([]);
     try {
-      const res = await searchOrdersByCustomer({ phone: customer.phone, status: 'ready' });
-      if (res.data && res.data.length > 0) {
-        const latestOrder = res.data[0];
-        // Fetch all items for this receipt
-        try {
-          const receiptRes = await getOrderByReceipt(latestOrder.receipt_number);
-          const receiptOrder = receiptRes.data;
-          if (receiptOrder && receiptOrder.all_items) {
-            setAllReceiptOrders(receiptOrder.all_items);
-            setOrder(receiptOrder);
-            const itemCount = receiptOrder.receipt_item_count || receiptOrder.all_items.length;
-            if (res.data.length > 1) {
-              showToast(`Found ${res.data.length} ready orders. Showing receipt with ${itemCount} ${itemCount === 1 ? 'item' : 'items'}.`, 'info');
-            } else {
-              showToast(`Receipt found (${itemCount} ${itemCount === 1 ? 'item' : 'items'})`, 'success');
-            }
-          } else {
-            setOrder(latestOrder);
-            setAllReceiptOrders([latestOrder]);
-            if (res.data.length > 1) {
-              showToast(`Found ${res.data.length} ready orders. Showing first one.`, 'info');
-            }
-          }
-        } catch (err) {
-          setOrder(latestOrder);
-          setAllReceiptOrders([latestOrder]);
-          if (res.data.length > 1) {
-            showToast(`Found ${res.data.length} ready orders. Showing first one.`, 'info');
-          }
-        }
-      } else {
-        // Try without status filter
-        const allRes = await searchOrdersByCustomer({ phone: customer.phone });
-        if (allRes.data && allRes.data.length > 0) {
-          const latestOrder = allRes.data[0];
-          try {
-            const receiptRes = await getOrderByReceipt(latestOrder.receipt_number);
-            const receiptOrder = receiptRes.data;
-            if (receiptOrder && receiptOrder.all_items) {
-              setAllReceiptOrders(receiptOrder.all_items);
-              setOrder(receiptOrder);
-            } else {
-              setOrder(latestOrder);
-              setAllReceiptOrders([latestOrder]);
-            }
-          } catch (err) {
-            setOrder(latestOrder);
-            setAllReceiptOrders([latestOrder]);
-          }
-        } else {
-          showToast('No orders found for this customer', 'info');
-        }
+      const allRes = await searchOrdersByCustomer({ phone: customer.phone });
+      if (!allRes.data || allRes.data.length === 0) {
+        showToast('No orders found for this customer', 'info');
+        return;
       }
+      const groups = groupOrdersByReceipt(allRes.data);
+      setCustomerReceiptsList(groups);
+      setSearchedByCustomer(true);
+
+      const first = groups[0];
+      try {
+        const receiptRes = await getOrderByReceipt(first.receipt_number);
+        const receiptOrder = receiptRes.data;
+        if (receiptOrder && receiptOrder.all_items) {
+          setAllReceiptOrders(receiptOrder.all_items);
+          setOrder(receiptOrder);
+        } else {
+          setOrder(first.items[0]);
+          setAllReceiptOrders(first.items);
+        }
+      } catch (err) {
+        setOrder(first.items[0]);
+        setAllReceiptOrders(first.items);
+      }
+      setReceiptNumber(first.receipt_number);
+      showToast(groups.length === 1 ? '1 receipt' : `${groups.length} receipts`, 'success');
     } catch (err) {
       showToast('Error loading orders: ' + (err.response?.data?.error || err.message), 'error');
+    }
+  };
+
+  const handleSelectReceiptFromList = async (receiptGroup) => {
+    setReceiptNumber(receiptGroup.receipt_number);
+    try {
+      const receiptRes = await getOrderByReceipt(receiptGroup.receipt_number);
+      const receiptOrder = receiptRes.data;
+      if (receiptOrder && receiptOrder.all_items) {
+        setAllReceiptOrders(receiptOrder.all_items);
+        setOrder(receiptOrder);
+      } else {
+        setOrder(receiptGroup.items[0]);
+        setAllReceiptOrders(receiptGroup.items);
+      }
+    } catch (err) {
+      setOrder(receiptGroup.items[0]);
+      setAllReceiptOrders(receiptGroup.items);
     }
   };
 
@@ -951,14 +934,73 @@ Thank you for choosing SUPACLEAN!
                 </span>
               )}
             </div>
-            <button className="btn-small btn-secondary" onClick={loadQueue} disabled={queueLoading}>
-              {queueLoading ? '⏳ Loading...' : '🔄 Refresh'}
-            </button>
+            <div className="queue-header-actions">
+              <div className="queue-search-wrap">
+                <input
+                  type="text"
+                  className="queue-search-input"
+                  placeholder="Search by customer name or phone..."
+                  value={queueSearch}
+                  onChange={(e) => setQueueSearch(e.target.value)}
+                  aria-label="Search queue by customer name or phone"
+                />
+                {queueSearch && (
+                  <button
+                    type="button"
+                    className="queue-search-clear"
+                    onClick={() => setQueueSearch('')}
+                    aria-label="Clear queue search"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              <ListViewToggle view={listView} setView={setListView} />
+              <button className="btn-small btn-secondary" onClick={loadQueue} disabled={queueLoading}>
+                {queueLoading ? '⏳ Loading...' : '🔄 Refresh'}
+              </button>
+            </div>
           </div>
           {queueLoading && queueOrders.length === 0 ? (
             <div className="loading">Loading queue...</div>
           ) : queueOrders.length === 0 ? (
             <div className="empty-state">No ready orders in queue</div>
+          ) : listView === 'card' ? (
+            <div className="queue-cards-grid">
+              {queueOrders.map((queueOrder) => {
+                const balance = getBalanceDue(queueOrder);
+                const overdue = queueOrder.is_overdue || isOverdue(queueOrder);
+                const itemCount = queueOrder.receipt_item_count || 1;
+                const isSelected = queueOrder.receipt_number === order?.receipt_number;
+                return (
+                  <div
+                    key={queueOrder.receipt_number || queueOrder.id}
+                    className={`queue-list-card ${overdue ? 'overdue' : ''} ${isSelected ? 'selected' : ''}`}
+                    onClick={() => {
+                      setReceiptNumber(queueOrder.receipt_number);
+                      setOrder(queueOrder);
+                      setShowQueue(false);
+                    }}
+                  >
+                    <div className="queue-list-card-header">
+                      <strong>{queueOrder.receipt_number}</strong>
+                      {overdue && <span className="overdue-indicator">⚠️ Overdue</span>}
+                    </div>
+                    <div className="queue-list-card-body">
+                      <p><strong>{queueOrder.customer_name}</strong></p>
+                      <p className="text-muted">{queueOrder.customer_phone}</p>
+                      <p>{itemCount} item(s) · TSh {(queueOrder.total_amount ?? 0).toLocaleString()}</p>
+                      <p>{balance > 0 ? <span className="balance-due">Balance TSh {balance.toLocaleString()}</span> : 'Paid'}</p>
+                      {queueOrder.estimated_collection_date && (
+                        <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          Est: {new Date(queueOrder.estimated_collection_date).toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           ) : (
             <div className="queue-table-wrapper">
               <table className="queue-table">
@@ -1218,21 +1260,59 @@ Thank you for choosing SUPACLEAN!
                 </div>
               );
             })()}
+
+            {customerReceiptsList.length > 0 && (
+              <div className="customer-receipts-table-wrap">
+                <h3 className="receipts-table-title">All receipts for this customer</h3>
+                <div className="customer-receipts-table-scroll">
+                  <table className="customer-receipts-table">
+                    <thead>
+                      <tr>
+                        <th>Receipt No</th>
+                        <th>Order Date</th>
+                        <th>Items</th>
+                        <th>Total</th>
+                        <th>Paid</th>
+                        <th>Balance</th>
+                        <th>Status</th>
+                        <th>Collected</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {customerReceiptsList.map((rg) => {
+                        const bal = (rg.total_amount || 0) - (rg.paid_amount || 0);
+                        const isSelected = order && rg.receipt_number === order.receipt_number;
+                        return (
+                          <tr
+                            key={rg.receipt_number}
+                            className={isSelected ? 'selected-receipt-row' : ''}
+                            onClick={() => handleSelectReceiptFromList(rg)}
+                          >
+                            <td><strong>{rg.receipt_number}</strong></td>
+                            <td>{rg.order_date ? new Date(rg.order_date).toLocaleString() : '—'}</td>
+                            <td>{rg.item_count}</td>
+                            <td>TSh {(rg.total_amount || 0).toLocaleString()}</td>
+                            <td>TSh {(rg.paid_amount || 0).toLocaleString()}</td>
+                            <td>{bal > 0 ? <span className="balance-due">TSh {bal.toLocaleString()}</span> : '—'}</td>
+                            <td><span className={`status-badge status-${rg.status}`}>{rg.status}</span></td>
+                            <td>{rg.collected_date ? new Date(rg.collected_date).toLocaleString() : '—'}</td>
+                            <td><button type="button" className="btn-small btn-secondary" onClick={(e) => { e.stopPropagation(); handleSelectReceiptFromList(rg); }}>View</button></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             <div className="order-header-modern">
               <div>
                 <h2>Receipt: {order.receipt_number}</h2>
-                {(order.receipt_item_count > 1 || (allReceiptOrders.length > 1)) && (
-                  <p className="order-date" style={{ color: 'var(--primary-color)', fontWeight: '600', marginTop: '4px' }}>
-                    📦 {order.receipt_item_count || allReceiptOrders.length} {order.receipt_item_count === 1 ? 'item' : 'items'} on this receipt
-                  </p>
-                )}
-                <p className="order-date">
-                  Order Date: {new Date(order.order_date).toLocaleString()}
-                </p>
+                <p className="order-date">Order Date: {new Date(order.order_date).toLocaleString()}</p>
                 {order.estimated_collection_date && (
-                  <p className="order-date" style={{ color: 'var(--primary-color)', fontWeight: '600' }}>
-                    📅 Estimated Collection: {new Date(order.estimated_collection_date).toLocaleString()}
-                  </p>
+                  <p className="order-date">Est. Collection: {new Date(order.estimated_collection_date).toLocaleString()}</p>
                 )}
               </div>
               <div className={`status-badge-modern status-${order.status}`}>
@@ -1240,143 +1320,68 @@ Thank you for choosing SUPACLEAN!
               </div>
             </div>
 
-            <div className={searchedByCustomer ? "order-info-grid-simple" : "order-info-grid-modern"}>
-              {!searchedByCustomer && (
-                <div className="info-section-modern">
-                  <h3>👤 Customer Information</h3>
-                  <div className="info-item-modern">
-                    <strong>Name:</strong> {order.customer_name}
-                  </div>
-                  <div className="info-item-modern">
-                    <strong>Phone:</strong> {order.customer_phone}
-                  </div>
-                  {order.customer_email && (
-                    <div className="info-item-modern">
-                      <strong>Email:</strong> {order.customer_email}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="info-section-modern">
-                <h3>🧺 Items on Receipt</h3>
-                {(() => {
-                  // Get all items - prioritize all_items from order, then allReceiptOrders
-                  // Always use the full list if available, regardless of count
-                  const allItems = (order.all_items && order.all_items.length > 0) 
-                    ? order.all_items 
-                    : (allReceiptOrders.length > 0 ? allReceiptOrders : [order]);
-                  
-                  // Always show list view if we have all_items or multiple items in allReceiptOrders
-                  // This ensures we show all items from the receipt, not just a single item
-                  const shouldShowList = (order.all_items && order.all_items.length > 0) || 
-                                       (allReceiptOrders.length > 0) || 
-                                       (allItems.length > 1);
-                  
-                  return shouldShowList ? (
-                    <div style={{ maxHeight: '300px', overflowY: 'auto', marginTop: '8px' }}>
-                      {allItems.map((item, idx) => {
-                        // Get item name - prefer garment_type, then item name from items table, then service_name
-                        const itemName = item.garment_type || item.item_name || item.service_name || 'Item';
-                        const itemColor = item.color || '';
-                        const itemQty = item.quantity || 1;
-                        const itemAmount = parseFloat(item.total_amount || 0);
-                        
-                        return (
-                          <div key={item.id || idx} style={{ 
-                            padding: '10px', 
-                            marginBottom: '8px', 
-                            background: 'var(--bg-hover)', 
-                            borderRadius: '8px',
-                            border: '1px solid var(--border-color)'
-                          }}>
-                            <div style={{ fontWeight: '600', marginBottom: '4px', color: 'var(--text-primary)' }}>
-                              {itemName}
-                              {itemColor && ` (${itemColor})`}
-                            </div>
-                            <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                              Qty: {itemQty} • TSh {itemAmount.toLocaleString()}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <>
-                      <div className="info-item-modern">
-                        <strong>Service:</strong> {order.service_name}
-                      </div>
-                      <div className="info-item-modern">
-                        <strong>Garment Type:</strong> {order.garment_type || 'N/A'}
-                      </div>
-                      <div className="info-item-modern">
-                        <strong>Color:</strong> {order.color || 'N/A'}
-                      </div>
-                      <div className="info-item-modern">
-                        <strong>Quantity:</strong> {order.quantity}
-                      </div>
-                      {order.weight_kg && (
-                        <div className="info-item-modern">
-                          <strong>Weight:</strong> {order.weight_kg} kg
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
+            {!searchedByCustomer && (
+              <div className="receipt-detail-table-section">
+                <h3>👤 Customer</h3>
+                <table className="receipt-detail-table">
+                  <tbody>
+                    <tr><td>Name</td><td><strong>{order.customer_name}</strong></td></tr>
+                    <tr><td>Phone</td><td>{order.customer_phone}</td></tr>
+                    {order.customer_email && <tr><td>Email</td><td>{order.customer_email}</td></tr>}
+                  </tbody>
+                </table>
               </div>
+            )}
 
-              <div className="info-section-modern">
-                <h3>💵 Payment Information</h3>
-                {(order.receipt_item_count > 1 || allReceiptOrders.length > 1) && (
-                  <div className="info-item-modern" style={{ 
-                    padding: '8px', 
-                    background: 'rgba(37, 99, 235, 0.1)', 
-                    borderRadius: '8px',
-                    marginBottom: '12px',
-                    border: '1px solid var(--primary-color)'
-                  }}>
-                    <strong style={{ fontSize: '14px' }}>Receipt Total (All Items):</strong>
+            <div className="receipt-detail-table-section">
+              <h3>🧺 Items on Receipt</h3>
+              {(() => {
+                const allItems = (order.all_items && order.all_items.length > 0) ? order.all_items : (allReceiptOrders.length > 0 ? allReceiptOrders : [order]);
+                return (
+                  <div className="receipt-items-table-scroll">
+                    <table className="receipt-detail-table receipt-items-table">
+                      <thead>
+                        <tr><th>Item</th><th>Qty</th><th>Amount (TSh)</th></tr>
+                      </thead>
+                      <tbody>
+                        {allItems.map((item, idx) => {
+                          const itemName = item.garment_type || item.item_name || item.service_name || 'Item';
+                          const itemColor = item.color || '';
+                          const itemQty = item.quantity || 1;
+                          const itemAmount = parseFloat(item.total_amount || 0);
+                          return (
+                            <tr key={item.id || idx}>
+                              <td>{itemName}{itemColor ? ` (${itemColor})` : ''}</td>
+                              <td>{itemQty}</td>
+                              <td>{itemAmount.toLocaleString()}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
-                )}
-                {(() => {
-                  const { receiptTotal, receiptPaid, balanceDue } = getReceiptTotals(order, allReceiptOrders);
-                  return (
-                    <>
-                      <div className="info-item-modern">
-                        <strong>Total Amount:</strong>
-                        <span className="amount-large">TSh {receiptTotal.toLocaleString()}</span>
-                      </div>
-                      <div className="info-item-modern">
-                        <strong>Amount Paid:</strong>
-                        <span className="amount-large">TSh {receiptPaid.toLocaleString()}</span>
-                      </div>
-                      {balanceDue > 0 ? (
-                        <div className="info-item-modern" style={{ color: 'var(--warning-color)', fontWeight: 'bold' }}>
-                          <strong>Balance Due:</strong>
-                          <span className="amount-large">TSh {balanceDue.toLocaleString()}</span>
-                        </div>
-                      ) : (
-                        <div className="info-item-modern" style={{ color: 'var(--success-color)', fontWeight: 'bold' }}>
-                          <strong>Status:</strong> Fully Paid ✅
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-                <div className="info-item-modern">
-                  <strong>Payment Method:</strong> {order.payment_method || 'N/A'}
-                </div>
-                {order.ready_date && (
-                  <div className="info-item-modern">
-                    <strong>Ready Date:</strong> {new Date(order.ready_date).toLocaleString()}
-                  </div>
-                )}
-                {order.estimated_collection_date && (
-                  <div className="info-item-modern">
-                    <strong>📅 Est. Collection:</strong> {new Date(order.estimated_collection_date).toLocaleString()}
-                  </div>
-                )}
-              </div>
+                );
+              })()}
+            </div>
+
+            <div className="receipt-detail-table-section">
+              <h3>💵 Payment Information</h3>
+              {(() => {
+                const { receiptTotal, receiptPaid, balanceDue } = getReceiptTotals(order, allReceiptOrders);
+                return (
+                  <table className="receipt-detail-table">
+                    <tbody>
+                      <tr><td>Total Amount</td><td><strong>TSh {receiptTotal.toLocaleString()}</strong></td></tr>
+                      <tr><td>Amount Paid</td><td>TSh {receiptPaid.toLocaleString()}</td></tr>
+                      <tr><td>Balance Due</td><td>{balanceDue > 0 ? <span className="balance-due">TSh {balanceDue.toLocaleString()}</span> : '—'}</td></tr>
+                      <tr><td>Status</td><td>{balanceDue <= 0 ? <span style={{ color: 'var(--success-color)' }}>Fully Paid ✅</span> : 'Outstanding'}</td></tr>
+                      <tr><td>Payment Method</td><td>{order.payment_method || 'N/A'}</td></tr>
+                      {order.ready_date && <tr><td>Ready Date</td><td>{new Date(order.ready_date).toLocaleString()}</td></tr>}
+                      {order.estimated_collection_date && <tr><td>Est. Collection</td><td>{new Date(order.estimated_collection_date).toLocaleString()}</td></tr>}
+                    </tbody>
+                  </table>
+                );
+              })()}
             </div>
 
             {order.special_instructions && (
