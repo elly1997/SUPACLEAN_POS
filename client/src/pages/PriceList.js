@@ -6,6 +6,7 @@ import {
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import Loader from '../components/Loader';
 import './PriceList.css';
 
 const PriceList = () => {
@@ -247,7 +248,7 @@ const PriceList = () => {
   }, {});
 
   if (loading) {
-    return <div className="loading">Loading price list...</div>;
+    return <Loader message="Loading price list…" fullPage />;
   }
 
   const handleSaveSettings = async () => {

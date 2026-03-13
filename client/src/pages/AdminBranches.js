@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/useToast';
-import { 
+import {
   getBranches, createBranch, updateBranch,
   getUsers, createUser, updateUser, deleteUser, deleteUserPermanent,
   getBranchFeatures, updateBranchFeatures,
   getSettings, updateSetting,
   checkServerConnection
 } from '../api/api';
+import Loader from '../components/Loader';
 import './AdminBranches.css';
 
 const AdminBranches = () => {
@@ -355,7 +356,7 @@ const AdminBranches = () => {
   if (loading) {
     return (
       <div className="admin-branches">
-        <div className="loading">Loading...</div>
+        <Loader message="Loading…" fullPage />
       </div>
     );
   }

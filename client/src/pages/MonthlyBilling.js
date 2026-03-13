@@ -11,6 +11,7 @@ import {
   recordInvoicePayment
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
+import Loader from '../components/Loader';
 import './MonthlyBilling.css';
 
 const defaultBillItem = () => ({ id: Math.random().toString(36).slice(2), description: '', quantity: 1, unit_price: '', total_amount: '' });
@@ -302,7 +303,7 @@ const MonthlyBilling = () => {
   if (loading) {
     return (
       <div className="monthly-billing">
-        <div className="mb-loading">Loading...</div>
+        <Loader message="Loading…" fullPage />
       </div>
     );
   }

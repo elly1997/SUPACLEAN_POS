@@ -4,6 +4,7 @@ import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
+import Loader from '../components/Loader';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import './Customers.css';
 
@@ -236,7 +237,7 @@ const Customers = () => {
   };
 
   if (loading) {
-    return <div className="loading">Loading customers...</div>;
+    return <Loader message="Loading customers…" fullPage />;
   }
 
   return (

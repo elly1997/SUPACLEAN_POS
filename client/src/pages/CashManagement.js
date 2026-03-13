@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit, getActiveBankAccounts, getCashSummaryRange } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import Loader from '../components/Loader';
 import { receiptWidthCss } from '../utils/receiptPrintConfig';
 import './CashManagement.css';
 
@@ -201,7 +202,7 @@ const CashManagement = () => {
   };
 
   if (loading) {
-    return <div className="loading" role="status" aria-live="polite">Loading cash summary...</div>;
+    return <Loader message="Loading cash summary…" fullPage />;
   }
 
   if (!summary) {

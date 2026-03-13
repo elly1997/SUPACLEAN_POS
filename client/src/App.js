@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
+import Loader from './components/Loader';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import NewOrder from './pages/NewOrder';
@@ -75,19 +76,7 @@ const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        height: '100vh',
-        fontSize: '18px',
-        color: 'var(--text-primary)',
-        background: 'var(--bg-primary)'
-      }}>
-        Loading...
-      </div>
-    );
+    return <Loader message="Loading…" fullPage />;
   }
 
   if (!isAuthenticated) {

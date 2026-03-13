@@ -12,6 +12,7 @@ import {
   createCleaningExpense
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
+import Loader from '../components/Loader';
 import './CleaningServices.css';
 
 const BUSINESS_INFO = {
@@ -400,7 +401,7 @@ const CleaningServices = () => {
   if (loading) {
     return (
       <div className="cleaning-services">
-        <div className="cs-loading">Loading...</div>
+        <Loader message="Loading…" fullPage />
       </div>
     );
   }

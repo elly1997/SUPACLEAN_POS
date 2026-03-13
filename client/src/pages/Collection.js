@@ -5,6 +5,7 @@ import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
+import Loader from '../components/Loader';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import './Collection.css';
 
@@ -962,7 +963,7 @@ Thank you for choosing SUPACLEAN!
             </div>
           </div>
           {queueLoading && queueOrders.length === 0 ? (
-            <div className="loading">Loading queue...</div>
+            <Loader message="Loading queue…" fullPage={false} />
           ) : queueOrders.length === 0 ? (
             <div className="empty-state">No ready orders in queue</div>
           ) : listView === 'card' ? (

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts } from '../api/api';
 import { useToast } from '../hooks/useToast';
+import Loader from '../components/Loader';
 import './Expenses.css';
 
 const EXPENSE_CATEGORIES = [
@@ -161,7 +162,7 @@ const Expenses = () => {
   const totalExpenses = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
 
   if (loading) {
-    return <div className="loading">Loading expenses...</div>;
+    return <Loader message="Loading expenses…" fullPage />;
   }
 
   return (

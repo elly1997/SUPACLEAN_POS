@@ -5,6 +5,7 @@ import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
+import Loader from '../components/Loader';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import './Orders.css';
@@ -890,7 +891,7 @@ Phone: ${receiptGroup.customer_phone}
       </div>
 
       {loading ? (
-        <div className="loading" role="status" aria-live="polite">Loading orders...</div>
+        <Loader message="Loading orders…" fullPage />
       ) : consolidatedOrders.length === 0 ? (
         <div className="empty-state-modern" role="status">
           <p className="empty-state-title">No orders match your filters</p>

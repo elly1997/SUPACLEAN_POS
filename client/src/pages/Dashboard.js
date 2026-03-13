@@ -5,6 +5,7 @@ import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
+import Loader from '../components/Loader';
 import './Dashboard.css';
 
 const Dashboard = () => {
@@ -135,7 +136,7 @@ const Dashboard = () => {
   };
 
   if (loading) {
-    return <div className="loading">Loading dashboard...</div>;
+    return <Loader message="Loading dashboard…" fullPage />;
   }
 
   return (

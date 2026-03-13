@@ -21,6 +21,7 @@ import {
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import Loader from '../components/Loader';
 import './Reports.css';
 
 class ChartErrorBoundary extends React.Component {
@@ -273,7 +274,7 @@ const Reports = () => {
     return (
       <div className="reports-page">
         <ToastContainer />
-        <div className="loading">Loading reports...</div>
+        <Loader message="Loading reports…" fullPage />
       </div>
     );
   }

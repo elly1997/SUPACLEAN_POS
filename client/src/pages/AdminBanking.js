@@ -7,6 +7,7 @@ import {
   updateBankAccount,
   deleteBankAccount,
 } from '../api/api';
+import Loader from '../components/Loader';
 import './AdminBanking.css';
 
 const AdminBanking = () => {
@@ -169,7 +170,7 @@ const AdminBanking = () => {
       <div className="banking-list-card">
         <h2>Bank Accounts</h2>
         {loading ? (
-          <p className="loading">Loading...</p>
+          <Loader message="Loading…" fullPage={false} />
         ) : accounts.length === 0 ? (
           <p className="empty-state">No bank accounts yet. Add one so they appear when recording deposits.</p>
         ) : (
