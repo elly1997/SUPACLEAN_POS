@@ -80,7 +80,9 @@ const ColorInput = React.memo(({ value: propValue, onChange, itemId }) => {
 
 const NewOrder = () => {
   const { showToast, ToastContainer } = useToast();
-  const { selectedBranchId, branch } = useAuth();
+  const { selectedBranchId, branch, user } = useAuth();
+  // For non-admin: use branch from auth. For admin: use selectedBranchId (branch switcher) or fallback to user's branch.
+  const effectiveBranchId = user?.role === 'admin' ? selectedBranchId : (branch?.id ?? selectedBranchId);
   const [services, setServices] = useState([]);
   const [items, setItems] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -615,7 +617,7 @@ const NewOrder = () => {
           created_by: 'Cashier',
           receipt_number: sharedReceiptNumber,
           estimated_collection_date: estimatedCollectionDate ? new Date(estimatedCollectionDate).toISOString() : null,
-          ...(selectedBranchId ? { branch_id: selectedBranchId } : {})
+          ...(effectiveBranchId ? { branch_id: effectiveBranchId } : {})
         };
         
         try {

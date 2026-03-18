@@ -76,7 +76,7 @@ const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
 
   if (loading) {
-    return <Loader message="Loading…" fullPage />;
+    return <Loader message="Loading…" fullPage delayMs={0} />;
   }
 
   if (!isAuthenticated) {
@@ -96,30 +96,28 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/terms" element={<Terms />} />
             <Route
-              path="/*"
+              path="/"
               element={
                 <ProtectedRoute>
-                  <Layout>
-                    <Routes>
-                      <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                      <Route path="/dashboard" element={<Dashboard />} />
-                      <Route path="/new-order" element={<NewOrder />} />
-                      <Route path="/orders" element={<Orders />} />
-                      <Route path="/customers" element={<Customers />} />
-                      <Route path="/collection" element={<Collection />} />
-                      <Route path="/price-list" element={<PriceList />} />
-                      <Route path="/cash-management" element={<CashManagement />} />
-                      <Route path="/expenses" element={<Expenses />} />
-                      <Route path="/reports" element={<Reports />} />
-                      <Route path="/monthly-billing" element={<MonthlyBilling />} />
-                      <Route path="/cleaning-services" element={<CleaningServices />} />
-                      <Route path="/admin/branches" element={<AdminBranches />} />
-                      <Route path="/admin/banking" element={<AdminBanking />} />
-                    </Routes>
-                  </Layout>
+                  <Layout />
                 </ProtectedRoute>
               }
-            />
+            >
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="new-order" element={<NewOrder />} />
+              <Route path="orders" element={<Orders />} />
+              <Route path="customers" element={<Customers />} />
+              <Route path="collection" element={<Collection />} />
+              <Route path="price-list" element={<PriceList />} />
+              <Route path="cash-management" element={<CashManagement />} />
+              <Route path="expenses" element={<Expenses />} />
+              <Route path="reports" element={<Reports />} />
+              <Route path="monthly-billing" element={<MonthlyBilling />} />
+              <Route path="cleaning-services" element={<CleaningServices />} />
+              <Route path="admin/branches" element={<AdminBranches />} />
+              <Route path="admin/banking" element={<AdminBanking />} />
+            </Route>
           </Routes>
         </Router>
         </AppErrorBoundary>
