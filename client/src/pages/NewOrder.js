@@ -675,8 +675,9 @@ const NewOrder = () => {
             showToast(`Order created! Receipt: ${receipts[0].order.receipt_number}`, 'success');
             // Send SMS after creating order and printing receipt (customer name, ID, items, amount, status)
             sendReceiptSms(receipts[0].order.receipt_number).catch((err) => {
-              console.warn('Receipt SMS not sent:', err?.response?.data?.error || err?.message);
-              // Optionally: showToast('Order saved. SMS could not be sent.', 'warning');
+              const msg = err?.response?.data?.error || err?.message || 'SMS failed';
+              console.warn('Receipt SMS not sent:', msg);
+              showToast(`Order saved. SMS notification could not be sent: ${msg}`, 'warning');
             });
           }
         } catch (printError) {

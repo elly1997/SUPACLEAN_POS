@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import api from '../api/api';
 import { getBranches } from '../api/api';
 import { useTheme } from '../contexts/ThemeContext';
@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import OfflineIndicator from './OfflineIndicator';
 import './Layout.css';
 
-const Layout = () => {
+const Layout = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -241,7 +241,7 @@ const Layout = () => {
           ☰
         </button>
         <div className="content-wrapper">
-          <Outlet />
+          {children}
         </div>
       </main>
     </div>

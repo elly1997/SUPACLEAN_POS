@@ -104,6 +104,8 @@ if (process.env.NODE_ENV === 'production') {
     console.error('   Expected: client/build/index.html');
   }
   app.use(express.static(buildDir));
+  // SPA fallback: serve index.html for all non-API routes. Use no-cache so after a deploy
+  // clients get the new bundle instead of 304 cached old JS (which can cause redirect/nav bugs).
   app.get('*', (req, res, next) => {
     const indexPath = path.join(buildDir, 'index.html');
     if (!fs.existsSync(indexPath)) {
@@ -112,6 +114,9 @@ if (process.env.NODE_ENV === 'production') {
         hint: 'Dashboard → Your Service → Settings → Build & Deploy → Build Command'
       });
     }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     res.sendFile(indexPath);
   });
 }

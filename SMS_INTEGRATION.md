@@ -99,6 +99,22 @@ SMS will then be sent when the app triggers notifications (order ready, reminder
 - **Twilio trial:** you can only send to verified numbers until you upgrade.
 - With **no API key** set, the app logs the message and does not call any provider (useful for local testing without sending real SMS).
 
+### Test customer and “SMS notification failed”
+
+If you create an order with a **test customer** and see **“SMS notification could not be sent”** (or the receipt SMS never arrives):
+
+1. **Africa's Talking sandbox**  
+   The sandbox **only delivers SMS to numbers you have verified** in the Africa's Talking dashboard. Your test customer’s phone number must be one of:
+   - The sandbox’s own test numbers (see [Africa's Talking Sandbox](https://account.africastalking.com/sandbox)), or  
+   - A number you have added and verified in **Sandbox → SMS → Test numbers**.  
+   Any other number (e.g. a random 07xxxxxxxx) will **not** receive SMS in sandbox; the API may accept the request but not deliver, or return an error.
+
+2. **Production (live)**  
+   For real SMS, use your **production** Africa's Talking app (not sandbox): set `SMS_USERNAME` to your app username, leave `SMS_API_URL` unset, ensure you have **credit**, and use a valid Tanzanian number (e.g. 0752757635 → +255752757635).
+
+3. **In the app**  
+   When SMS fails, the app now shows a **warning toast** with the reason (e.g. “Customer has no phone number”, “SMS notifications are disabled for this customer”, or the provider error). Check that the customer has a **phone number** and **SMS notifications** enabled in their profile.
+
 ---
 
 ## What can stop SMS (checklist)
