@@ -6,7 +6,8 @@ import {
   getUsers, createUser, updateUser, deleteUser, deleteUserPermanent,
   getBranchFeatures, updateBranchFeatures,
   getSettings, updateSetting,
-  checkServerConnection
+  checkServerConnection,
+  clearAllCustomerData
 } from '../api/api';
 import Loader from '../components/Loader';
 import './AdminBranches.css';
@@ -50,6 +51,10 @@ const AdminBranches = () => {
   const [showFeaturesModal, setShowFeaturesModal] = useState(false);
   const [editingBranchFeatures, setEditingBranchFeatures] = useState(null);
   const [branchFeatures, setBranchFeatures] = useState([]);
+  // Clear all customer data (test reset)
+  const [showClearDataModal, setShowClearDataModal] = useState(false);
+  const [clearDataConfirm, setClearDataConfirm] = useState('');
+  const [clearDataLoading, setClearDataLoading] = useState(false);
   
   // Available features list
   const availableFeatures = [
@@ -815,6 +820,75 @@ const AdminBranches = () => {
             >
               {managerWhatsappSaving ? 'Saving...' : 'Save'}
             </button>
+          </div>
+          <div className="settings-card" style={{ borderColor: 'var(--error-color, #c62828)' }}>
+            <h3>Clear all customer data</h3>
+            <p className="settings-description">
+              Permanently delete all customers, orders, payments, and related transaction data. Use this to remove test data and start fresh with real customers. This cannot be undone.
+            </p>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ borderColor: 'var(--error-color, #c62828)', color: 'var(--error-color, #c62828)' }}
+              onClick={() => { setClearDataConfirm(''); setShowClearDataModal(true); }}
+            >
+              Clear all customer data
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Clear all customer data confirmation modal */}
+      {showClearDataModal && (
+        <div className="modal-overlay" onClick={() => !clearDataLoading && setShowClearDataModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+            <div className="modal-header">
+              <h3>Clear all customer data</h3>
+            </div>
+            <p style={{ marginBottom: '12px', color: 'var(--text-secondary)' }}>
+              This will permanently delete all customers, orders, payments, and related data. Type <strong>CLEAR</strong> below to confirm.
+            </p>
+            <input
+              type="text"
+              value={clearDataConfirm}
+              onChange={e => setClearDataConfirm(e.target.value)}
+              placeholder="Type CLEAR"
+              className="form-group"
+              style={{ width: '100%', padding: '10px', marginBottom: '16px', boxSizing: 'border-box' }}
+              autoFocus
+            />
+            <div className="form-actions" style={{ justifyContent: 'flex-end', gap: '8px' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={clearDataLoading}
+                onClick={() => setShowClearDataModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={clearDataConfirm !== 'CLEAR' || clearDataLoading}
+                style={clearDataConfirm === 'CLEAR' ? { background: 'var(--error-color, #c62828)' } : {}}
+                onClick={async () => {
+                  if (clearDataConfirm !== 'CLEAR') return;
+                  setClearDataLoading(true);
+                  try {
+                    const res = await clearAllCustomerData();
+                    showToast(res.data?.message || 'All customer data cleared. You can start fresh.', 'success');
+                    setShowClearDataModal(false);
+                    setClearDataConfirm('');
+                  } catch (e) {
+                    showToast(e.response?.data?.error || e.message || 'Failed to clear data', 'error');
+                  } finally {
+                    setClearDataLoading(false);
+                  }
+                }}
+              >
+                {clearDataLoading ? 'Clearing...' : 'Clear all data'}
+              </button>
+            </div>
           </div>
         </div>
       )}

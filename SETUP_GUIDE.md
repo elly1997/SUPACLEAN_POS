@@ -71,10 +71,12 @@ See **[OFFLINE_AND_ONLINE.md](OFFLINE_AND_ONLINE.md)** for full details.
    - Daily reports
 
 6. **Reports & Analytics**
-   - Daily sales summary
-   - Service performance
-   - Top customers
-   - Date range reports
+   - **Overview (today):** Income and net from **Cash Management** reconciled day for the selected date; transaction count from **orders** (by order date). Both respect the selected branch (or all branches for admin with no branch selected).
+   - **Financial report:** **daily_cash_summaries** (reconciled revenue, expenses, profit) for the date range and branch. Reconcile days in Cash Management to see data.
+   - **Sales by date:** **orders** table (order_date, total_amount, status) grouped by day; filtered by branch.
+   - **Services:** **orders** joined to **services** (revenue and count per service) for the date range; filtered by branch.
+   - **Customers:** **customers** with **orders** (collected in the chosen month/year), loyalty points; filtered by branch. Top 50 by points/spend.
+   - All report endpoints use the same branch rules: branch users see only their branch; admin sees all branches or one branch when selected in the header.
 
 7. **SMS Notifications**
    - Automatic SMS when order is ready (requires SMS API setup)

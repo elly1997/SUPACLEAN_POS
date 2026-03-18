@@ -64,6 +64,7 @@ try {
   app.use('/api/cleaning-documents', require('./routes/cleaningDocuments'));
   app.use('/api/cleaning-customers', require('./routes/cleaningCustomers'));
   app.use('/api/cleaning-expenses', require('./routes/cleaningExpenses'));
+  app.use('/api/admin', require('./routes/adminData'));
   console.log('✅ All routes loaded successfully');
 } catch (error) {
   console.error('❌ Error loading routes:', error);

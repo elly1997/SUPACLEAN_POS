@@ -882,3 +882,6 @@ export const createUser = (data) => api.post('/users', data, { timeout: 45000 })
 export const updateUser = (id, data) => api.put(`/users/${id}`, data, { timeout: 45000 });
 export const deleteUser = (id) => api.delete(`/users/${id}`);
 export const deleteUserPermanent = (id) => api.delete(`/users/${id}?permanent=true`);
+
+// Admin: clear all customers, orders, and related data (test data reset). Requires { confirm: 'CLEAR' }.
+export const clearAllCustomerData = () => api.post('/admin/clear-customer-data', { confirm: 'CLEAR' });

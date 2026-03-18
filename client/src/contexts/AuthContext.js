@@ -92,9 +92,23 @@ export const AuthProvider = ({ children }) => {
       }
     } catch (error) {
       console.error('❌ Session verification failed:', error);
-      // Only logout on 401, not on network errors
+      // Only logout on 401 when we have no cached user; otherwise keep using app with cached user
       if (!isLoggingInRef.current && error.response?.status === 401) {
-        console.log('🔒 Logging out due to 401');
+        try {
+          const cached = localStorage.getItem('sessionUser');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            setUser(parsed);
+            setBranch(parsed.branch ?? null);
+            userRef.current = parsed;
+            setLoading(false);
+            console.log('📴 Session re-check failed (401); using cached user so you can keep using the app.');
+            return;
+          }
+        } catch (e) {
+          console.warn('Could not restore cached user', e);
+        }
+        console.log('🔒 Logging out due to 401 (no cached user)');
         logout();
       } else if (!isLoggingInRef.current) {
         // Network/offline: restore user from cache so app works offline

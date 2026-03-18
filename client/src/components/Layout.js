@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import api from '../api/api';
 import { getBranches } from '../api/api';
@@ -13,7 +13,9 @@ const Layout = ({ children }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const { theme, toggleTheme } = useTheme();
-  const { user, branch, logout, verifySession, isAdmin, hasPermission, selectedBranchId, setSelectedBranch } = useAuth();
+  const { user, branch, logout, isAdmin, hasPermission, selectedBranchId, setSelectedBranch } = useAuth();
+  // On back online, OfflineIndicator runs sync; we do not re-verify session here (avoids logout on 401 on Collection/Branches etc.)
+  const handleBackOnline = useCallback(() => {}, []);
   const branchId = branch?.id ?? user?.branchId;
   const [availableFeatures, setAvailableFeatures] = useState([]);
   const [branches, setBranches] = useState([]);
@@ -151,7 +153,7 @@ const Layout = ({ children }) => {
 
   return (
     <div className="layout">
-      <OfflineIndicator onBackOnline={verifySession} />
+      <OfflineIndicator onBackOnline={handleBackOnline} />
       {isMobile && mobileMenuOpen && (
         <button
           type="button"

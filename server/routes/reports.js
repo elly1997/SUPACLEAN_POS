@@ -6,7 +6,7 @@ const { getBranchFilter } = require('../utils/branchFilter');
 
 router.use(authenticate, requireBranchFeature('reports_basic'));
 
-// Get sales report by date range
+// Get sales report by date range (filtered by branch when user has a branch)
 router.get('/sales', requireBranchAccess(), async (req, res) => {
   const { start_date, end_date } = req.query;
   
@@ -14,31 +14,37 @@ router.get('/sales', requireBranchAccess(), async (req, res) => {
     return res.status(400).json({ error: 'Start date and end date are required' });
   }
 
-  try {
-    const query = `
-      SELECT 
-        DATE(o.order_date) as date,
-        COUNT(*) as total_orders,
-        SUM(o.total_amount) as total_revenue,
-        SUM(CASE WHEN o.status = 'collected' THEN o.total_amount ELSE 0 END) as collected_revenue,
-        SUM(CASE WHEN o.status = 'pending' THEN 1 ELSE 0 END) as pending_orders,
-        SUM(CASE WHEN o.status = 'ready' THEN 1 ELSE 0 END) as ready_orders
-      FROM orders o
-      WHERE DATE(o.order_date) BETWEEN $1 AND $2
-      GROUP BY DATE(o.order_date)
-      ORDER BY date DESC
-    `;
+  const branchFilter = getBranchFilter(req, 'o');
+  let query = `
+    SELECT 
+      DATE(o.order_date) as date,
+      COUNT(*) as total_orders,
+      SUM(o.total_amount) as total_revenue,
+      SUM(CASE WHEN o.status = 'collected' THEN o.total_amount ELSE 0 END) as collected_revenue,
+      SUM(CASE WHEN o.status = 'pending' THEN 1 ELSE 0 END) as pending_orders,
+      SUM(CASE WHEN o.status = 'ready' THEN 1 ELSE 0 END) as ready_orders
+    FROM orders o
+    WHERE DATE(o.order_date) BETWEEN $1 AND $2
+  `;
+  if (branchFilter.clause) {
+    const branchClause = branchFilter.clause.replace(/\?/g, () => '$3');
+    query += ' ' + branchClause;
+  }
+  query += ' GROUP BY DATE(o.order_date) ORDER BY date DESC';
 
-    const rows = await db.all(query, [start_date, end_date]);
+  const params = [start_date, end_date, ...(branchFilter.params || [])];
+  try {
+    const rows = await db.all(query, params);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get service performance report
+// Get service performance report (filtered by branch when user has a branch)
 router.get('/services', requireBranchAccess(), async (req, res) => {
   const { start_date, end_date } = req.query;
+  const branchFilter = getBranchFilter(req, 'o');
   let query = `
     SELECT 
       s.name as service_name,
@@ -48,13 +54,21 @@ router.get('/services', requireBranchAccess(), async (req, res) => {
     FROM services s
     LEFT JOIN orders o ON s.id = o.service_id
   `;
-  let params = [];
-
+  const conditions = [];
+  const params = [];
+  let paramIndex = 1;
   if (start_date && end_date) {
-    query += ' WHERE DATE(o.order_date) BETWEEN $1 AND $2';
-    params = [start_date, end_date];
+    conditions.push(`DATE(o.order_date) BETWEEN $${paramIndex++} AND $${paramIndex++}`);
+    params.push(start_date, end_date);
   }
-
+  if (branchFilter.clause) {
+    const branchClause = branchFilter.clause.replace(/^AND\s+/, '').replace(/\?/g, () => `$${paramIndex++}`);
+    conditions.push(branchClause);
+    if (branchFilter.params?.length) params.push(...branchFilter.params);
+  }
+  if (conditions.length) {
+    query += ' WHERE ' + conditions.join(' AND ');
+  }
   query += ' GROUP BY s.id, s.name ORDER BY total_revenue DESC';
 
   try {
@@ -65,22 +79,24 @@ router.get('/services', requireBranchAccess(), async (req, res) => {
   }
 });
 
-// Get customer statistics with loyalty points
+// Get customer statistics with loyalty points (filtered by branch when user has a branch)
 router.get('/customers', requireBranchAccess(), async (req, res) => {
   const { month, year } = req.query;
+  const branchFilter = getBranchFilter(req, 'o');
   let dateFilter = '';
-  let params = [];
+  const params = [];
   
   // If month/year provided, filter orders collected in that month
   if (month && year) {
-    // PostgreSQL: TO_CHAR(date, 'YYYY-MM') instead of strftime
     dateFilter = `AND o.collected_date IS NOT NULL AND TO_CHAR(o.collected_date, 'YYYY-MM') = $1`;
     params.push(`${year}-${month.padStart(2, '0')}`);
   } else if (year) {
-    // If only year provided, filter for entire year
     dateFilter = `AND o.collected_date IS NOT NULL AND TO_CHAR(o.collected_date, 'YYYY') = $1`;
     params.push(year);
   }
+  const nextParam = params.length + 1;
+  const branchJoinClause = branchFilter.clause ? ' ' + branchFilter.clause.replace(/\?/g, () => `$${nextParam}`) : '';
+  if (branchFilter.params?.length) params.push(...branchFilter.params);
 
   const query = `
     SELECT 
@@ -90,18 +106,16 @@ router.get('/customers', requireBranchAccess(), async (req, res) => {
       COUNT(o.id) as total_orders,
       SUM(o.total_amount) as total_spent,
       MAX(o.order_date) as last_order_date,
-      -- Calculate monthly points (1 point per 20,000 TSh spent, only for collected and paid orders)
       SUM(CASE 
         WHEN o.status = 'collected' AND o.payment_status = 'paid_full' THEN 
           CAST(o.total_amount / 20000 AS INTEGER)
         ELSE 0 
       END) as monthly_points_earned,
-      -- Get current loyalty points from loyalty_points table
       COALESCE(lp.current_points, 0) as current_points,
       COALESCE(lp.lifetime_points, 0) as lifetime_points,
       COALESCE(lp.tier, 'Bronze') as tier
     FROM customers c
-    LEFT JOIN orders o ON c.id = o.customer_id ${dateFilter}
+    LEFT JOIN orders o ON c.id = o.customer_id ${dateFilter}${branchJoinClause}
     LEFT JOIN loyalty_points lp ON c.id = lp.customer_id
     GROUP BY c.id, c.name, c.phone, lp.current_points, lp.lifetime_points, lp.tier
     HAVING COUNT(o.id) > 0 OR SUM(CASE 
@@ -121,7 +135,7 @@ router.get('/customers', requireBranchAccess(), async (req, res) => {
   }
 });
 
-// Get monthly loyalty points report
+// Get monthly loyalty points report (filtered by branch when user has a branch)
 router.get('/loyalty/monthly', requireBranchAccess(), async (req, res) => {
   const { month, year } = req.query;
   
@@ -130,6 +144,13 @@ router.get('/loyalty/monthly', requireBranchAccess(), async (req, res) => {
   }
 
   const monthStr = `${year}-${month.padStart(2, '0')}`;
+  const branchFilter = getBranchFilter(req, 'o');
+  let whereClause = `TO_CHAR(o.collected_date, 'YYYY-MM') = $1 AND o.status = 'collected' AND o.payment_status = 'paid_full'`;
+  const params = [monthStr];
+  if (branchFilter.clause) {
+    whereClause += ' ' + branchFilter.clause.replace(/\?/g, () => '$2');
+    params.push(...(branchFilter.params || []));
+  }
 
   try {
     const query = `
@@ -139,7 +160,6 @@ router.get('/loyalty/monthly', requireBranchAccess(), async (req, res) => {
         c.phone,
         COUNT(DISTINCT o.id) as orders_count,
         SUM(o.total_amount) as total_spent,
-        -- Calculate points earned this month (1 point per 20,000 TSh spent)
         SUM(CASE 
           WHEN o.status = 'collected' AND o.payment_status = 'paid_full' THEN 
             CAST(o.total_amount / 20000 AS INTEGER)
@@ -150,9 +170,7 @@ router.get('/loyalty/monthly', requireBranchAccess(), async (req, res) => {
       FROM customers c
       INNER JOIN orders o ON c.id = o.customer_id
       LEFT JOIN loyalty_points lp ON c.id = lp.customer_id
-      WHERE TO_CHAR(o.collected_date, 'YYYY-MM') = $1
-        AND o.status = 'collected'
-        AND o.payment_status = 'paid_full'
+      WHERE ${whereClause}
       GROUP BY c.id, c.name, c.phone, lp.current_points, lp.tier
       HAVING SUM(CASE 
         WHEN o.status = 'collected' AND o.payment_status = 'paid_full' THEN 
@@ -163,7 +181,7 @@ router.get('/loyalty/monthly', requireBranchAccess(), async (req, res) => {
       LIMIT 50
     `;
 
-    const rows = await db.all(query, [monthStr]);
+    const rows = await db.all(query, params);
     res.json(rows || []);
   } catch (err) {
     res.status(500).json({ error: err.message });
