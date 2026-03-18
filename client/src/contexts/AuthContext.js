@@ -3,6 +3,18 @@ import api from '../api/api';
 
 const AuthContext = createContext();
 
+const STORAGE_VERSION = '2';
+function ensureStorageVersion() {
+  if (typeof localStorage === 'undefined') return;
+  if (localStorage.getItem('app_storage_version') !== STORAGE_VERSION) {
+    localStorage.removeItem('sessionToken');
+    localStorage.removeItem('sessionUser');
+    localStorage.removeItem('selectedBranchId');
+    localStorage.setItem('app_storage_version', STORAGE_VERSION);
+  }
+}
+ensureStorageVersion();
+
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {

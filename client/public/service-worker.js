@@ -1,15 +1,13 @@
-/* SUPACLEAN POS - Offline-capable service worker. Caches app shell for offline load. */
-const CACHE_NAME = 'supaclean-pos-v1';
+/* SUPACLEAN POS - Offline-capable service worker. Caches static assets only; never cache the app document. */
+const CACHE_NAME = 'supaclean-pos-v2';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll([
-        '/',
-        '/index.html',
         '/supaclean-logo.svg',
         '/manifest.json'
-      ]).catch(() => {}); // ignore if some fail (e.g. in dev)
+      ]).catch(() => {});
     }).then(() => self.skipWaiting())
   );
 });
@@ -22,11 +20,17 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Network first for API; cache fallback for same-origin doc/static
+// Never cache the app document (/, index.html) so normal mode always gets fresh HTML/JS after deploy.
+// Cache static assets only; for docs use network with no-store so we don't serve stale app.
 self.addEventListener('fetch', (event) => {
   const u = new URL(event.request.url);
-  if (u.pathname.startsWith('/api/') || u.pathname.startsWith('http') && !u.origin.startsWith(self.location.origin)) {
-    return; // API and cross-origin: no cache, let browser handle
+  if (u.pathname.startsWith('/api/') || (u.origin !== self.location.origin)) {
+    return;
+  }
+  const isDocument = event.request.mode === 'navigate' || event.request.destination === 'document';
+  if (isDocument) {
+    event.respondWith(fetch(event.request, { cache: 'no-store' }));
+    return;
   }
   event.respondWith(
     fetch(event.request)
@@ -35,6 +39,6 @@ self.addEventListener('fetch', (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         return res;
       })
-      .catch(() => caches.match(event.request).then((cached) => cached || caches.match('/index.html')))
+      .catch(() => caches.match(event.request))
   );
 });

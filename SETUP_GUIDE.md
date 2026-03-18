@@ -209,6 +209,16 @@ If port 5000 or 3000 is in use:
 - **Admin:** When recording expenses as admin, **select a branch** in the branch dropdown (top of the app) before adding an expense. Expenses are always recorded under a specific branch.
 - **Branch isolation:** Expenses recorded in a branch stay in that branch. Branch users only see their branch's expenses. Admin sees consolidated expenses for all branches (or can select one branch to filter).
 
+### App works in private/incognito but not in normal browser (refresh, redirect, or odd behavior)
+This was caused by the **service worker** caching the app page and **old session data** in the normal profile. Fixes in place:
+
+- **Service worker** no longer caches the app document (`/`, `index.html`), so after each deploy the browser loads the latest HTML and JS in normal mode.
+- **Storage version:** On first load after an update, the app may clear old session data once; you may need to **log in again** in that tab.
+
+If you still see issues in normal mode:
+1. **Hard refresh:** Ctrl+F5 (or Cmd+Shift+R on Mac).
+2. **Clear site data:** In Chrome: F12 → Application → Storage → “Clear site data” for your app’s origin. Then reload and log in again.
+
 ## Support
 
 For issues or questions:
