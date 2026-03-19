@@ -7,6 +7,7 @@ import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
+import { playSuccessSound } from '../utils/sound';
 import './Collection.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
@@ -57,6 +58,8 @@ const Collection = () => {
   const [queueSearch, setQueueSearch] = useState('');
   const [queueSearchDebounced, setQueueSearchDebounced] = useState('');
   const [customerReceiptsList, setCustomerReceiptsList] = useState([]); // All receipts for current customer (when searched by customer)
+  const [showCollectConfirmModal, setShowCollectConfirmModal] = useState(false);
+  const [pendingCollectPaymentData, setPendingCollectPaymentData] = useState(null);
   const searchInputRef = useRef(null);
   const autocompleteRef = useRef(null);
 
@@ -129,6 +132,18 @@ const Collection = () => {
       searchInputRef.current?.focus();
     }, 150);
     return () => clearTimeout(t);
+  }, []);
+
+  // F2: focus receipt/customer search (same as New Order item search shortcut for consistency)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'F2' && !e.target.tagName.match(/INPUT|TEXTAREA|SELECT/)) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   // When URL has ?receipt=XXX (e.g. from Dashboard deep link), ensure search runs
@@ -431,23 +446,23 @@ const Collection = () => {
 
   const confirmCollect = async (paymentData = {}) => {
     if (!order) return;
+    setPendingCollectPaymentData(paymentData);
+    setShowCollectConfirmModal(true);
+  };
 
+  const confirmCollectProceed = async () => {
+    if (!order) return;
+    const paymentData = pendingCollectPaymentData || {};
+    setShowCollectConfirmModal(false);
+    setPendingCollectPaymentData(null);
     const itemCount = order.receipt_item_count || allReceiptOrders.length || 1;
-    const confirmMsg = `Confirm collection of receipt ${order.receipt_number} (${itemCount} ${itemCount === 1 ? 'item' : 'items'})?`;
-    
-    if (!window.confirm(confirmMsg)) {
-      return;
-    }
-
     try {
       setCollecting(true);
       const res = await collectOrder(order.receipt_number, paymentData);
-      
-      // Backend returns receipt totals
       const receiptTotal = res.data?.receipt_total || res.data?.order?.total_amount || order.total_amount;
       const itemCountMsg = res.data?.order?.receipt_item_count || itemCount;
-      
       showToast(`Receipt collected successfully! (${itemCountMsg} ${itemCountMsg === 1 ? 'item' : 'items'})`, 'success');
+      playSuccessSound();
       if (paymentData.payment_amount > 0) {
         showToast(`Payment of TSh ${paymentData.payment_amount.toLocaleString()} recorded`, 'success');
       }
@@ -458,7 +473,7 @@ const Collection = () => {
       setAllReceiptOrders([]);
       setShowPaymentModal(false);
       setPaymentAmount('');
-      loadQueue(); // Refresh queue
+      loadQueue();
       if (searchInputRef.current) {
         searchInputRef.current.focus();
       }
@@ -1110,6 +1125,7 @@ Thank you for choosing SUPACLEAN!
                 placeholder={searchByPhone ? "Enter customer phone number or name..." : "Enter Receipt Number (e.g., 5-21-01 (26))"}
                 value={searchByPhone ? phoneNumber : receiptNumber}
                 aria-label={searchByPhone ? "Search by customer phone or name" : "Receipt number"}
+                title="Receipt or customer search (F2)"
                 onChange={(e) => {
                   if (searchByPhone) {
                     setPhoneNumber(e.target.value);
@@ -1604,6 +1620,28 @@ Thank you for choosing SUPACLEAN!
         </div>
         );
       })()}
+
+      {showCollectConfirmModal && order && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="collect-confirm-title" onClick={(e) => e.target === e.currentTarget && setShowCollectConfirmModal(false)}>
+          <div className="modal-content" style={{ maxWidth: '400px' }}>
+            <h2 id="collect-confirm-title">Confirm collection</h2>
+            <div className="modal-body">
+              <p>Collect receipt <strong>{order.receipt_number}</strong> ({order.receipt_item_count || allReceiptOrders.length || 1} {order.receipt_item_count === 1 || (allReceiptOrders.length || 1) === 1 ? 'item' : 'items'})?</p>
+              {pendingCollectPaymentData?.payment_amount > 0 && (
+                <p>Payment of TSh {Number(pendingCollectPaymentData.payment_amount).toLocaleString()} will be recorded.</p>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={() => { setShowCollectConfirmModal(false); setPendingCollectPaymentData(null); }}>
+                Cancel
+              </button>
+              <button type="button" className="btn-primary" onClick={confirmCollectProceed} disabled={collecting}>
+                {collecting ? '⏳ Processing...' : '✅ Collect'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

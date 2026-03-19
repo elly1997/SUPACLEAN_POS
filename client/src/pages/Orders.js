@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, Fragment } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, receivePayment, sendCollectionReminder } from '../api/api';
 import { useToast } from '../hooks/useToast';
@@ -60,6 +60,19 @@ const Orders = () => {
   const [exporting, setExporting] = useState(false);
   const [exportingUncollected, setExportingUncollected] = useState(false);
   const [showExportPopup, setShowExportPopup] = useState(false);
+  const ordersSearchInputRef = useRef(null);
+
+  // F2: focus order search (customer name or phone) for quick access
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'F2' && !e.target.tagName.match(/INPUT|TEXTAREA|SELECT/)) {
+        e.preventDefault();
+        ordersSearchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const loadOrders = useCallback(async (append = false, offsetOverride = undefined, filtersOverride = null, filterOverride = null) => {
     const f = filtersOverride ?? debouncedSearchFilters;
@@ -653,7 +666,7 @@ Phone: ${receiptGroup.customer_phone}
       const title = `Orders_${filter}_${new Date().toISOString().slice(0, 10)}`;
       const exportBranch = { branchName: branch?.name || rows[0]?.branch_name, branchId: branch?.id ?? selectedBranchId ?? rows[0]?.branch_id };
       if (format === 'pdf') exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
-      else exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+      else await exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
       showToast(`Exported ${rows.length} receipt(s) as ${format.toUpperCase()}`, 'success');
       setShowExportPopup(false);
     } catch (error) {
@@ -678,7 +691,7 @@ Phone: ${receiptGroup.customer_phone}
       const title = 'Uncollected_Stock_' + new Date().toISOString().slice(0, 10);
       const exportBranch = { branchName: branch?.name || rows[0]?.branch_name, branchId: branch?.id ?? selectedBranchId ?? rows[0]?.branch_id };
       if (format === 'pdf') exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
-      else exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+      else await exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
       showToast(`Exported ${rows.length} uncollected receipt(s) as ${format.toUpperCase()}`, 'success');
       setShowExportPopup(false);
     } catch (error) {
@@ -762,6 +775,7 @@ Phone: ${receiptGroup.customer_phone}
             Search
           </label>
           <input
+            ref={ordersSearchInputRef}
             id="orders-quick-search-input"
             type="text"
             className="orders-quick-search-input"
@@ -769,6 +783,7 @@ Phone: ${receiptGroup.customer_phone}
             value={searchFilters.customer}
             onChange={(e) => handleFilterChange('customer', e.target.value)}
             aria-label="Search orders by customer name or phone"
+            title="Search orders by customer (F2)"
           />
           {searchFilters.customer && (
             <button

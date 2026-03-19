@@ -3,6 +3,7 @@ import { getServices, getItems, getCustomers, createCustomer, createOrder, getCu
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
+import { playSuccessSound } from '../utils/sound';
 import './NewOrder.css';
 
 // Color Input Component - Defined outside to prevent recreation on each render
@@ -78,6 +79,30 @@ const ColorInput = React.memo(({ value: propValue, onChange, itemId }) => {
   );
 });
 
+const RECENT_STORAGE_KEY = 'neworder_recent';
+const RECENT_MAX = 10;
+
+function getRecentFromStorage() {
+  try {
+    const raw = localStorage.getItem(RECENT_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.slice(0, RECENT_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushRecent(type, id) {
+  const list = getRecentFromStorage();
+  const entry = { t: type === 'service' ? 's' : 'i', id: Number(id) };
+  const filtered = list.filter((e) => !(e.t === entry.t && e.id === entry.id));
+  const next = [entry, ...filtered].slice(0, RECENT_MAX);
+  try {
+    localStorage.setItem(RECENT_STORAGE_KEY, JSON.stringify(next));
+  } catch (_) {}
+}
+
 const NewOrder = () => {
   const { showToast, ToastContainer } = useToast();
   const { selectedBranchId, branch, user } = useAuth();
@@ -94,6 +119,8 @@ const NewOrder = () => {
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [orderItems, setOrderItems] = useState([]);
   const [defaultDeliveryType, setDefaultDeliveryType] = useState('standard');
+  // Service type: regular (price list) | wash_only | dry_only | press_only | express (2x, same-day)
+  const [selectedServiceType, setSelectedServiceType] = useState('regular');
   const [orderData, setOrderData] = useState({
     payment_status: 'not_paid',
     paid_amount: '',
@@ -109,11 +136,10 @@ const NewOrder = () => {
   });
   const [totalAmount, setTotalAmount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [showConfirmOrderModal, setShowConfirmOrderModal] = useState(false);
   const [itemSearchTerm, setItemSearchTerm] = useState('');
   const searchInputRef = useRef(null);
   const itemSearchInputRef = useRef(null);
-  const itemsScrollRef = useRef(null);
-  const itemsPanelWheelCleanup = useRef(null);
 
   // Define all callbacks before using them in useEffect hooks
   const loadServices = useCallback(async () => {
@@ -212,48 +238,49 @@ const NewOrder = () => {
     }
   }, [selectedCustomer]);
 
+  // Service type multiplier: regular=1, wash_only/dry_only/press_only=0.5, express=2
+  const getServiceTypeMultiplier = useCallback((type) => {
+    switch (type) {
+      case 'wash_only': case 'dry_only': case 'press_only': return 0.5;
+      case 'express': return 2;
+      default: return 1;
+    }
+  }, []);
+
   const calculateTotal = useCallback(() => {
+    const serviceMultiplier = getServiceTypeMultiplier(selectedServiceType);
+    const useDeliverySurcharge = selectedServiceType !== 'express'; // express already applies 2x
     let total = 0;
     orderItems.forEach(item => {
-      // If it's an item (has item_id), use item price
+      let itemBaseTotal = 0;
       if (item.item_id && item.price !== undefined) {
-        let itemTotal = parseFloat(item.price || 0) * (item.quantity || 1);
-        
-        // Apply express surcharge if applicable
-        if (item.delivery_type && item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0) {
-          itemTotal = itemTotal * item.express_surcharge_multiplier;
-        }
-        
-        total += itemTotal;
+        itemBaseTotal = parseFloat(item.price || 0) * (item.quantity || 1);
       } else {
-        // Otherwise use service pricing (for backward compatibility)
         const service = services.find(s => s.id === item.service_id);
         if (service) {
-          // Calculate base total: base_price per item * quantity
-          let itemTotal = (service.base_price || 0) * (item.quantity || 1);
+          itemBaseTotal = (service.base_price || 0) * (item.quantity || 1);
           if (service.price_per_item > 0 && item.quantity) {
-            itemTotal += service.price_per_item * item.quantity;
+            itemBaseTotal += service.price_per_item * item.quantity;
           }
           if (service.price_per_kg > 0 && item.weight_kg) {
-            itemTotal += service.price_per_kg * parseFloat(item.weight_kg);
+            itemBaseTotal += service.price_per_kg * parseFloat(item.weight_kg);
           }
-          
-          // Apply express surcharge if applicable
-          if (item.delivery_type && item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0) {
-            itemTotal = itemTotal * item.express_surcharge_multiplier;
-          }
-          
-          total += itemTotal;
         }
       }
+      let itemTotal = itemBaseTotal * serviceMultiplier;
+      if (useDeliverySurcharge && item.delivery_type && item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0) {
+        itemTotal = itemTotal * item.express_surcharge_multiplier;
+      }
+      total += itemTotal;
     });
     setTotalAmount(total);
-  }, [orderItems, services]);
+  }, [orderItems, services, selectedServiceType, getServiceTypeMultiplier]);
 
   const handleReset = useCallback(() => {
     setSelectedCustomer(null);
     setOrderItems([]);
     setDefaultDeliveryType('standard');
+    setSelectedServiceType('regular');
     // Reset estimated collection date to default (72 hours from now)
     const now = new Date();
     const defaultDate = new Date(now);
@@ -385,46 +412,6 @@ const NewOrder = () => {
     return () => clearTimeout(t);
   }, []);
 
-  const setItemsScrollRef = useCallback((el) => {
-    itemsScrollRef.current = el;
-  }, []);
-
-  // Whole Items & Services panel: wheel anywhere in the box scrolls the list (user-friendly region)
-  const setItemsPanelRef = useCallback((el) => {
-    if (itemsPanelWheelCleanup.current) {
-      itemsPanelWheelCleanup.current();
-      itemsPanelWheelCleanup.current = null;
-    }
-    if (!el) return;
-    const onWheel = (e) => {
-      const scrollEl = el.querySelector('.items-scroll-wrap');
-      if (!scrollEl) return;
-      const { scrollTop, scrollHeight, clientHeight } = scrollEl;
-      const canScrollUp = scrollTop > 0 && e.deltaY < 0;
-      const canScrollDown = scrollTop + clientHeight < scrollHeight - 1 && e.deltaY > 0;
-      if (canScrollUp || canScrollDown) {
-        e.preventDefault();
-        e.stopPropagation();
-        let step = e.deltaY;
-        if (e.deltaMode === 1) step *= 40;
-        else if (e.deltaMode === 2) step *= clientHeight * 0.8;
-        else step *= 3.5;
-        scrollEl.scrollTop += step;
-      }
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    itemsPanelWheelCleanup.current = () => el.removeEventListener('wheel', onWheel);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (itemsPanelWheelCleanup.current) {
-        itemsPanelWheelCleanup.current();
-        itemsPanelWheelCleanup.current = null;
-      }
-    };
-  }, []);
-
   const filteredItems = useMemo(() => {
     const q = (itemSearchTerm || '').trim().toLowerCase();
     if (!q) return items;
@@ -455,11 +442,12 @@ const NewOrder = () => {
       setOrderItems(updatedItems);
       showToast(`${service.name} quantity increased`, 'success');
     } else {
-      // Add new item
+      // Express service type forces same-day delivery; price 2x is applied in calculateTotal
+      const deliveryType = selectedServiceType === 'express' ? 'same_day' : defaultDeliveryType;
       let expressMultiplier = 0;
-      if (defaultDeliveryType === 'same_day') {
+      if (selectedServiceType !== 'express' && deliveryType === 'same_day') {
         expressMultiplier = parseFloat(expressSettings.express_same_day_multiplier?.value || 2);
-      } else if (defaultDeliveryType === 'next_day') {
+      } else if (selectedServiceType !== 'express' && deliveryType === 'next_day') {
         expressMultiplier = parseFloat(expressSettings.express_next_day_multiplier?.value || 3);
       }
 
@@ -471,11 +459,12 @@ const NewOrder = () => {
         weight_kg: service.price_per_kg > 0 ? '' : null,
         color: '',
         special_instructions: '',
-        delivery_type: defaultDeliveryType,
+        delivery_type: deliveryType,
         express_surcharge_multiplier: expressMultiplier
       };
       
       setOrderItems([...orderItems, newItem]);
+      pushRecent('service', service.id);
       showToast(`${service.name} added to order`, 'success');
     }
   };
@@ -534,8 +523,6 @@ const NewOrder = () => {
       showToast('Please add at least one item', 'warning');
       return;
     }
-    
-    // Validate payment
     if (orderData.payment_status === 'advance') {
       const paid = parseFloat(orderData.paid_amount) || 0;
       if (paid <= 0) {
@@ -543,7 +530,11 @@ const NewOrder = () => {
         return;
       }
     }
+    setShowConfirmOrderModal(true);
+  };
 
+  const handleConfirmOrderSubmit = async () => {
+    setShowConfirmOrderModal(false);
     setLoading(true);
     try {
       // Calculate payment amount based on payment status
@@ -589,10 +580,12 @@ const NewOrder = () => {
           }
         }
         
-        // Apply express surcharge
-        let itemTotal = itemBaseTotal;
-        if (item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0) {
-          itemTotal = itemBaseTotal * item.express_surcharge_multiplier;
+        // Apply service type multiplier then delivery surcharge (express type already includes 2x, no extra surcharge)
+        const serviceMultiplier = getServiceTypeMultiplier(selectedServiceType);
+        const useDeliverySurcharge = selectedServiceType !== 'express';
+        let itemTotal = itemBaseTotal * serviceMultiplier;
+        if (useDeliverySurcharge && item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0) {
+          itemTotal = itemTotal * item.express_surcharge_multiplier;
         }
 
         // Distribute payment proportionally if multiple items
@@ -673,6 +666,7 @@ const NewOrder = () => {
               : combinedReceipt.text;
             await printReceipt(receiptPayload);
             showToast(`Order created! Receipt: ${receipts[0].order.receipt_number}`, 'success');
+            playSuccessSound();
             // Send SMS after creating order and printing receipt (customer name, ID, items, amount, status)
             sendReceiptSms(receipts[0].order.receipt_number).catch((err) => {
               const msg = err?.response?.data?.error || err?.message || 'SMS failed';
@@ -1030,13 +1024,12 @@ Phone: ${customer.phone}
       showToast(`${item.name} quantity increased`, 'success');
     } else {
       // Add new item to cart
-      // For items, we need to find a default service or use the first available service
       const defaultService = services.find(s => (s.name || '').toLowerCase().includes('regular')) || services[0];
-      
+      const deliveryType = selectedServiceType === 'express' ? 'same_day' : defaultDeliveryType;
       let expressMultiplier = 0;
-      if (defaultDeliveryType === 'same_day') {
+      if (selectedServiceType !== 'express' && deliveryType === 'same_day') {
         expressMultiplier = parseFloat(expressSettings.express_same_day_multiplier?.value || 2);
-      } else if (defaultDeliveryType === 'next_day') {
+      } else if (selectedServiceType !== 'express' && deliveryType === 'next_day') {
         expressMultiplier = parseFloat(expressSettings.express_next_day_multiplier?.value || 3);
       }
 
@@ -1050,16 +1043,30 @@ Phone: ${customer.phone}
         weight_kg: null,
         color: '',
         special_instructions: '',
-        delivery_type: defaultDeliveryType,
+        delivery_type: deliveryType,
         express_surcharge_multiplier: expressMultiplier,
         price: parseFloat(item.price || item.base_price || 0)
       };
       
       setOrderItems([...orderItems, newItem]);
+      pushRecent('item', item.id);
       showToast(`${item.name} added to order`, 'success');
     }
   };
 
+  const recentList = useMemo(() => {
+    const raw = getRecentFromStorage();
+    return raw
+      .map((e) => {
+        if (e.t === 's') {
+          const s = services.find((sv) => sv.id === e.id);
+          return s ? { type: 'service', data: s } : null;
+        }
+        const i = items.find((it) => it.id === e.id);
+        return i ? { type: 'item', data: i } : null;
+      })
+      .filter(Boolean);
+  }, [services, items, orderItems.length]); // re-read when cart changes so Recent updates after add
 
   return (
     <div className="new-order-modern">
@@ -1265,49 +1272,50 @@ Phone: ${customer.phone}
           </div>
 
           <div
-            ref={setItemsPanelRef}
             className="panel-section panel-section-items"
             role="region"
             aria-label="Items and services"
           >
             <div className="items-header-sticky">
-              <h2 className="section-title section-title-no-sticky">
-                <span>🧺</span> {items.length > 0 ? 'Items & Services' : 'Services'}
+              <h2 className="section-title section-title-no-sticky items-panel-title">
+                <span aria-hidden>🧺</span> {items.length > 0 ? 'Items & Services' : 'Services'}
               </h2>
-              <div className="delivery-type-selector">
-                <label>Default Delivery Type (for new items):</label>
-                <div className="delivery-options">
-                  <button
-                    type="button"
-                    className={`delivery-option-btn ${defaultDeliveryType === 'standard' ? 'active' : ''}`}
-                    onClick={() => setDefaultDeliveryType('standard')}
-                  >
-                    📦 Standard
-                  </button>
-                  <button
-                    type="button"
-                    className={`delivery-option-btn ${defaultDeliveryType === 'same_day' ? 'active' : ''}`}
-                    onClick={() => setDefaultDeliveryType('same_day')}
-                  >
-                    ⚡ Same-Day
-                    <small>({expressSettings.express_same_day_hours?.value || 8}HRS)</small>
-                  </button>
-                  <button
-                    type="button"
-                    className={`delivery-option-btn ${defaultDeliveryType === 'next_day' ? 'active' : ''}`}
-                    onClick={() => setDefaultDeliveryType('next_day')}
-                  >
-                    🚀 Next-Day
-                    <small>({expressSettings.express_next_day_hours?.value || 3}HRS)</small>
-                  </button>
+              <div className="items-panel-service-row">
+                <label className="items-panel-label">Service type</label>
+                <div className="delivery-options service-type-options" role="group" aria-label="Service type">
+                  {[
+                    { id: 'regular', label: 'Regular', icon: '📦', title: 'Price list rates (default)' },
+                    { id: 'wash_only', label: 'Wash only', icon: '🧴', title: 'Half price' },
+                    { id: 'dry_only', label: 'Dry only', icon: '🌀', title: 'Half price' },
+                    { id: 'press_only', label: 'Press only', icon: '👔', title: 'Half price' },
+                    { id: 'express', label: 'Express', icon: '⚡', title: 'Same-day, double price' }
+                  ].map(({ id, label, icon, title }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`delivery-option-btn service-type-btn ${selectedServiceType === id ? 'active' : ''}`}
+                      onClick={() => {
+                        setSelectedServiceType(id);
+                        setDefaultDeliveryType(id === 'express' ? 'same_day' : 'standard');
+                      }}
+                      title={title}
+                      aria-pressed={selectedServiceType === id}
+                    >
+                      <span aria-hidden>{icon}</span>
+                      <span>{label}</span>
+                    </button>
+                  ))}
                 </div>
-                <p className="delivery-hint">Click item/service icons below to add to cart. Click again to increase quantity.</p>
+                {selectedServiceType === 'express' && (
+                  <p className="express-notice" role="status">Express: same-day delivery, price ×2</p>
+                )}
+                <p className="items-panel-hint">Add items or services below; for per-kg services enter weight in the order summary.</p>
               </div>
               <div className="items-search-row">
                 <input
                   ref={itemSearchInputRef}
                   type="text"
-                  placeholder="🔍 Search items & services..."
+                  placeholder="Search items & services..."
                   value={itemSearchTerm}
                   onChange={(e) => setItemSearchTerm(e.target.value)}
                   className="items-search-input"
@@ -1328,17 +1336,46 @@ Phone: ${customer.phone}
             </div>
 
             <div
-              ref={setItemsScrollRef}
               className="items-scroll-wrap"
               role="region"
               aria-label="Items and services list"
             >
+            {recentList.length > 0 && (
+              <div className="recent-items-strip">
+                <span className="recent-items-label">Recent:</span>
+                <div className="recent-items-chips">
+                  {recentList.map((r) => (
+                    r.type === 'service' ? (
+                      <button
+                        key={`s-${r.data.id}`}
+                        type="button"
+                        className="recent-chip"
+                        onClick={() => handleServiceClick(r.data)}
+                        title={r.data.name}
+                      >
+                        {getServiceIcon(r.data.name)} <span>{r.data.name.length > 20 ? r.data.name.slice(0, 18) + '…' : r.data.name}</span>
+                      </button>
+                    ) : (
+                      <button
+                        key={`i-${r.data.id}`}
+                        type="button"
+                        className="recent-chip"
+                        onClick={() => handleItemClick(r.data)}
+                        title={r.data.name}
+                      >
+                        {getItemIcon(r.data.name, r.data.category)} <span>{r.data.name.length > 20 ? r.data.name.slice(0, 18) + '…' : r.data.name}</span>
+                      </button>
+                    )
+                  ))}
+                </div>
+              </div>
+            )}
             {/* Show Items if available, otherwise show Services */}
             {items.length > 0 ? (
               <>
                 <div className="items-section">
-                  <h3 style={{ marginBottom: '12px', fontSize: '14px', color: 'var(--text-secondary)' }}>
-                    📋 Items (from Price List){itemSearchTerm.trim() ? ` · ${filteredItems.length} match` : ''}
+                  <h3 className="items-list-subtitle">
+                    <span aria-hidden>📋</span> Items{itemSearchTerm.trim() ? ` · ${filteredItems.length} match` : ''}
                   </h3>
                   <ul className="items-services-list" aria-label="Items from price list">
                     {filteredItems.length === 0 ? (
@@ -1370,11 +1407,11 @@ Phone: ${customer.phone}
                 </div>
                 
                 {services.length > 0 && (
-                  <div className="items-section" style={{ marginTop: '24px' }}>
-                    <h3 style={{ marginBottom: '12px', fontSize: '14px', color: 'var(--text-secondary)' }}>
-                      🚚 Delivery Services{itemSearchTerm.trim() ? ` · ${filteredServices.length} match` : ''}
+                  <div className="items-section items-section-services">
+                    <h3 className="items-list-subtitle">
+                      <span aria-hidden>🧺</span> Services{itemSearchTerm.trim() ? ` · ${filteredServices.length} match` : ''}
                     </h3>
-                    <ul className="items-services-list" aria-label="Delivery services">
+                    <ul className="items-services-list" aria-label="Services">
                       {filteredServices.length === 0 ? (
                         <li className="items-search-empty-row"><span>No services match "{itemSearchTerm.trim()}"</span></li>
                       ) : (
@@ -1404,6 +1441,8 @@ Phone: ${customer.phone}
                 )}
               </>
             ) : (
+              <>
+              <h3 className="items-list-subtitle"><span aria-hidden>🧺</span> Services{itemSearchTerm.trim() ? ` · ${filteredServices.length} match` : ''}</h3>
               <ul className="items-services-list" aria-label="Services">
                 {filteredServices.length === 0 ? (
                   <li className="items-search-empty-row">
@@ -1432,6 +1471,7 @@ Phone: ${customer.phone}
                   })
                 )}
               </ul>
+              </>
             )}
             </div>
           </div>
@@ -1463,9 +1503,12 @@ Phone: ${customer.phone}
                         itemBaseTotal += service.price_per_kg * parseFloat(item.weight_kg);
                       }
                     }
-                    const itemFinalTotal = item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0
-                      ? itemBaseTotal * item.express_surcharge_multiplier
-                      : itemBaseTotal;
+                    const serviceMultiplier = getServiceTypeMultiplier(selectedServiceType);
+                    const useDeliverySurcharge = selectedServiceType !== 'express';
+                    let itemFinalTotal = itemBaseTotal * serviceMultiplier;
+                    if (useDeliverySurcharge && item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0) {
+                      itemFinalTotal = itemFinalTotal * item.express_surcharge_multiplier;
+                    }
                     
                     return (
                       <div key={item.id} className="order-item-card">
@@ -1604,14 +1647,14 @@ Phone: ${customer.phone}
                       <div className="form-group-modern">
                         <label>Payment Method</label>
                         <div className="payment-methods">
-                          {['cash', 'card', 'mobile_money'].map(method => (
+                          {['cash', 'card', 'mobile_money', 'bank_transfer'].map(method => (
                             <button
                               key={method}
                               type="button"
                               className={`payment-method-btn ${orderData.payment_method === method ? 'active' : ''}`}
                               onClick={() => setOrderData({ ...orderData, payment_method: method })}
                             >
-                              {method === 'cash' ? '💵 Cash' : method === 'card' ? '💳 Card' : '📱 Mobile Money'}
+                              {method === 'cash' ? '💵 Cash' : method === 'card' ? '💳 Card' : method === 'mobile_money' ? '📱 Mobile Money' : '🏦 Bank Transfer'}
                             </button>
                           ))}
                         </div>
@@ -1639,7 +1682,7 @@ Phone: ${customer.phone}
                   </div>
 
                   <button
-                    type="submit"
+                    type="button"
                     className="btn-primary btn-large btn-full"
                     onClick={handleSubmitOrder}
                     disabled={!selectedCustomer || orderItems.length === 0 || loading}
@@ -1658,6 +1701,26 @@ Phone: ${customer.phone}
           </div>
         </div>
       </div>
+
+      {showConfirmOrderModal && (
+        <div className="confirm-order-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-order-title">
+          <div className="confirm-order-modal">
+            <h2 id="confirm-order-title">Review & confirm order</h2>
+            <div className="confirm-order-summary">
+              <p><strong>Customer:</strong> {selectedCustomer?.name}</p>
+              <p><strong>Items:</strong> {orderItems.length} line{orderItems.length !== 1 ? 's' : ''}</p>
+              <p><strong>Total:</strong> TSh {totalAmount.toLocaleString()}</p>
+              <p><strong>Payment:</strong> {orderData.payment_status === 'not_paid' ? 'Not paid' : orderData.payment_status === 'advance' ? `Advance TSh ${(parseFloat(orderData.paid_amount) || 0).toLocaleString()}` : 'Paid in full'} ({String(orderData.payment_method || 'cash').replace('_', ' ')})</p>
+            </div>
+            <div className="confirm-order-actions">
+              <button type="button" className="btn-secondary" onClick={() => setShowConfirmOrderModal(false)}>Cancel</button>
+              <button type="button" className="btn-primary btn-large" onClick={handleConfirmOrderSubmit} disabled={loading}>
+                {loading ? '⏳ Processing...' : 'Confirm & complete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -35,6 +35,12 @@ You can use the app **offline** after logging in, and **online** for login and b
 
 See **[OFFLINE_AND_ONLINE.md](OFFLINE_AND_ONLINE.md)** for full details.
 
+## Keyboard shortcuts
+
+- **New Order:** **F2** focuses the **item/service search** (products and services to add to the cart). **Ctrl+N** (when not in an input) resets the form. Item search is only on the New Order page.
+- **Collection:** **F2** focuses the **receipt or customer search** so you can type or scan immediately.
+- **Orders:** **F2** focuses the **customer name or phone** filter for quick order search.
+
 ## Features Overview
 
 ### ✅ What's Included:
@@ -46,10 +52,14 @@ See **[OFFLINE_AND_ONLINE.md](OFFLINE_AND_ONLINE.md)** for full details.
 
 2. **Order Creation**
    - Select customer (or create new)
-   - Choose service type
-   - Enter garment details (type, color, quantity, weight)
-   - Automatic price calculation
-   - Generate and print receipts
+   - **Choose service type:** In **New Order**, under **Items & Services**, click a service to add it to the cart:
+     - **Pressing only** — ironing / press only (per piece; set quantity in cart)
+     - **Drying only** — tumble dry (per kg; enter weight in cart)
+     - **Wash only (per kg)** — use service **“Wash Only 1KG”** (enter weight in cart)
+     - **Wash & Fold (per kg)** — use service **“Wash & Dry 1KG”** or **“Wash & Fold (per kg)”** if present (enter weight in cart)
+     - Or choose a **garment type** (e.g. Shirts, Suits, Towels) for fixed-price items
+   - For **per-kg** services, add the line then enter **weight (kg)** in the order summary. Set quantity for **Pressing only**.
+   - Automatic price calculation; generate and print receipts
 
 3. **Order Management**
    - View all orders
@@ -91,7 +101,13 @@ See **[OFFLINE_AND_ONLINE.md](OFFLINE_AND_ONLINE.md)** for full details.
 
 ## Default Services & Pricing
 
-The system comes with pre-configured services:
+The system comes with pre-configured services, including:
+
+- **Pressing only** — TSh 2,000 per item (ironing only). Select in New Order → Services.
+- **Drying only** — TSh 3,000 per kg. Select in New Order → Services, then enter weight in the cart.
+- **Wash Only 1KG** / **Wash & Dry 1KG** — per-kg wash and wash-and-fold; enter weight in the cart after adding.
+
+Other defaults:
 
 1. **Wash, Dry & Fold**
    - Base: TSh 5,000
@@ -110,6 +126,8 @@ The system comes with pre-configured services:
    - Per kg: TSh 1,500
 
 **You can modify these prices** by editing the database or through API calls.
+
+**Production (PostgreSQL):** If **Pressing only** or **Drying only** do not appear in New Order, run from the project root: `node scripts/add-default-services.js` (with `DATABASE_URL` in `.env`). This adds any missing default services, including Pressing only and Drying only.
 
 ## SMS Setup (Africa's Talking)
 
@@ -210,6 +228,10 @@ If port 5000 or 3000 is in use:
 - **Branch users:** Each branch user must be **assigned to a branch** in **Admin → Branches → Users**. If the user has no branch, they cannot record expenses. Edit the user and select their branch.
 - **Admin:** When recording expenses as admin, **select a branch** in the branch dropdown (top of the app) before adding an expense. Expenses are always recorded under a specific branch.
 - **Branch isolation:** Expenses recorded in a branch stay in that branch. Branch users only see their branch's expenses. Admin sees consolidated expenses for all branches (or can select one branch to filter).
+
+### Security – npm audit vulnerabilities
+- **Root (server):** Run `npm audit` in the project root. We use **sqlite3@6.x** and patched **axios**, **lodash**, **minimatch**, **qs**; root should report **0 vulnerabilities**.
+- **Client:** Run `npm audit` in the `client/` folder. We removed **xlsx** (no fix available) and use **exceljs** for Excel export; **jspdf**, **react-router-dom**, **axios** are on patched versions. **Overrides** pin safer versions of **serialize-javascript**, **postcss**, **nth-check**, **underscore**. Any remaining issues are in **dev/build-only** dependencies (Jest, jsdom, webpack-dev-server). They do not ship in the production bundle; risk is limited to the development/build environment. To reduce further, avoid opening untrusted sites while running `npm start`, and run builds in a clean environment.
 
 ### App works in private/incognito but not in normal browser (refresh, redirect, or odd behavior)
 This was caused by the **service worker** caching the app page and **old session data** in the normal profile. Fixes in place:

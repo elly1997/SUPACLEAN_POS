@@ -45,8 +45,8 @@ function validatePayment(paymentData, totalAmount) {
     return { valid: false, error: `Invalid payment status: ${paymentStatus}` };
   }
 
-  // Validate payment method
-  const validPaymentMethods = ['cash', 'card', 'mobile_money', 'book'];
+  // Validate payment method (bank/bank_transfer for tracking deposits and payments)
+  const validPaymentMethods = ['cash', 'card', 'mobile_money', 'book', 'bank', 'bank_transfer'];
   if (!validPaymentMethods.includes(paymentMethod)) {
     return { valid: false, error: `Invalid payment method: ${paymentMethod}` };
   }

@@ -11,7 +11,9 @@ import './Dashboard.css';
 const Dashboard = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
-  const { selectedBranchId } = useAuth();
+  const { selectedBranchId, user, hasPermission } = useAuth();
+  const isCashier = user?.role === 'cashier';
+  const canManageCash = hasPermission?.('canManageCash') ?? false;
   const [listView, setListView] = useListViewPreference();
   const [summary, setSummary] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
@@ -150,7 +152,9 @@ const Dashboard = () => {
       <div className="dashboard-header">
         <div>
           <h1>Dashboard</h1>
-          <p className="subtitle">Today's overview - {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+          <p className="subtitle">
+            {isCashier ? "Quick access: new orders & collection" : "Today's overview"} — {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+          </p>
         </div>
         <div className="header-actions">
           <button
@@ -169,6 +173,15 @@ const Dashboard = () => {
           </button>
         </div>
       </div>
+
+      {canManageCash && (
+        <div className="dashboard-manager-cta">
+          <span className="dashboard-manager-label">Reconcile & daily totals</span>
+          <button type="button" className="btn-secondary btn-large" onClick={() => navigate('/cash-management')}>
+            Cash Management
+          </button>
+        </div>
+      )}
 
       <div className="stats-grid-modern">
         <div className="stat-card-modern income">

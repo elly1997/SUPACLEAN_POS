@@ -89,15 +89,15 @@ router.post('/', requireBranchAccess(), requirePermission('canManageCash'), asyn
   try {
     const result = await db.run(
       `INSERT INTO bank_deposits (date, amount, reference_number, bank_name, bank_account_id, notes, created_by, branch_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       [date, amount, reference_number || null, displayName, bank_account_id || null, notes || null, created_by || null, branchId]
     );
-    
+    const newId = result.lastID ?? result.row?.id;
     const deposit = await db.get(
       `SELECT d.*, b.name as bank_account_name FROM bank_deposits d LEFT JOIN bank_accounts b ON d.bank_account_id = b.id WHERE d.id = ?`,
-      [result.lastID]
+      [newId]
     );
-    res.status(201).json(deposit);
+    res.status(201).json(deposit || result.row);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

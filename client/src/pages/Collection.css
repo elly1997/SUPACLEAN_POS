@@ -759,6 +759,14 @@
   
   .collection-actions-modern {
     flex-direction: column;
+    gap: 12px;
+  }
+
+  .collection-actions-modern .btn-primary,
+  .collection-actions-modern .btn-secondary {
+    min-height: 44px;
+    width: 100%;
+    justify-content: center;
   }
 
   .queue-table th,
@@ -771,5 +779,10 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
+  }
+
+  .modal-content .btn-primary,
+  .modal-content button[type="submit"] {
+    min-height: 44px;
   }
 }

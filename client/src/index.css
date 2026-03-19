@@ -11,8 +11,10 @@ html {
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
     'Helvetica Neue', 'Segoe UI', 'Roboto', sans-serif;
+  font-size: 14px;
   font-weight: 400;
   letter-spacing: -0.01em;
+  line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background: var(--bg-primary);
@@ -23,6 +25,32 @@ body {
   height: 100%;
   color: var(--text-primary);
   transition: background 0.3s ease, color 0.3s ease;
+}
+
+/* Visible focus ring for keyboard users (accessibility) */
+:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+select:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible) {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  button:active {
+    transform: none;
+  }
 }
 
 [data-theme="dark"] body {
@@ -161,6 +189,30 @@ h1, h2, h3, h4, h5, h6 {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+/* Minimum touch target 44px for primary/counter actions (WCAG 2.5.5) */
+.btn-primary,
+.btn-large,
+.btn-success {
+  min-height: 44px;
+}
+button[type="submit"].btn-primary,
+button[type="submit"].btn-large {
+  min-height: 44px;
+}
+
+/* Tablet/mobile: keep primary actions tappable and prevent shrink */
+@media (max-width: 768px) {
+  .btn-primary,
+  .btn-success,
+  .btn-large,
+  button[type="submit"].btn-primary,
+  button[type="submit"].btn-large {
+    min-height: 44px;
+    padding: 12px 20px;
+    box-sizing: border-box;
+  }
 }
 
 input, select, textarea {

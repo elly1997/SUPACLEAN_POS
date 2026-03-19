@@ -5,6 +5,7 @@ import { getBranches } from '../api/api';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import OfflineIndicator from './OfflineIndicator';
+import { isSoundEnabled, setSoundEnabled } from '../utils/sound';
 import './Layout.css';
 
 const Layout = ({ children }) => {
@@ -12,6 +13,7 @@ const Layout = ({ children }) => {
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [soundOn, setSoundOn] = useState(() => isSoundEnabled());
   const { theme, toggleTheme } = useTheme();
   const { user, branch, logout, isAdmin, hasPermission, selectedBranchId, setSelectedBranch } = useAuth();
   // On back online, OfflineIndicator runs sync; we do not re-verify session here (avoids logout on 401 on Collection/Branches etc.)
@@ -212,13 +214,27 @@ const Layout = ({ children }) => {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <button 
+          <button
             className="theme-toggle"
             onClick={toggleTheme}
             title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
           >
             {theme === 'light' ? '🌙' : '☀️'}
             <span>{theme === 'light' ? 'Dark Mode' : 'Light Mode'}</span>
+          </button>
+          <button
+            type="button"
+            className={`theme-toggle sound-toggle ${soundOn ? 'on' : ''}`}
+            onClick={() => {
+              const next = !soundOn;
+              setSoundEnabled(next);
+              setSoundOn(next);
+            }}
+            title={soundOn ? 'Success sound on (click to turn off)' : 'Success sound off (click to turn on)'}
+            aria-pressed={soundOn}
+          >
+            {soundOn ? '🔔' : '🔕'}
+            <span>Sound {soundOn ? 'On' : 'Off'}</span>
           </button>
           <button 
             className="logout-button"

@@ -5,7 +5,7 @@
  */
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 /**
  * @param {string} title - Report title
@@ -59,7 +59,7 @@ export function exportToPDF(title, columns, rows, options = {}) {
  * @param {Record<string, unknown>[]} rows
  * @param {{ branchName?: string, branchId?: number }} [options] - Optional branch for header
  */
-export function exportToExcel(title, columns, rows, options = {}) {
+export async function exportToExcel(title, columns, rows, options = {}) {
   const branchLabel = options.branchName || (options.branchId != null ? `Branch ID ${options.branchId}` : null);
   const headers = columns.map(c => c.label);
   const data = rows.map(row => columns.map(col => {
@@ -67,25 +67,42 @@ export function exportToExcel(title, columns, rows, options = {}) {
     if (v == null) return '';
     return v;
   }));
-  const titleRow = [title];
-  const branchRow = branchLabel ? [`Branch: ${branchLabel}`] : [];
-  const rowsForSheet = branchLabel
-    ? [titleRow, branchRow, [], headers, ...data]
-    : [titleRow, [], headers, ...data];
-  const ws = XLSX.utils.aoa_to_sheet(rowsForSheet);
+
+  const workbook = new ExcelJS.Workbook();
+  const sheetName = title.slice(0, 31).replace(/[*?:/\\[\]]/g, ' ');
+  const sheet = workbook.addWorksheet(sheetName, { properties: { defaultRowHeight: 18 } });
+
+  let rowIndex = 1;
+  sheet.getRow(rowIndex).getCell(1).value = title;
+  rowIndex++;
+  if (branchLabel) {
+    sheet.getRow(rowIndex).getCell(1).value = `Branch: ${branchLabel}`;
+    rowIndex++;
+  }
+  rowIndex++;
+  sheet.addRow(headers);
+  data.forEach(r => sheet.addRow(r));
+
   const colWidths = columns.map((_, i) => {
-    const colIndex = i;
     const maxLen = Math.max(
-      String(headers[colIndex]).length,
-      ...data.map(r => String(r[colIndex] ?? '').length),
+      String(headers[i]).length,
+      ...data.map(r => String(r[i] ?? '').length),
       branchLabel ? String(branchLabel).length + 10 : 0
     );
-    return { wch: Math.min(Math.max(maxLen + 1, 10), 50) };
+    return Math.min(Math.max(maxLen + 1, 10), 50);
   });
-  ws['!cols'] = colWidths;
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31));
-  XLSX.writeFile(wb, sanitizeFilename(title) + '.xlsx');
+  sheet.columns.forEach((col, i) => {
+    if (colWidths[i] != null) col.width = colWidths[i];
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = sanitizeFilename(title) + '.xlsx';
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function sanitizeFilename(name) {

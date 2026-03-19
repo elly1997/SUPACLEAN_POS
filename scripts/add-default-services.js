@@ -3,6 +3,20 @@ const db = require('../server/database/query');
 
 const defaultServices = [
   {
+    name: 'Pressing only',
+    description: 'Ironing / press only',
+    base_price: 2000,
+    price_per_item: 2000,
+    price_per_kg: 0
+  },
+  {
+    name: 'Drying only',
+    description: 'Tumble dry only',
+    base_price: 3000,
+    price_per_kg: 3000,
+    price_per_item: 0
+  },
+  {
     name: 'Wash, Dry & Fold',
     description: 'Full service wash, dry and fold',
     base_price: 5000,

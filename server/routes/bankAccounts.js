@@ -37,8 +37,8 @@ router.post('/', authenticate, requireRole('admin'), async (req, res) => {
   }
   try {
     const result = await db.run(
-      'INSERT INTO bank_accounts (name, account_number, is_active) VALUES (?, ?, 1) RETURNING id',
-      [name.trim(), (account_number && account_number.trim()) || null]
+      'INSERT INTO bank_accounts (name, account_number, is_active) VALUES (?, ?, ?) RETURNING id',
+      [name.trim(), (account_number && account_number.trim()) || null, true]
     );
     const newId = result.lastID ?? result.row?.id;
     const row = newId ? await db.get('SELECT * FROM bank_accounts WHERE id = ?', [newId]) : null;
@@ -56,9 +56,10 @@ router.put('/:id', authenticate, requireRole('admin'), async (req, res) => {
     return res.status(400).json({ error: 'Bank account name is required' });
   }
   try {
+    const isActiveBoolean = is_active !== false && is_active !== 0;
     const result = await db.run(
       'UPDATE bank_accounts SET name = ?, account_number = ?, is_active = ? WHERE id = ?',
-      [name.trim(), (account_number && account_number.trim()) || null, is_active !== false ? 1 : 0, id]
+      [name.trim(), (account_number && account_number.trim()) || null, isActiveBoolean, id]
     );
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Bank account not found' });

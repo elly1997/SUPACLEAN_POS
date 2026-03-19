@@ -365,6 +365,12 @@ function createIndexes() {
 }
 
 function migrateDatabase() {
+  // Ensure "Pressing only" and "Drying only" exist for existing DBs (new installs get them from insertDefaultServices)
+  db.run(`INSERT OR IGNORE INTO services (name, description, base_price, price_per_item, price_per_kg) VALUES (?, ?, ?, ?, ?)`,
+    ['Pressing only', 'Ironing / press only', 2000, 2000, 0]);
+  db.run(`INSERT OR IGNORE INTO services (name, description, base_price, price_per_item, price_per_kg) VALUES (?, ?, ?, ?, ?)`,
+    ['Drying only', 'Tumble dry only', 3000, 0, 3000]);
+
   // Add new columns to orders table if they don't exist
   db.serialize(() => {
     db.all("PRAGMA table_info(orders)", [], (err, columns) => {
@@ -701,6 +707,11 @@ function migrateDatabase() {
 }
 
 function insertDefaultServices() {
+  // Service types: pressing only, drying only (Wash only / Wash & Fold per kg = use "Wash Only 1KG" and "Wash & Dry 1KG" below)
+  const serviceTypes = [
+    { name: 'Pressing only', description: 'Ironing / press only', base_price: 2000, price_per_item: 2000 },
+    { name: 'Drying only', description: 'Tumble dry only', base_price: 3000, price_per_kg: 3000 },
+  ];
   // GENTS Services
   const gentsServices = [
     { name: 'Suit 2 pcs', description: 'Wash, Press & Hanged', base_price: 11000 },
@@ -764,7 +775,7 @@ function insertDefaultServices() {
     { name: 'Wash Only 1KG', description: 'Washed & Fold', base_price: 3500, price_per_kg: 3500 }
   ];
 
-  const allServices = [...gentsServices, ...ladiesServices];
+  const allServices = [...serviceTypes, ...gentsServices, ...ladiesServices];
 
   const stmt = db.prepare(`INSERT OR IGNORE INTO services (name, description, base_price, price_per_item, price_per_kg) 
     VALUES (?, ?, ?, ?, ?)`);

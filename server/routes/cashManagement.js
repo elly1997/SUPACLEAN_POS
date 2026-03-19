@@ -173,20 +173,23 @@ function consolidateSummaries(results, date) {
 }
 
 async function calculateRemaining(date, openingBalance, cashSales, bookSales, branchId) {
-  const { calculateMobileMoneyReceived, calculateCardReceived } = require('../utils/cashValidation');
+  const { calculateMobileMoneyReceived, calculateCardReceived, calculateBankReceived } = require('../utils/cashValidation');
 
-  // Card and M-Pesa from transactions only (single source: includes advance + full payments on this date)
+  // Card, M-Pesa, and bank from transactions (advance + full payments on this date)
   let cardSales = 0;
   let mobileMoneySales = 0;
+  let bankPaymentsFromTx = 0;
   try {
-    const [cardFromTx, mpesaFromTx] = await Promise.all([
+    const [cardFromTx, mpesaFromTx, bankFromTx] = await Promise.all([
       calculateCardReceived(date, branchId),
-      calculateMobileMoneyReceived(date, branchId)
+      calculateMobileMoneyReceived(date, branchId),
+      calculateBankReceived(date, branchId)
     ]);
     cardSales = cardFromTx;
     mobileMoneySales = mpesaFromTx;
+    bankPaymentsFromTx = bankFromTx;
   } catch (err) {
-    console.error('Error calculating card/M-Pesa from transactions:', err);
+    console.error('Error calculating card/M-Pesa/bank from transactions:', err);
   }
   
   // Calculate expenses (handle both date formats and NULL branch_id for backward compatibility)
@@ -221,7 +224,7 @@ async function calculateRemaining(date, openingBalance, cashSales, bookSales, br
     card_sales: cardSales,
     mobile_money_sales: mobileMoneySales,
     bank_deposits: bankDeposits,
-    bank_payments: 0,
+    bank_payments: bankPaymentsFromTx,
     mpesa_received: mobileMoneySales,
     mpesa_paid: 0,
     expenses_from_cash: expensesFromCash,
