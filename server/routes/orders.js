@@ -408,13 +408,18 @@ router.get('/search/customer', requireBranchAccess(), async (req, res) => {
 });
 
 // Generate receipt number endpoint (for batch orders)
-router.get('/generate-receipt-number', (req, res) => {
-  generateReceiptNumber((err, receipt_number) => {
-    if (err) {
-      return res.status(500).json({ error: 'Error generating receipt number' });
+router.get('/generate-receipt-number', async (req, res) => {
+  try {
+    const { for_date } = req.query;
+    const targetDate = for_date ? new Date(for_date) : new Date();
+    if (Number.isNaN(targetDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid for_date. Use ISO date/time format.' });
     }
+    const receipt_number = await generateReceiptNumberPromise(targetDate);
     res.json({ receipt_number });
-  });
+  } catch (err) {
+    return res.status(500).json({ error: 'Error generating receipt number' });
+  }
 });
 
 // Generate QR code for receipt
@@ -464,9 +469,9 @@ router.get('/receipt/:receiptNumber/qrcode', async (req, res) => {
 });
 
 // Helper function to generate receipt number (uses async version directly)
-async function generateReceiptNumberPromise() {
+async function generateReceiptNumberPromise(targetDate = new Date()) {
   const { generateReceiptNumberAsync } = require('../utils/receipt');
-  return generateReceiptNumberAsync();
+  return generateReceiptNumberAsync(targetDate);
 }
 
 // Create new order (cashiers, managers, and admins can create)
@@ -491,8 +496,15 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
       created_by,
       receipt_number, // Optional: if provided, use this receipt number (for batch orders)
       estimated_collection_date, // Estimated collection date/time
+      order_date, // Optional: supports backdated/new receipt date
       branch_id // Optional: for admins to specify which branch to create the order for
     } = req.body;
+    const parsedOrderDate = order_date ? new Date(order_date) : new Date();
+    if (Number.isNaN(parsedOrderDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid order_date. Use ISO date/time format.' });
+    }
+    const finalOrderDateIso = parsedOrderDate.toISOString();
+
 
     console.log('Order data:', { customer_id, service_id, quantity, payment_status, branch_id });
 
@@ -572,12 +584,12 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
         try {
           const result = await db.run(
             `INSERT INTO orders (receipt_number, customer_id, service_id, quantity, 
-              weight_kg, color, garment_type, special_instructions, delivery_type, express_surcharge_multiplier, total_amount, paid_amount, payment_status, payment_method, created_by, estimated_collection_date, branch_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+              weight_kg, color, garment_type, special_instructions, delivery_type, express_surcharge_multiplier, total_amount, paid_amount, payment_status, payment_method, created_by, order_date, estimated_collection_date, branch_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
             [finalReceiptNumber, customer_id, service_id,
               quantity || 1, weight_kg || null, color || null, req.body.garment_type || null, special_instructions || null,
               delivery_type || 'standard', expressMultiplier,
-              final_total_amount, final_paid_amount, payment_status || 'not_paid', payment_method || 'cash', created_by || null, estimated_collection_date || null, branchId]
+              final_total_amount, final_paid_amount, payment_status || 'not_paid', payment_method || 'cash', created_by || null, finalOrderDateIso, estimated_collection_date || null, branchId]
           );
           const orderId = result.lastID;
 
@@ -638,7 +650,7 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
             payment_status: payment_status || 'not_paid',
             payment_method: payment_method || 'cash',
             status: 'pending',
-            order_date: new Date().toISOString(),
+            order_date: finalOrderDateIso,
             estimated_collection_date: estimated_collection_date || null
           };
 
@@ -678,7 +690,7 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
             console.log(`Duplicate receipt number detected: ${finalReceiptNumber}. Retrying (attempt ${retryCount + 1}/5)...`);
             // Retry with a new receipt number
             try {
-              const newReceiptNumber = await generateReceiptNumberPromise();
+              const newReceiptNumber = await generateReceiptNumberPromise(parsedOrderDate);
               console.log(`Generated new receipt number for retry: ${newReceiptNumber}`);
               return createOrder(newReceiptNumber, retryCount + 1);
             } catch (receiptErr) {
@@ -712,9 +724,9 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
       else if (receiptNumberToUse) {
         await insertOrder(receiptNumberToUse);
       } else {
-        // Generate receipt number (format: {sequence}-{DD}-{MM} ({YY}))
+        // Generate receipt number based on requested order date (for backdated orders)
         try {
-          const generatedReceiptNumber = await generateReceiptNumberPromise();
+          const generatedReceiptNumber = await generateReceiptNumberPromise(parsedOrderDate);
           await insertOrder(generatedReceiptNumber);
         } catch (receiptErr) {
           return res.status(500).json({ error: 'Error generating receipt number: ' + receiptErr.message });

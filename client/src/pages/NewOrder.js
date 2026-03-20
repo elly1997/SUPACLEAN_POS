@@ -81,6 +81,34 @@ const ColorInput = React.memo(({ value: propValue, onChange, itemId }) => {
 
 const RECENT_STORAGE_KEY = 'neworder_recent';
 const RECENT_MAX = 10;
+const toLocalDateTimeInput = (date) => {
+  const d = new Date(date);
+  d.setSeconds(0, 0);
+  const tzOffsetMs = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+};
+const parseDateTimeInput = (rawValue) => {
+  const value = String(rawValue || '').trim();
+  if (!value) return null;
+
+  // Native datetime-local format: YYYY-MM-DDTHH:mm
+  const isoLocalMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})$/);
+  if (isoLocalMatch) {
+    const [, y, m, d, hh, mm] = isoLocalMatch;
+    return new Date(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), 0, 0);
+  }
+
+  // Localized fallback: DD/MM/YYYY HH:mm
+  const slashMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[,\s]+(\d{1,2}):(\d{2})$/);
+  if (slashMatch) {
+    const [, d, m, y, hh, mm] = slashMatch;
+    return new Date(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), 0, 0);
+  }
+
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+  return null;
+};
 
 function getRecentFromStorage() {
   try {
@@ -135,6 +163,10 @@ const NewOrder = () => {
     address: ''
   });
   const [totalAmount, setTotalAmount] = useState(0);
+  const [receiptDiscountType, setReceiptDiscountType] = useState('amount');
+  const [receiptDiscountValue, setReceiptDiscountValue] = useState('');
+  const [orderDateTime, setOrderDateTime] = useState(() => toLocalDateTimeInput(new Date()));
+  const [manualReceiptNumber, setManualReceiptNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const [showConfirmOrderModal, setShowConfirmOrderModal] = useState(false);
   const [itemSearchTerm, setItemSearchTerm] = useState('');
@@ -247,34 +279,59 @@ const NewOrder = () => {
     }
   }, []);
 
+  const calculateLineTotal = useCallback((item, service) => {
+    const manualLineTotal = parseFloat(item.manual_line_total);
+    if (!Number.isNaN(manualLineTotal) && manualLineTotal >= 0) {
+      return manualLineTotal;
+    }
+
+    let itemBaseTotal = 0;
+    if (item.item_id && item.price !== undefined) {
+      itemBaseTotal = parseFloat(item.price || 0) * (item.quantity || 1);
+    } else if (service) {
+      itemBaseTotal = (service.base_price || 0) * (item.quantity || 1);
+      if (service.price_per_item > 0 && item.quantity) {
+        itemBaseTotal += service.price_per_item * item.quantity;
+      }
+      if (service.price_per_kg > 0 && item.weight_kg) {
+        itemBaseTotal += service.price_per_kg * parseFloat(item.weight_kg);
+      }
+    }
+
+    const itemServiceType = item.service_type || 'regular';
+    const serviceMultiplier = getServiceTypeMultiplier(itemServiceType);
+    const useDeliverySurcharge = itemServiceType !== 'express';
+    let itemTotal = itemBaseTotal * serviceMultiplier;
+    if (useDeliverySurcharge && item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0) {
+      itemTotal = itemTotal * item.express_surcharge_multiplier;
+    }
+    return itemTotal;
+  }, [getServiceTypeMultiplier]);
+
+  const roundMoney = useCallback((value) => {
+    const n = Number(value) || 0;
+    return Math.round((n + Number.EPSILON) * 100) / 100;
+  }, []);
+
   const calculateTotal = useCallback(() => {
-    const serviceMultiplier = getServiceTypeMultiplier(selectedServiceType);
-    const useDeliverySurcharge = selectedServiceType !== 'express'; // express already applies 2x
     let total = 0;
     orderItems.forEach(item => {
-      let itemBaseTotal = 0;
-      if (item.item_id && item.price !== undefined) {
-        itemBaseTotal = parseFloat(item.price || 0) * (item.quantity || 1);
-      } else {
-        const service = services.find(s => s.id === item.service_id);
-        if (service) {
-          itemBaseTotal = (service.base_price || 0) * (item.quantity || 1);
-          if (service.price_per_item > 0 && item.quantity) {
-            itemBaseTotal += service.price_per_item * item.quantity;
-          }
-          if (service.price_per_kg > 0 && item.weight_kg) {
-            itemBaseTotal += service.price_per_kg * parseFloat(item.weight_kg);
-          }
-        }
-      }
-      let itemTotal = itemBaseTotal * serviceMultiplier;
-      if (useDeliverySurcharge && item.delivery_type && item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0) {
-        itemTotal = itemTotal * item.express_surcharge_multiplier;
-      }
-      total += itemTotal;
+      const service = services.find(s => s.id === item.service_id);
+      total += calculateLineTotal(item, service);
     });
     setTotalAmount(total);
-  }, [orderItems, services, selectedServiceType, getServiceTypeMultiplier]);
+  }, [orderItems, services, calculateLineTotal]);
+
+  const discountAmount = useMemo(() => {
+    const raw = parseFloat(receiptDiscountValue);
+    if (Number.isNaN(raw) || raw <= 0) return 0;
+    if (receiptDiscountType === 'percent') {
+      return Math.min(totalAmount, (totalAmount * raw) / 100);
+    }
+    return Math.min(totalAmount, raw);
+  }, [receiptDiscountType, receiptDiscountValue, totalAmount]);
+
+  const payableTotal = useMemo(() => Math.max(0, totalAmount - discountAmount), [totalAmount, discountAmount]);
 
   const handleReset = useCallback(() => {
     setSelectedCustomer(null);
@@ -293,6 +350,10 @@ const NewOrder = () => {
       payment_method: 'cash'
     });
     setTotalAmount(0);
+    setReceiptDiscountType('amount');
+    setReceiptDiscountValue('');
+    setOrderDateTime(toLocalDateTimeInput(new Date()));
+    setManualReceiptNumber('');
     setSearchTerm('');
     setItemSearchTerm('');
     if (searchInputRef.current) {
@@ -390,12 +451,12 @@ const NewOrder = () => {
   useEffect(() => {
     // Update paid amount when payment status changes
     if (orderData.payment_status === 'paid_full') {
-      setOrderData(prev => ({ ...prev, paid_amount: totalAmount.toFixed(2) }));
+      setOrderData(prev => ({ ...prev, paid_amount: payableTotal.toFixed(2) }));
     } else if (orderData.payment_status === 'not_paid') {
       setOrderData(prev => ({ ...prev, paid_amount: '0' }));
     }
     // For advance, keep current value or set to 0
-  }, [orderData.payment_status, totalAmount]);
+  }, [orderData.payment_status, payableTotal]);
 
 
   useEffect(() => {
@@ -455,12 +516,14 @@ const NewOrder = () => {
         id: Date.now(),
         service_id: service.id,
         service_name: service.name,
+        service_type: selectedServiceType,
         quantity: 1,
         weight_kg: service.price_per_kg > 0 ? '' : null,
         color: '',
         special_instructions: '',
         delivery_type: deliveryType,
-        express_surcharge_multiplier: expressMultiplier
+        express_surcharge_multiplier: expressMultiplier,
+        manual_line_total: ''
       };
       
       setOrderItems([...orderItems, newItem]);
@@ -473,9 +536,16 @@ const NewOrder = () => {
     setOrderItems(prevItems => prevItems.map(item => {
       if (item.id === itemId) {
         const updated = { ...item, ...updates };
+        if (updates.service_type === 'express') {
+          updated.delivery_type = 'same_day';
+          updated.express_surcharge_multiplier = 0;
+        }
         // Recalculate express multiplier if delivery type changed
         if (updates.delivery_type) {
-          if (updates.delivery_type === 'same_day') {
+          const serviceType = updated.service_type || 'regular';
+          if (serviceType === 'express') {
+            updated.express_surcharge_multiplier = 0;
+          } else if (updates.delivery_type === 'same_day') {
             updated.express_surcharge_multiplier = parseFloat(expressSettings.express_same_day_multiplier?.value || 2);
           } else if (updates.delivery_type === 'next_day') {
             updated.express_surcharge_multiplier = parseFloat(expressSettings.express_next_day_multiplier?.value || 3);
@@ -529,6 +599,22 @@ const NewOrder = () => {
         showToast('Please enter advance payment amount', 'warning');
         return;
       }
+      if (paid > payableTotal) {
+        showToast('Advance payment cannot exceed amount due', 'warning');
+        return;
+      }
+    }
+    const selectedOrderDate = parseDateTimeInput(orderDateTime);
+    if (!selectedOrderDate || Number.isNaN(selectedOrderDate.getTime())) {
+      showToast('Please select a valid receipt date and time', 'warning');
+      return;
+    }
+    const todayLocal = toLocalDateTimeInput(new Date()).slice(0, 10);
+    const selectedLocal = toLocalDateTimeInput(selectedOrderDate).slice(0, 10);
+    const isBackdated = selectedLocal < todayLocal;
+    if (isBackdated && !(manualReceiptNumber || '').trim()) {
+      showToast('Backdated orders require a manual receipt ID', 'warning');
+      return;
     }
     setShowConfirmOrderModal(true);
   };
@@ -540,57 +626,67 @@ const NewOrder = () => {
       // Calculate payment amount based on payment status
       let paidAmount = 0;
       if (orderData.payment_status === 'paid_full') {
-        paidAmount = totalAmount;
+        paidAmount = payableTotal;
       } else if (orderData.payment_status === 'advance') {
         paidAmount = parseFloat(orderData.paid_amount) || 0;
       } else {
         paidAmount = 0; // not_paid
       }
 
-      // Generate receipt number once for all items in this order
-      let sharedReceiptNumber;
-      try {
-        const receiptRes = await generateReceiptNumber();
-        sharedReceiptNumber = receiptRes.data.receipt_number;
-      } catch (error) {
-        console.error('Error generating receipt number:', error);
-        throw new Error('Failed to generate receipt number: ' + (error.response?.data?.error || error.message || 'Network Error'));
+      const selectedOrderDate = parseDateTimeInput(orderDateTime);
+      if (!selectedOrderDate || Number.isNaN(selectedOrderDate.getTime())) {
+        throw new Error('Invalid receipt date and time selected.');
+      }
+      const todayLocal = toLocalDateTimeInput(new Date()).slice(0, 10);
+      const selectedLocal = toLocalDateTimeInput(selectedOrderDate).slice(0, 10);
+      const isBackdated = selectedLocal < todayLocal;
+      const trimmedManualReceipt = (manualReceiptNumber || '').trim();
+
+      if (isBackdated && !trimmedManualReceipt) {
+        throw new Error('Manual receipt ID is required for backdated orders.');
+      }
+
+      // Generate receipt number once for all items in this order (unless cashier entered one)
+      let sharedReceiptNumber = trimmedManualReceipt || null;
+      if (!sharedReceiptNumber) {
+        try {
+          const receiptRes = await generateReceiptNumber(selectedOrderDate.toISOString());
+          sharedReceiptNumber = receiptRes.data.receipt_number;
+        } catch (error) {
+          console.error('Error generating receipt number:', error);
+          throw new Error('Failed to generate receipt number: ' + (error.response?.data?.error || error.message || 'Network Error'));
+        }
       }
       
       // Create order for each item (all sharing the same receipt number)
       // Process sequentially to avoid race conditions
       const receipts = [];
+      const preDiscountLineTotals = orderItems.map((item) => {
+        const service = services.find((s) => s.id === item.service_id);
+        return Math.max(0, calculateLineTotal(item, service));
+      });
+      const preDiscountTotal = preDiscountLineTotals.reduce((sum, n) => sum + n, 0);
+      const lineTotals = [...preDiscountLineTotals];
+      if (discountAmount > 0 && preDiscountTotal > 0) {
+        let allocated = 0;
+        for (let idx = 0; idx < lineTotals.length; idx++) {
+          if (idx === lineTotals.length - 1) {
+            lineTotals[idx] = roundMoney(Math.max(0, payableTotal - allocated));
+          } else {
+            const ratio = preDiscountLineTotals[idx] / preDiscountTotal;
+            const discounted = roundMoney(Math.max(0, preDiscountLineTotals[idx] - (discountAmount * ratio)));
+            lineTotals[idx] = discounted;
+            allocated += discounted;
+          }
+        }
+      }
       for (let i = 0; i < orderItems.length; i++) {
         const item = orderItems[i];
-        
-        // Calculate total - use item price if it's an item, otherwise use service pricing
-        let itemBaseTotal = 0;
-        if (item.item_id && item.price !== undefined) {
-          // Use item pricing
-          itemBaseTotal = parseFloat(item.price || 0) * (item.quantity || 1);
-        } else {
-          // Use service pricing (backward compatibility)
-          const service = services.find(s => s.id === item.service_id);
-          itemBaseTotal = (service?.base_price || 0) * (item.quantity || 1);
-          if (service?.price_per_item > 0 && item.quantity) {
-            itemBaseTotal += service.price_per_item * item.quantity;
-          }
-          if (service?.price_per_kg > 0 && item.weight_kg) {
-            itemBaseTotal += service.price_per_kg * parseFloat(item.weight_kg);
-          }
-        }
-        
-        // Apply service type multiplier then delivery surcharge (express type already includes 2x, no extra surcharge)
-        const serviceMultiplier = getServiceTypeMultiplier(selectedServiceType);
-        const useDeliverySurcharge = selectedServiceType !== 'express';
-        let itemTotal = itemBaseTotal * serviceMultiplier;
-        if (useDeliverySurcharge && item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0) {
-          itemTotal = itemTotal * item.express_surcharge_multiplier;
-        }
+        const itemTotal = lineTotals[i];
 
         // Distribute payment proportionally if multiple items
         const itemPayment = orderItems.length > 1 
-          ? (paidAmount * (itemTotal / totalAmount))
+          ? (payableTotal > 0 ? (paidAmount * (itemTotal / payableTotal)) : 0)
           : paidAmount;
 
         const orderPayload = {
@@ -609,6 +705,7 @@ const NewOrder = () => {
           payment_method: orderData.payment_method,
           created_by: 'Cashier',
           receipt_number: sharedReceiptNumber,
+          order_date: selectedOrderDate.toISOString(),
           estimated_collection_date: estimatedCollectionDate ? new Date(estimatedCollectionDate).toISOString() : null,
           ...(effectiveBranchId ? { branch_id: effectiveBranchId } : {})
         };
@@ -631,7 +728,7 @@ const NewOrder = () => {
             orderPayload._retryAttempted = true;
             // Generate a new receipt number and update for remaining items
             try {
-              const newReceiptRes = await generateReceiptNumber();
+              const newReceiptRes = await generateReceiptNumber(selectedOrderDate.toISOString());
               sharedReceiptNumber = newReceiptRes.data.receipt_number;
               // Update receipt number for all remaining items
               for (let j = i; j < orderItems.length; j++) {
@@ -654,7 +751,7 @@ const NewOrder = () => {
       if (receipts.length > 0) {
         // Always use consolidated receipt format for consistency (single or multiple items)
         try {
-          const combinedReceipt = await combineReceipts(receipts, selectedCustomer, totalAmount, orderData);
+          const combinedReceipt = await combineReceipts(receipts, selectedCustomer, payableTotal, orderData, discountAmount);
           
           if (!combinedReceipt || !combinedReceipt.text || String(combinedReceipt.text).trim().length === 0) {
             console.error('Receipt text is empty:', combinedReceipt);
@@ -701,8 +798,8 @@ const NewOrder = () => {
 
   const RECEIPT_COMPACT_THRESHOLD = 12;
 
-  const combineReceipts = async (receipts, customer, total, paymentData) => {
-    const now = new Date();
+  const combineReceipts = async (receipts, customer, total, paymentData, discount = 0) => {
+    const now = receipts[0]?.order?.order_date ? new Date(receipts[0].order.order_date) : new Date();
     const dateStr = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const calculatedTotal = receipts.reduce((sum, r) => sum + (parseFloat(r.order.total_amount) || 0), 0);
     const finalTotal = calculatedTotal > 0 ? calculatedTotal : total;
@@ -750,7 +847,11 @@ Phone: ${customer.phone}
     });
 
     const sep = useCompact ? '─'.repeat(32) : '───────────────────────────────────────────';
-    let footerText = `${sep}\nTOTAL: TSh ${finalTotal.toLocaleString()}\n`;
+    let footerText = `${sep}\n`;
+    if ((Number(discount) || 0) > 0) {
+      footerText += `DISCOUNT: -TSh ${Number(discount).toLocaleString()}\n`;
+    }
+    footerText += `TOTAL: TSh ${finalTotal.toLocaleString()}\n`;
     if (paymentData.payment_status === 'not_paid') {
       footerText += `NOT PAID\n`;
     } else if (paymentData.payment_status === 'paid_full') {
@@ -1039,13 +1140,15 @@ Phone: ${customer.phone}
         item_name: item.name,
         service_id: defaultService?.id || null,
         service_name: defaultService?.name || 'Standard Service',
+        service_type: selectedServiceType,
         quantity: 1,
         weight_kg: null,
         color: '',
         special_instructions: '',
         delivery_type: deliveryType,
         express_surcharge_multiplier: expressMultiplier,
-        price: parseFloat(item.price || item.base_price || 0)
+        price: parseFloat(item.price || item.base_price || 0),
+        manual_line_total: ''
       };
       
       setOrderItems([...orderItems, newItem]);
@@ -1281,7 +1384,7 @@ Phone: ${customer.phone}
                 <span aria-hidden>🧺</span> {items.length > 0 ? 'Items & Services' : 'Services'}
               </h2>
               <div className="items-panel-service-row">
-                <label className="items-panel-label">Service type</label>
+                <label className="items-panel-label">Default service type (for new lines)</label>
                 <div className="delivery-options service-type-options" role="group" aria-label="Service type">
                   {[
                     { id: 'regular', label: 'Regular', icon: '📦', title: 'Price list rates (default)' },
@@ -1307,9 +1410,9 @@ Phone: ${customer.phone}
                   ))}
                 </div>
                 {selectedServiceType === 'express' && (
-                  <p className="express-notice" role="status">Express: same-day delivery, price ×2</p>
+                  <p className="express-notice" role="status">New lines default to Express: same-day delivery, price ×2</p>
                 )}
-                <p className="items-panel-hint">Add items or services below; for per-kg services enter weight in the order summary.</p>
+                <p className="items-panel-hint">Each line can be changed independently in the order summary (service type and amount).</p>
               </div>
               <div className="items-search-row">
                 <input
@@ -1488,27 +1591,7 @@ Phone: ${customer.phone}
                     // Find service for this item (if it has a service_id)
                     const service = item.service_id ? services.find(s => s.id === item.service_id) : null;
                     
-                    // Calculate total - use item price if it's an item, otherwise use service pricing
-                    let itemBaseTotal = 0;
-                    if (item.item_id && item.price !== undefined) {
-                      // Use item pricing
-                      itemBaseTotal = parseFloat(item.price || 0) * (item.quantity || 1);
-                    } else {
-                      // Use service pricing (backward compatibility)
-                      itemBaseTotal = (service?.base_price || 0) * (item.quantity || 1);
-                      if (service?.price_per_item > 0 && item.quantity) {
-                        itemBaseTotal += service.price_per_item * item.quantity;
-                      }
-                      if (service?.price_per_kg > 0 && item.weight_kg) {
-                        itemBaseTotal += service.price_per_kg * parseFloat(item.weight_kg);
-                      }
-                    }
-                    const serviceMultiplier = getServiceTypeMultiplier(selectedServiceType);
-                    const useDeliverySurcharge = selectedServiceType !== 'express';
-                    let itemFinalTotal = itemBaseTotal * serviceMultiplier;
-                    if (useDeliverySurcharge && item.delivery_type !== 'standard' && item.express_surcharge_multiplier > 0) {
-                      itemFinalTotal = itemFinalTotal * item.express_surcharge_multiplier;
-                    }
+                    const itemFinalTotal = calculateLineTotal(item, service);
                     
                     return (
                       <div key={item.id} className="order-item-card">
@@ -1532,6 +1615,20 @@ Phone: ${customer.phone}
                           </div>
 
                           <div className="item-controls">
+                            <div className="form-group-modern" style={{ marginBottom: 8 }}>
+                              <label style={{ fontSize: 12, marginBottom: 4 }}>Service for this line</label>
+                              <select
+                                value={item.service_type || 'regular'}
+                                onChange={(e) => handleUpdateItem(item.id, { service_type: e.target.value })}
+                              >
+                                <option value="regular">Regular</option>
+                                <option value="wash_only">Wash only</option>
+                                <option value="dry_only">Dry only</option>
+                                <option value="press_only">Press only</option>
+                                <option value="express">Express</option>
+                              </select>
+                            </div>
+
                             <div className="qty-control-inline">
                               <button
                                 type="button"
@@ -1562,6 +1659,17 @@ Phone: ${customer.phone}
                                 />
                               </div>
                             )}
+                            <div className="weight-control">
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                placeholder="Line amount override (TSh)"
+                                value={item.manual_line_total || ''}
+                                onChange={(e) => handleUpdateItem(item.id, { manual_line_total: e.target.value })}
+                                className="weight-input-small"
+                              />
+                            </div>
                           </div>
                         </div>
                         <div className="item-price-actions">
@@ -1586,13 +1694,39 @@ Phone: ${customer.phone}
                       <span>Subtotal:</span>
                       <span>TSh {totalAmount.toLocaleString()}</span>
                     </div>
+                    <div className="total-line">
+                      <span>Receipt Discount:</span>
+                      <span>- TSh {discountAmount.toLocaleString()}</span>
+                    </div>
                     <div className="total-line total-amount">
                       <span>Total Amount:</span>
-                      <strong>TSh {totalAmount.toLocaleString()}</strong>
+                      <strong>TSh {payableTotal.toLocaleString()}</strong>
                     </div>
                   </div>
 
                   <div className="payment-inputs">
+                    <div className="form-group-modern">
+                      <label>Receipt Discount (Apply at end)</label>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <select
+                          value={receiptDiscountType}
+                          onChange={(e) => setReceiptDiscountType(e.target.value)}
+                          style={{ maxWidth: 140 }}
+                        >
+                          <option value="amount">Amount (TSh)</option>
+                          <option value="percent">Percent (%)</option>
+                        </select>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={receiptDiscountValue}
+                          onChange={(e) => setReceiptDiscountValue(e.target.value)}
+                          placeholder={receiptDiscountType === 'percent' ? 'e.g. 10' : 'e.g. 1500'}
+                        />
+                      </div>
+                    </div>
+
                     <div className="form-group-modern">
                       <label>Payment Status</label>
                       <div className="payment-status-options">
@@ -1615,7 +1749,7 @@ Phone: ${customer.phone}
                         <button
                           type="button"
                           className={`payment-status-btn ${orderData.payment_status === 'paid_full' ? 'active' : ''}`}
-                          onClick={() => setOrderData({ ...orderData, payment_status: 'paid_full', paid_amount: totalAmount.toFixed(2) })}
+                          onClick={() => setOrderData({ ...orderData, payment_status: 'paid_full', paid_amount: payableTotal.toFixed(2) })}
                         >
                           ✅ PAID FULL
                           <small>(Fully Paid)</small>
@@ -1630,14 +1764,14 @@ Phone: ${customer.phone}
                           type="number"
                           step="0.01"
                           min="0"
-                          max={totalAmount}
+                          max={payableTotal}
                           value={orderData.paid_amount}
                           onChange={(e) => setOrderData({ ...orderData, paid_amount: e.target.value })}
                           placeholder="Enter amount..."
                         />
                         {orderData.paid_amount && (
                           <div className="balance-display">
-                            Balance Due: TSh {(totalAmount - (parseFloat(orderData.paid_amount) || 0)).toLocaleString()}
+                            Balance Due: TSh {(payableTotal - (parseFloat(orderData.paid_amount) || 0)).toLocaleString()}
                           </div>
                         )}
                       </div>
@@ -1662,6 +1796,32 @@ Phone: ${customer.phone}
                     )}
 
                     <div className="form-group-modern">
+                      <label>Receipt Date & Time</label>
+                      <input
+                        type="datetime-local"
+                        value={orderDateTime || ''}
+                        onChange={(e) => setOrderDateTime(e.target.value)}
+                        className="datetime-input"
+                      />
+                      <small className="form-hint">
+                        Use this when recording orders from a previous day.
+                      </small>
+                    </div>
+
+                    <div className="form-group-modern">
+                      <label>Manual Receipt ID (Optional)</label>
+                      <input
+                        type="text"
+                        value={manualReceiptNumber}
+                        onChange={(e) => setManualReceiptNumber(e.target.value)}
+                        placeholder="e.g. 145-19-03 (26)"
+                      />
+                      <small className="form-hint">
+                        Required for backdated entries. Leave blank for automatic ID on today&apos;s orders.
+                      </small>
+                    </div>
+
+                    <div className="form-group-modern">
                       <label>Estimated Collection Date & Time</label>
                       <input
                         type="datetime-local"
@@ -1672,7 +1832,7 @@ Phone: ${customer.phone}
                             setEstimatedCollectionDate(val);
                           }
                         }}
-                        min={new Date().toISOString().slice(0, 16)}
+                        min={toLocalDateTimeInput(new Date())}
                         className="datetime-input"
                       />
                       <small className="form-hint">
@@ -1709,7 +1869,7 @@ Phone: ${customer.phone}
             <div className="confirm-order-summary">
               <p><strong>Customer:</strong> {selectedCustomer?.name}</p>
               <p><strong>Items:</strong> {orderItems.length} line{orderItems.length !== 1 ? 's' : ''}</p>
-              <p><strong>Total:</strong> TSh {totalAmount.toLocaleString()}</p>
+              <p><strong>Total:</strong> TSh {payableTotal.toLocaleString()}</p>
               <p><strong>Payment:</strong> {orderData.payment_status === 'not_paid' ? 'Not paid' : orderData.payment_status === 'advance' ? `Advance TSh ${(parseFloat(orderData.paid_amount) || 0).toLocaleString()}` : 'Paid in full'} ({String(orderData.payment_method || 'cash').replace('_', ' ')})</p>
             </div>
             <div className="confirm-order-actions">

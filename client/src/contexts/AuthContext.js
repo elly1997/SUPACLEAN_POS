@@ -2,6 +2,10 @@ import React, { createContext, useState, useContext, useEffect, useCallback, use
 import api from '../api/api';
 
 const AuthContext = createContext();
+const AUTH_DEBUG = false;
+const debugLog = (...args) => {
+  if (AUTH_DEBUG) console.log(...args);
+};
 
 const STORAGE_VERSION = '2';
 function ensureStorageVersion() {
@@ -66,28 +70,28 @@ export const AuthProvider = ({ children }) => {
   const verifySession = useCallback(async () => {
     // Skip verification if we're in the middle of logging in
     if (isLoggingInRef.current) {
-      console.log('⏸️ Skipping verifySession - login in progress');
+      debugLog('⏸️ Skipping verifySession - login in progress');
       return;
     }
 
     // Skip if user is already set
     if (userRef.current) {
-      console.log('⏸️ Skipping verifySession - user already set');
+      debugLog('⏸️ Skipping verifySession - user already set');
       setLoading(false);
       return;
     }
 
     try {
-      console.log('🔍 Verifying session...');
+      debugLog('🔍 Verifying session...');
       const response = await api.get('/auth/verify');
       if (response.data.valid) {
-        console.log('✅ Session valid:', response.data.user.username);
+        debugLog('✅ Session valid:', response.data.user.username);
         setUser(response.data.user);
         setBranch(response.data.user.branch);
         userRef.current = response.data.user;
         setLoading(false);
       } else {
-        console.log('❌ Session invalid');
+        debugLog('❌ Session invalid');
         logout();
       }
     } catch (error) {
@@ -102,13 +106,13 @@ export const AuthProvider = ({ children }) => {
             setBranch(parsed.branch ?? null);
             userRef.current = parsed;
             setLoading(false);
-            console.log('📴 Session re-check failed (401); using cached user so you can keep using the app.');
+            debugLog('📴 Session re-check failed (401); using cached user so you can keep using the app.');
             return;
           }
         } catch (e) {
           console.warn('Could not restore cached user', e);
         }
-        console.log('🔒 Logging out due to 401 (no cached user)');
+        debugLog('🔒 Logging out due to 401 (no cached user)');
         logout();
       } else if (!isLoggingInRef.current) {
         // Network/offline: restore user from cache so app works offline
@@ -119,7 +123,7 @@ export const AuthProvider = ({ children }) => {
             setUser(parsed);
             setBranch(parsed.branch ?? null);
             userRef.current = parsed;
-            console.log('📴 Offline mode: using cached user', parsed.username);
+            debugLog('📴 Offline mode: using cached user', parsed.username);
           }
         } catch (e) {
           console.warn('Could not restore cached user', e);
@@ -138,23 +142,23 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     // Don't verify during login
     if (isLoggingInRef.current) {
-      console.log('⏸️ useEffect: Skipping - login in progress');
+      debugLog('⏸️ useEffect: Skipping - login in progress');
       return;
     }
     
     // Use ref to check current user state (avoid stale closure)
     if (sessionToken && !userRef.current) {
-      console.log('🔍 useEffect: Verifying session (token exists, no user)');
+      debugLog('🔍 useEffect: Verifying session (token exists, no user)');
       verifySession();
     } else if (!sessionToken) {
-      console.log('🚫 useEffect: No token, clearing state');
+      debugLog('🚫 useEffect: No token, clearing state');
       setUser(null);
       setBranch(null);
       userRef.current = null;
       setLoading(false);
     } else if (userRef.current) {
       // User already set (e.g., from login), just ensure loading is false
-      console.log('✅ useEffect: User already set, setting loading to false');
+      debugLog('✅ useEffect: User already set, setting loading to false');
       setLoading(false);
     }
   }, [sessionToken]); // Remove verifySession from deps to prevent loops - use refs inside
@@ -165,15 +169,15 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     
     try {
-      console.log('🔐 Attempting login for:', username);
+      debugLog('🔐 Attempting login for:', username);
       const response = await api.post('/auth/login', { username, password });
-      console.log('✅ Login response:', response.data);
+      debugLog('✅ Login response:', response.data);
       
       if (response.data.success) {
         const token = response.data.sessionToken;
         const userData = response.data.user;
         
-        console.log('✅ Login successful, setting user state...');
+        debugLog('✅ Login successful, setting user state...');
         
         // Persist token and user immediately to avoid transient unauthenticated states
         // when route changes happen quickly after login.
@@ -191,7 +195,7 @@ export const AuthProvider = ({ children }) => {
         userRef.current = userData;
         setLoading(false);
         isLoggingInRef.current = false;
-        console.log('✅ Login complete');
+        debugLog('✅ Login complete');
         
         return { success: true };
       } else {

@@ -6,8 +6,11 @@ const db = require('../database/query');
 // Example: 1-01-01 (26) for first customer on January 1, 2026
 // Format: sequence-day-month (year)
 // PostgreSQL-compatible async implementation
-async function generateReceiptNumberAsync(retryCount = 0) {
-  const today = new Date();
+async function generateReceiptNumberAsync(targetDate = new Date(), retryCount = 0) {
+  const today = new Date(targetDate);
+  if (Number.isNaN(today.getTime())) {
+    throw new Error('Invalid date provided for receipt generation');
+  }
   const day = String(today.getDate()).padStart(2, '0'); // Zero-padded day (01, 02, etc.)
   const month = String(today.getMonth() + 1).padStart(2, '0'); // Zero-padded month (01, 02, etc.)
   const year = today.getFullYear().toString().slice(-2); // Last 2 digits of year
@@ -36,7 +39,7 @@ async function generateReceiptNumberAsync(retryCount = 0) {
     console.error('Error generating receipt number:', err);
     // Fallback: use timestamp-based sequence if query fails
     if (retryCount < 3) {
-      return generateReceiptNumberAsync(retryCount + 1);
+      return generateReceiptNumberAsync(today, retryCount + 1);
     }
     // Final fallback: use timestamp
     const timestampSeq = Date.now() % 100000;
@@ -46,7 +49,7 @@ async function generateReceiptNumberAsync(retryCount = 0) {
 
 // Callback wrapper for backward compatibility
 function generateReceiptNumber(callback, retryCount = 0) {
-  generateReceiptNumberAsync(retryCount)
+  generateReceiptNumberAsync(undefined, retryCount)
     .then(receiptNumber => callback(null, receiptNumber))
     .catch(err => callback(err, null));
 }
