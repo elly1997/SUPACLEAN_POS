@@ -281,7 +281,7 @@ const NewOrder = () => {
 
   const calculateLineTotal = useCallback((item, service) => {
     const manualLineTotal = parseFloat(item.manual_line_total);
-    if (!Number.isNaN(manualLineTotal) && manualLineTotal >= 0) {
+    if (item.manual_price_enabled && !Number.isNaN(manualLineTotal) && manualLineTotal >= 0) {
       return manualLineTotal;
     }
 
@@ -523,7 +523,8 @@ const NewOrder = () => {
         special_instructions: '',
         delivery_type: deliveryType,
         express_surcharge_multiplier: expressMultiplier,
-        manual_line_total: ''
+        manual_line_total: '',
+        manual_price_enabled: false
       };
       
       setOrderItems([...orderItems, newItem]);
@@ -1148,7 +1149,8 @@ Phone: ${customer.phone}
         delivery_type: deliveryType,
         express_surcharge_multiplier: expressMultiplier,
         price: parseFloat(item.price || item.base_price || 0),
-        manual_line_total: ''
+        manual_line_total: '',
+        manual_price_enabled: false
       };
       
       setOrderItems([...orderItems, newItem]);
@@ -1659,16 +1661,31 @@ Phone: ${customer.phone}
                                 />
                               </div>
                             )}
-                            <div className="weight-control">
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                placeholder="Line amount override (TSh)"
-                                value={item.manual_line_total || ''}
-                                onChange={(e) => handleUpdateItem(item.id, { manual_line_total: e.target.value })}
-                                className="weight-input-small"
-                              />
+                            <div className="weight-control" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <button
+                                type="button"
+                                className={`btn-secondary ${item.manual_price_enabled ? 'active' : ''}`}
+                                onClick={() =>
+                                  handleUpdateItem(item.id, {
+                                    manual_price_enabled: !item.manual_price_enabled,
+                                    ...(item.manual_price_enabled ? { manual_line_total: '' } : {})
+                                  })
+                                }
+                                title="Set manual line price for tailoring/extra charges"
+                              >
+                                {item.manual_price_enabled ? 'Use Auto Price' : 'Set Manual Price'}
+                              </button>
+                              {item.manual_price_enabled && (
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  placeholder="Manual line price (TSh)"
+                                  value={item.manual_line_total || ''}
+                                  onChange={(e) => handleUpdateItem(item.id, { manual_line_total: e.target.value })}
+                                  className="weight-input-small"
+                                />
+                              )}
                             </div>
                           </div>
                         </div>
