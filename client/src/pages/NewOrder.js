@@ -1600,6 +1600,11 @@ Phone: ${customer.phone}
                         <div className="item-info">
                           <div className="item-header">
                             <strong>{item.item_name || item.service_name}</strong>
+                            {item.manual_price_enabled && (
+                              <span className="express-badge-small" title="Manual line price override is active">
+                                Manual Price Active
+                              </span>
+                            )}
                             {item.delivery_type !== 'standard' && (
                               <span className="express-badge-small">
                                 {item.delivery_type === 'same_day' ? '⚡' : '🚀'}
