@@ -73,9 +73,17 @@ class AppErrorBoundary extends React.Component {
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, verifySession } = useAuth();
+  const hasStoredToken = typeof localStorage !== 'undefined' && !!localStorage.getItem('sessionToken');
 
-  if (loading) {
+  React.useEffect(() => {
+    // Prevent transient redirects during state rehydration/re-mounts.
+    if (!isAuthenticated && hasStoredToken) {
+      verifySession();
+    }
+  }, [hasStoredToken, isAuthenticated, verifySession]);
+
+  if (loading || (!isAuthenticated && hasStoredToken)) {
     return <Loader message="Loading…" fullPage delayMs={0} />;
   }
 
