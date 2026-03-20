@@ -8,12 +8,38 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+function normalizeOrigin(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function buildAllowedOrigins() {
+  const values = [];
+  const fromClientUrl = (process.env.CLIENT_URL || '')
+    .split(',')
+    .map((v) => normalizeOrigin(v))
+    .filter(Boolean);
+  const fromRenderExternal = normalizeOrigin(process.env.RENDER_EXTERNAL_URL);
+  const fallbackLocal = ['http://localhost:3000'];
+  values.push(...fromClientUrl);
+  if (fromRenderExternal) values.push(fromRenderExternal);
+  values.push(...fallbackLocal);
+  return Array.from(new Set(values));
+}
+
+const allowedOrigins = buildAllowedOrigins();
+
 // Compression middleware (should be early in the stack)
 app.use(compression());
 
 // Middleware
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    // Allow non-browser tools (no Origin header) and explicitly configured origins.
+    if (!origin) return callback(null, true);
+    const normalized = normalizeOrigin(origin);
+    if (allowedOrigins.includes(normalized)) return callback(null, true);
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
   credentials: true
 }));
 app.use(bodyParser.json({ limit: '10mb' }));

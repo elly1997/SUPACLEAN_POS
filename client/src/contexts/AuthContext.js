@@ -7,8 +7,8 @@ const STORAGE_VERSION = '2';
 function ensureStorageVersion() {
   if (typeof localStorage === 'undefined') return;
   if (localStorage.getItem('app_storage_version') !== STORAGE_VERSION) {
-    localStorage.removeItem('sessionToken');
-    localStorage.removeItem('sessionUser');
+    // Keep auth/session keys to avoid unexpected logout loops across deployments.
+    // We only reset branch filter, which is safe to recompute.
     localStorage.removeItem('selectedBranchId');
     localStorage.setItem('app_storage_version', STORAGE_VERSION);
   }
@@ -175,31 +175,23 @@ export const AuthProvider = ({ children }) => {
         
         console.log('✅ Login successful, setting user state...');
         
-        // Set user and branch first (this updates userRef via useEffect)
+        // Persist token and user immediately to avoid transient unauthenticated states
+        // when route changes happen quickly after login.
+        setSessionToken(token);
+        localStorage.setItem('sessionToken', token);
+        try {
+          localStorage.setItem('sessionUser', JSON.stringify(userData));
+        } catch (e) {
+          console.warn('Could not cache user for offline', e);
+        }
+
+        // Set user and branch (this updates userRef via useEffect)
         setUser(userData);
         setBranch(userData.branch);
-        userRef.current = userData; // Update ref immediately to prevent verifySession from running
-        
-        // Set loading to false
+        userRef.current = userData;
         setLoading(false);
-        
-        // Set token and save to localStorage AFTER a small delay to ensure user state is set
-        // This ensures the useEffect sees userRef.current as set when it checks
-        setTimeout(() => {
-          setSessionToken(token);
-          localStorage.setItem('sessionToken', token);
-          // Cache user for offline use (login requires online; after that app can run offline)
-          try {
-            localStorage.setItem('sessionUser', JSON.stringify(userData));
-          } catch (e) {
-            console.warn('Could not cache user for offline', e);
-          }
-          // Clear the flag after token is set and state has settled
-          setTimeout(() => {
-            console.log('✅ Login complete, clearing login flag');
-            isLoggingInRef.current = false;
-          }, 500);
-        }, 100);
+        isLoggingInRef.current = false;
+        console.log('✅ Login complete');
         
         return { success: true };
       } else {
