@@ -320,11 +320,14 @@ export async function getCollectionQueue(params = {}) {
     throw err;
   }
 }
-export const uploadStockExcel = (formData) => api.post('/orders/upload-stock-excel', formData, {
-  headers: {
-    'Content-Type': 'multipart/form-data'
-  }
-});
+// Stock import runs many DB rows sequentially; 15s default axios timeout is too low on slow networks / cold Render.
+export const uploadStockExcel = (formData) =>
+  api.post('/orders/upload-stock-excel', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    },
+    timeout: 300000 // 5 minutes
+  });
 export const getOrderItemPhotos = (orderId) => api.get('/order-item-photos', { params: { order_id: orderId } });
 export const uploadOrderItemPhoto = (orderId, file, caption) => {
   const fd = new FormData();
