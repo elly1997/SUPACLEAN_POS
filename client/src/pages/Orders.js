@@ -60,6 +60,8 @@ const Orders = () => {
   const [exporting, setExporting] = useState(false);
   const [exportingUncollected, setExportingUncollected] = useState(false);
   const [showExportPopup, setShowExportPopup] = useState(false);
+  /** YYYY-MM-DD: imported orders use this day for order_date (cash reports), not upload day. Empty = server uses per-row date or yesterday. */
+  const [stockImportHistoricalDate, setStockImportHistoricalDate] = useState('');
   const ordersSearchInputRef = useRef(null);
 
   // F2: focus order search (customer name or phone) for quick access
@@ -272,6 +274,9 @@ const Orders = () => {
 
     const formData = new FormData();
     formData.append('file', file);
+    if (stockImportHistoricalDate && String(stockImportHistoricalDate).trim()) {
+      formData.append('historical_order_date', String(stockImportHistoricalDate).trim());
+    }
 
     try {
       showToast('Uploading and processing stock file...', 'info');
@@ -756,15 +761,27 @@ Phone: ${receiptGroup.customer_phone}
           >
             {(exporting || exportingUncollected) ? '…' : 'Export'}
           </button>
-          <label className="btn-secondary" style={{ cursor: 'pointer' }} title="Format: id, name, phone, amount, paid/not paid. All uploaded stock is uncollected (Ready). See UPLOAD_STOCK_FORMAT.md">
-            📦 Upload Stock Excel
-            <input
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              style={{ display: 'none' }}
-              onChange={handleStockExcelUpload}
-            />
-          </label>
+          <div className="stock-upload-row" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+              <span style={{ color: 'var(--text-secondary)' }}>Import order date (for cash reports)</span>
+              <input
+                type="date"
+                value={stockImportHistoricalDate}
+                onChange={(e) => setStockImportHistoricalDate(e.target.value)}
+                title="Paid imports count toward this day, not today. Leave empty to use each row’s date column, or yesterday if missing."
+                style={{ padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border-color)' }}
+              />
+            </label>
+            <label className="btn-secondary" style={{ cursor: 'pointer' }} title="Format: id, name, phone, amount, paid/not paid. Paid rows do not add to today’s cash. See UPLOAD_STOCK_FORMAT.md">
+              📦 Upload Stock Excel
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                style={{ display: 'none' }}
+                onChange={handleStockExcelUpload}
+              />
+            </label>
+          </div>
         </div>
       </div>
 

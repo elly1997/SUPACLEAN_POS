@@ -28,10 +28,20 @@ If the first row looks like **CUST ID | NAME | PHONE NO. | AMOUNT (TZS) | STATUS
 
 ## Optional columns
 
+- **Order date** (per row) – `Order Date`, `order_date`, `Date`, `Payment Date`, `Service Date`, etc. Stored as `order_date` on the order. **Cash management** uses this date (not the upload day) so paid backfill does not count as **today’s** sales.
 - **paid_amount** – exact amount already paid (number). If present, overrides **paid**.
 - **Unpaid Balance** or **balance** – unpaid amount; paid = amount − balance.
 - **Service** / **Service Name** – match to an existing service; otherwise default service is used.
 - **Quantity** / **Qty** – item quantity (default 1).
+
+### Import order date (Orders page)
+
+On **Orders**, use **Import order date (for cash reports)** before uploading:
+
+- Sets `order_date` for **every row** that does not have its own date column.
+- If you leave it empty and rows have no date column, the server uses **yesterday** (UTC) so paid lines still do not land on “today” by mistake.
+
+**Important:** Stock import **does not** create `transactions` rows for paid amounts. Payment is recorded only on the order (`paid_amount` / `payment_status`) so **today’s** transaction totals and cash book are not inflated by historical paid stock.
 
 ## Example (Excel / CSV)
 
@@ -46,7 +56,7 @@ If the first row looks like **CUST ID | NAME | PHONE NO. | AMOUNT (TZS) | STATUS
 2. **id** must be unique; duplicates are skipped.
 3. **name** is required. If the customer does not exist, they are created when **phone** is provided.
 4. **amount** must be a number (total order value).
-5. **paid** / **not paid** sets whether the order is fully paid; if **paid**, `paid_amount` = `amount`.
+5. **paid** / **not paid** sets whether the order is fully paid; if **paid**, `paid_amount` = `amount` (this reflects **prior** payment when you set the correct **order date** — it is not treated as new cash taken today).
 6. All imported orders are created with status **Ready** (uncollected). They appear in **Collection** and **Ready** tab until collected.
 7. Select a **branch** in the sidebar before uploading; stock is assigned to that branch.
 

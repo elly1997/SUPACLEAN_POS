@@ -1189,6 +1189,42 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
   }
 });
 
+/** Parse a cell value from Excel into a Date (serial number, Date object, or string). */
+function parseStockImportDateCell(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === 'number' && value > 20000 && value < 1000000) {
+    const ms = (value - 25569) * 86400 * 1000;
+    const d = new Date(ms);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  const s = String(value).trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12, 0, 0));
+  }
+  const dmy = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/);
+  if (dmy) {
+    return new Date(Date.UTC(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]), 12, 0, 0));
+  }
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+  return null;
+}
+
+function dateToOrderTimestampIso(d) {
+  const y = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${mo}-${day}T12:00:00.000Z`;
+}
+
+function getYesterdayNoonUtcIso() {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 1);
+  return dateToOrderTimestampIso(d);
+}
+
 // Upload Excel file and import stock/orders
 router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('canManageOrders'), upload.single('file'), async (req, res) => {
   if (!req.file) {
@@ -1267,6 +1303,17 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
       fs.unlinkSync(filePath);
       return res.status(400).json({ error: 'Select a branch to upload stock' });
     }
+
+    // Cash management uses DATE(order_date) for "cash sales"; imports must not default to "today"
+    // or paid rows look like money received today. Optional multipart field historical_order_date (YYYY-MM-DD).
+    const bodyHist = req.body && String(req.body.historical_order_date || '').trim();
+    const uploadDefaultDateIso = bodyHist
+      ? (() => {
+          const p = parseStockImportDateCell(bodyHist);
+          return p ? dateToOrderTimestampIso(p) : null;
+        })()
+      : null;
+    const fallbackOrderDateIso = uploadDefaultDateIso || getYesterdayNoonUtcIso();
 
     // Process each row sequentially. Key columns (any casing): id, name, phone, amount, paid/not paid.
     // All uploaded stock is created as uncollected (status 'ready').
@@ -1356,6 +1403,22 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
 
       const serviceName = String(getVal('Service', 'service', 'Service Name') || '').trim();
       const quantity = parseInt(getVal('Quantity', 'quantity', 'Qty', 'qty') || 1);
+
+      const orderDateRaw = getVal(
+        'Order Date',
+        'order_date',
+        'ORDER DATE',
+        'Date',
+        'DATE',
+        'Payment Date',
+        'Payment date',
+        'Service Date',
+        'SERVICE DATE',
+        'Txn Date',
+        'Transaction Date'
+      );
+      const rowDateParsed = parseStockImportDateCell(orderDateRaw);
+      const orderDateIso = rowDateParsed ? dateToOrderTimestampIso(rowDateParsed) : fallbackOrderDateIso;
 
       if (!receiptId || !customerName) {
         errors.push(`Row ${index + 2}: Missing id (or receipt) and/or name`);
@@ -1457,28 +1520,19 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
           continue;
         }
 
-        // Create order as uncollected stock (status 'ready')
+        // Create order as uncollected stock (status 'ready').
+        // order_date = historical (row/upload default/yesterday) so paid rows do not inflate today's cash management.
+        // Do NOT insert transactions here: paid amounts are legacy/prior collection, not cash received at upload time.
         try {
           const result = await db.run(
             `INSERT INTO orders (receipt_number, customer_id, service_id, quantity, total_amount, paid_amount, payment_status, payment_method, status, order_date, branch_id, created_at_branch_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', CURRENT_TIMESTAMP, ?, ?) RETURNING id`,
-            [receiptId, customerId, serviceId, quantity, finalTotalAmount, paidAmount, paymentStatus, 'cash', branchId, branchId]
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?) RETURNING id`,
+            [receiptId, customerId, serviceId, quantity, finalTotalAmount, paidAmount, paymentStatus, 'cash', orderDateIso, branchId, branchId]
           );
           
           processed++;
           imported++;
 
-          // Create transaction record if payment was made
-          if (paidAmount > 0) {
-            try {
-              await db.run(
-                'INSERT INTO transactions (order_id, transaction_type, amount, payment_method, branch_id) VALUES (?, ?, ?, ?, ?) RETURNING id',
-                [result.lastID, 'payment', paidAmount, 'cash', branchId]
-              );
-            } catch (transErr) {
-              console.error(`Error creating transaction for order ${result.lastID}:`, transErr);
-            }
-          }
         } catch (insertErr) {
           processed++;
           errors.push(`Row ${index + 2}: Error creating order - ${insertErr.message}`);
