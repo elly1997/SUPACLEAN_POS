@@ -14,13 +14,17 @@ Use **Orders → Upload Stock Excel** to import existing (uncollected) stock. Al
 
 ## Accepted column names (any casing)
 
-- **id:** `id`, `Id`, `ID`, `Receipt ID`, `Receipt`, `Receipt Number`, `receipt_id`
-- **name:** `name`, `Name`, `Customer Name`, `Customer`
-- **phone:** `phone`, `Phone`, `Phone Number`, `Mobile`
-- **amount:** `amount`, `Amount`, `Total Amount`, `Total`
-- **paid:** `paid`, `Paid`, `payment_status`, `Payment Status`  
+- **id:** `id`, `Id`, `ID`, `Receipt ID`, `Receipt`, `Receipt Number`, `receipt_id`, **`CUST ID`**, `Customer ID`
+- **name:** `name`, `Name`, `NAME`, `Customer Name`, `Customer name`, `Customer`, `Full Name`
+- **phone:** `phone`, `Phone`, `PHONE`, `Phone Number`, `Mobile`, **`PHONE NO.`**, `Phone No.`
+- **amount:** `amount`, `Amount`, `Total Amount`, `Total`, **`AMOUNT (TZS)`** (thousands separators like `12,000` are OK)
+- **paid / status:** `paid`, `Paid`, `payment_status`, `Payment Status`, `Payment`, **`STATUS`**  
   Values: **paid** → `paid`, `yes`, `y`, `1`, `true`, `full`  
   **not paid** → `not paid`, `no`, `n`, `0`, `false` or leave empty
+
+### Ledger-style sheet (your format)
+
+If the first row looks like **CUST ID | NAME | PHONE NO. | AMOUNT (TZS) | STATUS**, that matches the importer (same data as above, different header labels). Rows were skipped in older versions because only names like `id` and `amount` were recognized—not `CUST ID` or `AMOUNT (TZS)`.
 
 ## Optional columns
 

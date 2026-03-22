@@ -1281,11 +1281,76 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
       };
 
       // Primary format: id, name, phone, amount, paid (or payment_status)
-      const receiptId = String(getVal('id', 'Id', 'ID', 'Receipt ID', 'Receipt', 'Receipt Number', 'receipt_id') || '').trim();
-      const customerName = String(getVal('name', 'Name', 'NAME', 'Customer Name', 'Customer name', 'Customer') || '').trim();
-      const phone = String(getVal('phone', 'Phone', 'PHONE', 'Phone Number', 'Mobile') || '').trim();
-      const amount = parseFloat(getVal('amount', 'Amount', 'AMOUNT', 'Total Amount', 'Total', 'total amount') || 0);
-      const paidRaw = getVal('paid', 'Paid', 'PAID', 'payment_status', 'Payment Status', 'Payment');
+      // Also accept common ledger headers: CUST ID, PHONE NO., AMOUNT (TZS), STATUS
+      const receiptId = String(
+        getVal(
+          'id',
+          'Id',
+          'ID',
+          'Receipt ID',
+          'Receipt',
+          'Receipt Number',
+          'receipt_id',
+          'CUST ID',
+          'Cust ID',
+          'cust id',
+          'Customer ID',
+          'Customer Id'
+        ) || ''
+      ).trim();
+      const customerName = String(
+        getVal(
+          'name',
+          'Name',
+          'NAME',
+          'Customer Name',
+          'Customer name',
+          'Customer',
+          'FULL NAME',
+          'Full Name'
+        ) || ''
+      ).trim();
+      const phone = String(
+        getVal(
+          'phone',
+          'Phone',
+          'PHONE',
+          'Phone Number',
+          'Mobile',
+          'PHONE NO.',
+          'Phone No.',
+          'PHONE NO',
+          'Phone No',
+          'Phone number'
+        ) || ''
+      ).trim();
+      const amountRaw = getVal(
+        'amount',
+        'Amount',
+        'AMOUNT',
+        'Total Amount',
+        'Total',
+        'total amount',
+        'AMOUNT (TZS)',
+        'Amount (TZS)',
+        'AMOUNT TZS'
+      );
+      let amount = 0;
+      if (amountRaw !== undefined && amountRaw !== null && String(amountRaw).trim() !== '') {
+        const s = String(amountRaw).replace(/,/g, '').replace(/[^\d.-]/g, '');
+        amount = parseFloat(s) || 0;
+      }
+      const paidRaw = getVal(
+        'paid',
+        'Paid',
+        'PAID',
+        'payment_status',
+        'Payment Status',
+        'Payment',
+        'STATUS',
+        'Status',
+        'status'
+      );
       const paidAmountCol = parseFloat(getVal('paid_amount', 'Paid Amount', 'Paid amount') || NaN);
       const unpaidBalance = parseFloat(getVal('unpaid_balance', 'Unpaid Balance', 'Balance', 'balance') || NaN);
 
@@ -1311,7 +1376,11 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
         paymentStatus = paidAmount >= finalTotalAmount ? 'paid_full' : (paidAmount > 0 ? 'advance' : 'not_paid');
       } else if (paidRaw != null) {
         const paidStr = String(paidRaw).toLowerCase().trim();
-        const isPaid = /^(paid|yes|1|true|full)$/.test(paidStr) || paidStr === 'y';
+        const isExplicitUnpaid =
+          /not\s*paid|unpaid|^no$|^n$|^0$|^false$/.test(paidStr) || paidStr === '';
+        const isPaid =
+          !isExplicitUnpaid &&
+          (/^(paid|yes|1|true|full)$/.test(paidStr) || paidStr === 'y');
         paidAmount = isPaid ? finalTotalAmount : 0;
         paymentStatus = isPaid ? 'paid_full' : 'not_paid';
       }
