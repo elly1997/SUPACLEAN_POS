@@ -1189,26 +1189,42 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
   }
 });
 
-/** Parse a cell value from Excel into a Date (serial number, Date object, or string). */
-function parseStockImportDateCell(value) {
-  if (value == null || value === '') return null;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
-  if (typeof value === 'number' && value > 20000 && value < 1000000) {
-    const ms = (value - 25569) * 86400 * 1000;
-    const d = new Date(ms);
-    if (!Number.isNaN(d.getTime())) return d;
+/**
+ * Derive order_date from receipt / CUST ID (the printed receipt day — same rules as POS).
+ * - Full: {seq}-{DD}-{MM} ({YY}) e.g. 15-15-03 (26) → 15 Mar 2026
+ * - Compact: {seq}-{DD}-{MM} e.g. 9-7-12 → 7 Dec (year inferred so cash reports stay sane)
+ */
+function deriveOrderDateFromReceiptId(receiptId) {
+  const raw = String(receiptId || '').trim();
+  if (!raw) return null;
+  const withYear = raw.match(/^(\d+)-(\d{1,2})-(\d{1,2})\s*\((\d{2})\)\s*$/);
+  if (withYear) {
+    const dd = parseInt(withYear[2], 10);
+    const mm = parseInt(withYear[3], 10);
+    const yy = parseInt(withYear[4], 10);
+    if (Number.isNaN(yy) || mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
+    const fullYear = yy < 100 ? (yy >= 70 ? 1900 + yy : 2000 + yy) : yy;
+    const d = new Date(Date.UTC(fullYear, mm - 1, dd, 12, 0, 0));
+    if (d.getUTCFullYear() !== fullYear || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) return null;
+    return dateToOrderTimestampIso(d);
   }
-  const s = String(value).trim();
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) {
-    return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12, 0, 0));
+  const noYear = raw.match(/^(\d+)-(\d{1,2})-(\d{1,2})$/);
+  if (noYear) {
+    const dd = parseInt(noYear[2], 10);
+    const mm = parseInt(noYear[3], 10);
+    if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
+    const now = new Date();
+    let fullYear = now.getUTCFullYear();
+    let d = new Date(Date.UTC(fullYear, mm - 1, dd, 12, 0, 0));
+    if (Number.isNaN(d.getTime()) || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) return null;
+    const twoDaysAhead = now.getTime() + 2 * 86400000;
+    if (d.getTime() > twoDaysAhead) {
+      fullYear -= 1;
+      d = new Date(Date.UTC(fullYear, mm - 1, dd, 12, 0, 0));
+    }
+    if (Number.isNaN(d.getTime()) || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) return null;
+    return dateToOrderTimestampIso(d);
   }
-  const dmy = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/);
-  if (dmy) {
-    return new Date(Date.UTC(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]), 12, 0, 0));
-  }
-  const parsed = new Date(s);
-  if (!Number.isNaN(parsed.getTime())) return parsed;
   return null;
 }
 
@@ -1304,17 +1320,6 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
       return res.status(400).json({ error: 'Select a branch to upload stock' });
     }
 
-    // Cash management uses DATE(order_date) for "cash sales"; imports must not default to "today"
-    // or paid rows look like money received today. Optional multipart field historical_order_date (YYYY-MM-DD).
-    const bodyHist = req.body && String(req.body.historical_order_date || '').trim();
-    const uploadDefaultDateIso = bodyHist
-      ? (() => {
-          const p = parseStockImportDateCell(bodyHist);
-          return p ? dateToOrderTimestampIso(p) : null;
-        })()
-      : null;
-    const fallbackOrderDateIso = uploadDefaultDateIso || getYesterdayNoonUtcIso();
-
     // Process each row sequentially. Key columns (any casing): id, name, phone, amount, paid/not paid.
     // All uploaded stock is created as uncollected (status 'ready').
     for (let index = 0; index < data.length; index++) {
@@ -1404,21 +1409,10 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
       const serviceName = String(getVal('Service', 'service', 'Service Name') || '').trim();
       const quantity = parseInt(getVal('Quantity', 'quantity', 'Qty', 'qty') || 1);
 
-      const orderDateRaw = getVal(
-        'Order Date',
-        'order_date',
-        'ORDER DATE',
-        'Date',
-        'DATE',
-        'Payment Date',
-        'Payment date',
-        'Service Date',
-        'SERVICE DATE',
-        'Txn Date',
-        'Transaction Date'
-      );
-      const rowDateParsed = parseStockImportDateCell(orderDateRaw);
-      const orderDateIso = rowDateParsed ? dateToOrderTimestampIso(rowDateParsed) : fallbackOrderDateIso;
+      // Receipt / CUST ID encodes the service day (printed receipt). No separate "payment date" — paid rows
+      // are historical for that day; stock is still uncollected until collection.
+      const orderDateIso =
+        deriveOrderDateFromReceiptId(receiptId) || getYesterdayNoonUtcIso();
 
       if (!receiptId || !customerName) {
         errors.push(`Row ${index + 2}: Missing id (or receipt) and/or name`);
@@ -1521,8 +1515,8 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
         }
 
         // Create order as uncollected stock (status 'ready').
-        // order_date = historical (row/upload default/yesterday) so paid rows do not inflate today's cash management.
-        // Do NOT insert transactions here: paid amounts are legacy/prior collection, not cash received at upload time.
+        // order_date from receipt/CUST ID (printed day) so paid bulk rows do not inflate today's cash.
+        // No transaction rows: "paid" reflects payment when receipt was issued, not cash taken at upload.
         try {
           const result = await db.run(
             `INSERT INTO orders (receipt_number, customer_id, service_id, quantity, total_amount, paid_amount, payment_status, payment_method, status, order_date, branch_id, created_at_branch_id)

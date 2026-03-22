@@ -28,20 +28,24 @@ If the first row looks like **CUST ID | NAME | PHONE NO. | AMOUNT (TZS) | STATUS
 
 ## Optional columns
 
-- **Order date** (per row) – `Order Date`, `order_date`, `Date`, `Payment Date`, `Service Date`, etc. Stored as `order_date` on the order. **Cash management** uses this date (not the upload day) so paid backfill does not count as **today’s** sales.
 - **paid_amount** – exact amount already paid (number). If present, overrides **paid**.
 - **Unpaid Balance** or **balance** – unpaid amount; paid = amount − balance.
 - **Service** / **Service Name** – match to an existing service; otherwise default service is used.
 - **Quantity** / **Qty** – item quantity (default 1).
 
-### Import order date (Orders page)
+### Order date (from CUST ID / receipt — no extra column)
 
-On **Orders**, use **Import order date (for cash reports)** before uploading:
+You **do not** need a separate date column. The system sets **`order_date`** from the **id / CUST ID / receipt number**, using the same idea as printed receipts:
 
-- Sets `order_date` for **every row** that does not have its own date column.
-- If you leave it empty and rows have no date column, the server uses **yesterday** (UTC) so paid lines still do not land on “today” by mistake.
+- **With year:** `{sequence}-{DD}-{MM} ({YY})` — e.g. `15-15-03 (26)` → 15 March 2026  
+- **Without year:** `{sequence}-{DD}-{MM}` — e.g. `9-7-12` → day **7**, month **12** (7 December), year inferred so reports stay sensible  
 
-**Important:** Stock import **does not** create `transactions` rows for paid amounts. Payment is recorded only on the order (`paid_amount` / `payment_status`) so **today’s** transaction totals and cash book are not inflated by historical paid stock.
+If the ID cannot be parsed, `order_date` falls back to **yesterday** (so today’s cash is not inflated).
+
+### Paid vs not paid (no “payment date” row)
+
+- **Not paid** — customer pays when they **collect** (normal collection flow).
+- **Paid** — means they **already paid when the receipt was printed** (historical). The line is still **Ready** (stock in shop) until **collected**. We only store `paid_amount` / `payment_status` on the order; we **do not** create payment **transactions** for the upload, and we **do not** ask for a separate payment date column.
 
 ## Example (Excel / CSV)
 
@@ -56,7 +60,7 @@ On **Orders**, use **Import order date (for cash reports)** before uploading:
 2. **id** must be unique; duplicates are skipped.
 3. **name** is required. If the customer does not exist, they are created when **phone** is provided.
 4. **amount** must be a number (total order value).
-5. **paid** / **not paid** sets whether the order is fully paid; if **paid**, `paid_amount` = `amount` (this reflects **prior** payment when you set the correct **order date** — it is not treated as new cash taken today).
+5. **paid** / **not paid** sets whether the order is fully paid; if **paid**, `paid_amount` = `amount` (payment was on the **receipt day** encoded in the id — not recorded as new cash on upload day).
 6. All imported orders are created with status **Ready** (uncollected). They appear in **Collection** and **Ready** tab until collected.
 7. Select a **branch** in the sidebar before uploading; stock is assigned to that branch.
 
