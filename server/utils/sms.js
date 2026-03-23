@@ -268,35 +268,18 @@ function calendarDaysUtc(from, to) {
 
 /**
  * Collection reminder SMS (Swahili).
- * - daysOverdue: full calendar days after collection due date (order received + 3 days).
- * - daysInStorage: days since order/receipt day (when items were received).
- * - daysUntilMaxStorage: days remaining before 45-day storage limit from receipt day.
  *
  * @param {string} receiptNumber
  * @param {string} customerName
  * @param {number} daysOverdue - Days after estimated_collection_date (due = received + 3 days)
  * @param {number} balanceDue
- * @param {{ daysInStorage?: number|null, daysUntilMaxStorage?: number|null }} [opts]
  */
-function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0, balanceDue = 0, opts = {}) {
+function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0, balanceDue = 0) {
   const overdueDays = Number.isFinite(Number(daysOverdue)) ? Math.max(0, Number(daysOverdue)) : 0;
   const safeBalance = Number.isFinite(Number(balanceDue)) ? Math.max(0, Number(balanceDue)) : 0;
   const balanceText = Number(safeBalance).toLocaleString();
-  const daysInStorage = opts.daysInStorage != null && Number.isFinite(Number(opts.daysInStorage))
-    ? Math.max(0, Math.floor(Number(opts.daysInStorage)))
-    : null;
-  const daysUntilMax = opts.daysUntilMaxStorage != null && Number.isFinite(Number(opts.daysUntilMaxStorage))
-    ? Math.max(0, Math.floor(Number(opts.daysUntilMaxStorage)))
-    : null;
-
-  let msg = `SUPACLEAN: Habari ${customerName}, ukumbusho wa kuchukua oda yako. Risiti: ${receiptNumber}.`;
-  if (daysInStorage != null) {
-    msg += ` Tangu kuwasilishwa: siku ${daysInStorage}.`;
-  }
-  msg += ` Kuchelewa (baada ya siku 3 ya kukusanya): siku ${overdueDays}.`;
-  if (daysUntilMax != null) {
-    msg += ` Uhifadhi: zimebaki siku ${daysUntilMax} (kikomo cha juu siku ${MAX_STORAGE_DAYS}).`;
-  }
+  let msg = `Habari ${customerName}, oda yako ipo tayari kuchukuliwa. Risiti: ${receiptNumber}.`;
+  msg += ` Siku ulizochelewa ni ${overdueDays} sasa. Tafadhali chukua oda yako haraka iwezekanavyo.`;
   msg += ` Salio: TSh ${balanceText}. Asante kwa kuchagua SUPACLEAN.`;
   return msg;
 }
