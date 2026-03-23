@@ -259,9 +259,11 @@ function generateOrderReceiptSms(receiptNumber, customerName, customerId, itemsD
  * @param {string} customerName
  * @param {number} daysOverdue - Days since estimated_collection_date (due date)
  */
-function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0) {
+function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0, balanceDue = 0) {
   const overdueDays = Number.isFinite(Number(daysOverdue)) ? Math.max(0, Number(daysOverdue)) : 0;
-  return `SUPACLEAN: Habari ${customerName}, ukumbusho wa kuchukua oda yako. Risiti: ${receiptNumber}. Siku zilizochelewa: ${overdueDays}. Asante kwa kuchagua SUPACLEAN.`;
+  const safeBalance = Number.isFinite(Number(balanceDue)) ? Math.max(0, Number(balanceDue)) : 0;
+  const balanceText = Number(safeBalance).toLocaleString();
+  return `SUPACLEAN: Habari ${customerName}, ukumbusho wa kuchukua oda yako. Risiti: ${receiptNumber}. Siku zilizochelewa: ${overdueDays}. Salio: TSh ${balanceText}. Asante kwa kuchagua SUPACLEAN.`;
 }
 
 /**

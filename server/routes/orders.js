@@ -1630,7 +1630,20 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
       const hoursOverdue = order.estimated_collection_date 
         ? Math.max(0, Math.floor((new Date() - new Date(order.estimated_collection_date)) / (1000 * 60 * 60)))
         : 0;
-      message = generateCollectionReminder(order.receipt_number, order.customer_name, hoursOverdue);
+      const receiptSums = await db.get(
+        `SELECT 
+           COALESCE(SUM(total_amount), 0) as receipt_total_amount,
+           COALESCE(SUM(paid_amount), 0) as receipt_paid_amount
+         FROM orders
+         WHERE UPPER(receipt_number) = UPPER(?)
+         AND customer_id = ?`,
+        [order.receipt_number, order.customer_id]
+      );
+      const balanceDue = Math.max(
+        0,
+        (parseFloat(receiptSums?.receipt_total_amount || 0) - parseFloat(receiptSums?.receipt_paid_amount || 0))
+      );
+      message = generateCollectionReminder(order.receipt_number, order.customer_name, hoursOverdue, balanceDue);
     } else {
       return res.status(400).json({ error: 'Invalid notification type' });
     }

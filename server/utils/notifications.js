@@ -71,7 +71,8 @@ async function sendNotification(options) {
       message = generateCollectionReminder(
         orderData.receiptNumber,
         customerName,
-        orderData.daysOverdue ?? 0
+        orderData.daysOverdue ?? 0,
+        orderData.balanceDue ?? 0
       );
       break;
     case 'balance_reminder':
@@ -173,7 +174,19 @@ async function sendCollectionReminder(customerId, orderId, channels = ['sms']) {
   return new Promise((resolve, reject) => {
     db.get(
       `SELECT o.*, c.name as customer_name, c.phone as customer_phone,
-              c.sms_notifications_enabled
+              c.sms_notifications_enabled,
+              (
+                SELECT COALESCE(SUM(r.total_amount), 0)
+                FROM orders r
+                WHERE UPPER(r.receipt_number) = UPPER(o.receipt_number)
+                  AND r.customer_id = o.customer_id
+              ) as receipt_total_amount,
+              (
+                SELECT COALESCE(SUM(r.paid_amount), 0)
+                FROM orders r
+                WHERE UPPER(r.receipt_number) = UPPER(o.receipt_number)
+                  AND r.customer_id = o.customer_id
+              ) as receipt_paid_amount
        FROM orders o
        JOIN customers c ON o.customer_id = c.id
        WHERE o.id = ?`,
@@ -209,6 +222,9 @@ async function sendCollectionReminder(customerId, orderId, channels = ['sms']) {
         }
 
         try {
+          const receiptTotal = parseFloat(order.receipt_total_amount || 0);
+          const receiptPaid = parseFloat(order.receipt_paid_amount || 0);
+          const balanceDue = Math.max(0, receiptTotal - receiptPaid);
           const result = await sendNotification({
             customerId: order.customer_id,
             orderId: order.id,
@@ -218,7 +234,8 @@ async function sendCollectionReminder(customerId, orderId, channels = ['sms']) {
             orderData: {
               receiptNumber: order.receipt_number,
               daysOverdue,
-              estimatedDate: order.estimated_collection_date
+              estimatedDate: order.estimated_collection_date,
+              balanceDue
             },
             channels: actualChannels
           });
