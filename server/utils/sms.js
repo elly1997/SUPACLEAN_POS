@@ -182,11 +182,7 @@ function includeSwahili() {
 }
 
 function generateReadyNotification(receiptNumber, customerName, estimatedDate = null) {
-  let message = `Hello ${customerName}, your laundry is ready for collection. Receipt: ${receiptNumber}. Please come or send someone to our office to collect. For delivery or transport call ${DELIVERY_PHONE_1} or ${DELIVERY_PHONE_2}. Thank you - SUPACLEAN`;
-  if (includeSwahili()) {
-    message += `\n\n— Kiswahili: Habari ${customerName}, unakumbushwa nguo zako/blankets (Risiti: ${receiptNumber}) zipo tayari kuchukuliwa tafadhali fika au tuma mtu katika ofisi zetu ili kulichukua kuepuka usumbufu. Kwa mahitaji ya usafiri au kuletewa piga ${DELIVERY_PHONE_1} au ${DELIVERY_PHONE_2}. Karibu sana -SUPACLEAN-`;
-  }
-  return message;
+  return `SUPACLEAN: Habari ${customerName}, oda yako iko tayari kuchukuliwa. Risiti: ${receiptNumber}. Asante kwa kuchagua SUPACLEAN.`;
 }
 
 function generateOrderConfirmation(receiptNumber, customerName, totalAmount, estimatedDate = null) {
@@ -264,20 +260,8 @@ function generateOrderReceiptSms(receiptNumber, customerName, customerId, itemsD
  * @param {number} daysOverdue - Days since estimated_collection_date (due date)
  */
 function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0) {
-  let message = `Hello ${customerName}, reminder: Your laundry (Receipt: ${receiptNumber}) is ready for collection.`;
-  if (daysOverdue > 0) {
-    message += ` Your items have been in our storage for ${daysOverdue} day${daysOverdue > 1 ? 's' : ''} since the due date. Please collect.`;
-  }
-  message += ` Thank you - SUPACLEAN`;
-  if (includeSwahili()) {
-    let sw = `\n\n— Kiswahili: Habari ${customerName}, ukumbusho: Nguo zako (Risiti: ${receiptNumber}) tayari kuchukuliwa.`;
-    if (daysOverdue > 0) {
-      sw += ` Bidhaa zako zimekuwa kwenye ghala yetu siku ${daysOverdue} tangu tarehe ya ushiriki. Tafadhali zikachukue.`;
-    }
-    sw += ' Asante - SUPACLEAN';
-    message += sw;
-  }
-  return message;
+  const overdueDays = Number.isFinite(Number(daysOverdue)) ? Math.max(0, Number(daysOverdue)) : 0;
+  return `SUPACLEAN: Habari ${customerName}, ukumbusho wa kuchukua oda yako. Risiti: ${receiptNumber}. Siku zilizochelewa: ${overdueDays}. Asante kwa kuchagua SUPACLEAN.`;
 }
 
 /**
