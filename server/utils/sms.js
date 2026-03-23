@@ -245,35 +245,16 @@ function getTermsAndConditionsUrl() {
  * @param {string} [estimatedDate] - Optional estimated collection date for SMS
  */
 function generateOrderReceiptSms(receiptNumber, customerName, customerId, itemsDescription, totalAmount, paymentStatus, estimatedDate = null) {
+  const MAX_RECEIPT_SMS_LEN = 110;
   const amountStr = typeof totalAmount === 'number' ? totalAmount.toLocaleString() : String(totalAmount);
   const statusStr = formatPaymentStatusForSms(paymentStatus);
-  const statusStrSw = formatPaymentStatusForSmsSwahili(paymentStatus);
-  const items = (itemsDescription && itemsDescription.trim()) ? itemsDescription.trim() : 'Order items';
-  const termsUrl = getTermsAndConditionsUrl();
-  let msg = `SUPACLEAN: Hi ${customerName}. Receipt: ${receiptNumber}. ${items}. Total TSh ${amountStr}. ${statusStr}.`;
-  if (estimatedDate) {
-    const d = new Date(estimatedDate);
-    const estStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    msg += ` Est. ready: ${estStr}.`;
-  }
-  if (termsUrl) {
-    msg += ` T&C: ${termsUrl}`;
-  }
-  msg += ' Thank you.';
-  if (includeSwahili()) {
-    let sw = `\n\n— Kiswahili: SUPACLEAN: Habari ${customerName}. Risiti: ${receiptNumber}. ${items}. Jumla TSh ${amountStr}. ${statusStrSw}.`;
-    if (estimatedDate) {
-      const d = new Date(estimatedDate);
-      const estStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
-      sw += ` Tarehe ya kukua: ${estStr}.`;
-    }
-    if (termsUrl) {
-      sw += ` Masharti: ${termsUrl}`;
-    }
-    sw += ' Asante.';
-    msg += sw;
-  }
-  return msg;
+  const safeName = (customerName || 'Customer').replace(/[^a-zA-Z0-9 .'-]/g, '').trim() || 'Customer';
+  const base = `SUPACLEAN ${safeName}, receipt ${receiptNumber}, TSh ${amountStr}, ${statusStr}. Thank you.`;
+  const normalized = base.replace(/\s+/g, ' ').trim();
+  // Enforce single short English SMS to avoid multi-part billing.
+  return normalized.length <= MAX_RECEIPT_SMS_LEN
+    ? normalized
+    : `${normalized.slice(0, MAX_RECEIPT_SMS_LEN - 3).trimEnd()}...`;
 }
 
 /**
