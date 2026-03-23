@@ -1252,26 +1252,79 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
   const filePath = req.file.path;
   let data = [];
 
+  const normalizeCellValue = (value) => {
+    if (value == null) return '';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value === 'object') {
+      // ExcelJS may return rich objects for formulas/rich-text/hyperlinks.
+      if (value.text != null) return String(value.text).trim();
+      if (value.result != null) return String(value.result).trim();
+      if (value.richText && Array.isArray(value.richText)) {
+        return value.richText.map((part) => part?.text || '').join('').trim();
+      }
+      if (value.hyperlink != null) return String(value.hyperlink).trim();
+    }
+    return String(value).trim();
+  };
+
   try {
-    // Read Excel file using ExcelJS (more secure than xlsx)
+    // Read Excel file using ExcelJS (more secure than xlsx).
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(filePath);
-    const worksheet = workbook.worksheets[0];
-    
-    // Convert worksheet to JSON array
-    worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return; // Skip header row
-      const rowData = {};
+    const lowerPath = String(filePath).toLowerCase();
+    if (lowerPath.endsWith('.csv')) {
+      await workbook.csv.readFile(filePath);
+    } else {
+      await workbook.xlsx.readFile(filePath);
+    }
+
+    const worksheet = workbook.worksheets.find((ws) => ws && ws.rowCount > 0);
+    if (!worksheet) {
+      fs.unlinkSync(filePath);
+      return res.status(400).json({ error: 'Excel file is empty' });
+    }
+
+    // Find header row dynamically (first row with at least 2 non-empty cells).
+    let headerRowNumber = null;
+    let headersByCol = {};
+    for (let r = 1; r <= worksheet.rowCount; r++) {
+      const row = worksheet.getRow(r);
+      const rowHeaders = {};
+      let nonEmpty = 0;
       row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-        const header = worksheet.getRow(1).getCell(colNumber).value;
+        const header = normalizeCellValue(cell.value);
         if (header) {
-          rowData[header] = cell.value;
+          rowHeaders[colNumber] = header;
+          nonEmpty += 1;
         }
       });
-      if (Object.keys(rowData).length > 0) {
-        data.push(rowData);
+      if (nonEmpty >= 2) {
+        headerRowNumber = r;
+        headersByCol = rowHeaders;
+        break;
       }
-    });
+    }
+
+    if (!headerRowNumber || Object.keys(headersByCol).length === 0) {
+      fs.unlinkSync(filePath);
+      return res.status(400).json({ error: 'Excel file is empty' });
+    }
+
+    // Convert worksheet rows under detected header row into records.
+    for (let r = headerRowNumber + 1; r <= worksheet.rowCount; r++) {
+      const row = worksheet.getRow(r);
+      const rowData = {};
+      let hasData = false;
+      Object.entries(headersByCol).forEach(([colNumberStr, header]) => {
+        const colNumber = Number.parseInt(colNumberStr, 10);
+        const value = normalizeCellValue(row.getCell(colNumber).value);
+        if (value !== '') {
+          rowData[header] = value;
+          hasData = true;
+        }
+      });
+      if (hasData) data.push(rowData);
+    }
 
     if (data.length === 0) {
       fs.unlinkSync(filePath);
