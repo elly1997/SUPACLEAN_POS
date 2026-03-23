@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit, getActiveBankAccounts, getCashSummaryRange } from '../api/api';
+import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit, getActiveBankAccounts, getCashSummaryRange, getUnreconciledClosings } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import Loader from '../components/Loader';
@@ -29,6 +29,8 @@ const CashManagement = () => {
   const [reportEndDate, setReportEndDate] = useState('');
   const [rangeData, setRangeData] = useState([]);
   const [rangeLoading, setRangeLoading] = useState(false);
+  const [unreconciledClosings, setUnreconciledClosings] = useState([]);
+  const [unreconciledLoading, setUnreconciledLoading] = useState(false);
   const today = new Date().toISOString().split('T')[0];
   const isAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
 
@@ -73,6 +75,27 @@ const CashManagement = () => {
       setLoading(false);
     }
   };
+
+  const loadUnreconciledClosings = async () => {
+    setUnreconciledLoading(true);
+    try {
+      const res = await getUnreconciledClosings({ limit: 120 });
+      setUnreconciledClosings(Array.isArray(res.data) ? res.data : []);
+    } catch (error) {
+      console.error('Error loading unreconciled closings:', error);
+      setUnreconciledClosings([]);
+      const errorMsg = error.response?.data?.error || error.message || 'Failed to load unreconciled closings';
+      if (!String(errorMsg).includes('Select a branch')) {
+        showToast('Error loading unreconciled closings: ' + errorMsg, 'error');
+      }
+    } finally {
+      setUnreconciledLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadUnreconciledClosings();
+  }, [selectedBranchId]);
 
   const loadRangeReport = async () => {
     const start = reportStartDate || today;
@@ -170,6 +193,7 @@ const CashManagement = () => {
         showToast('Reconciled. Set Director WhatsApp in Admin → Branches to send report.', 'info');
       }
       loadData();
+      loadUnreconciledClosings();
     } catch (error) {
       showToast('Error: ' + (error.response?.data?.error || error.message), 'error');
     }
@@ -196,6 +220,7 @@ const CashManagement = () => {
       setShowDepositForm(false);
       setDepositForm({ amount: '', reference_number: '', bank_account_id: '', bank_name: '', notes: '' });
       loadData();
+      loadUnreconciledClosings();
     } catch (error) {
       showToast('Error adding deposit: ' + (error.response?.data?.error || error.message), 'error');
     }
@@ -499,6 +524,50 @@ const CashManagement = () => {
           <small>Reconciled by: {summary.reconciled_by || 'Cashier'}</small>
         </div>
       ))}
+
+      {/* Cashflow report by date range */}
+      <div className="cash-range-section">
+        <h2>Pending reconciliations</h2>
+        <p className="subtitle">Daily closing entries that were saved but are not yet reconciled</p>
+        {unreconciledLoading ? (
+          <p className="range-empty">Loading unreconciled entries...</p>
+        ) : unreconciledClosings.length > 0 ? (
+          <div className="range-table-wrap">
+            <table className="range-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  {summary.all_branches && <th>Branch</th>}
+                  <th className="num">Opening</th>
+                  <th className="num">Cash sales</th>
+                  <th className="num">Book sales</th>
+                  <th className="num">Expenses (cash)</th>
+                  <th className="num">Bank deposits</th>
+                  <th className="num">Closing</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unreconciledClosings.map((row) => (
+                  <tr key={`${row.branch_id || 'none'}-${row.date}`}>
+                    <td>{new Date(row.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                    {summary.all_branches && <td>{row.branch_name || `Branch ${row.branch_id || 'N/A'}`}</td>}
+                    <td className="num">{(parseFloat(row.opening_balance) || 0).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.cash_sales) || 0).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.book_sales) || 0).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.expenses_from_cash) || 0).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.bank_deposits) || 0).toLocaleString()}</td>
+                    <td className="num">{(parseFloat(row.closing_balance) || 0).toLocaleString()}</td>
+                    <td>Pending</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="range-empty">No unreconciled daily closings found.</p>
+        )}
+      </div>
 
       {/* Cashflow report by date range */}
       <div className="cash-range-section">

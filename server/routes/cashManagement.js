@@ -556,6 +556,48 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
   }
 });
 
+// List daily closings that were saved but not yet reconciled
+router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+  const branchId = getEffectiveBranchId(req);
+  const isAdminAllBranches = req.user?.role === 'admin' && (branchId == null || branchId === '');
+  const limitRaw = Number.parseInt(req.query.limit, 10);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 365) : 60;
+
+  if (!isAdminAllBranches && branchId == null) {
+    return res.status(400).json({ error: 'Select a branch to view unreconciled closings' });
+  }
+
+  try {
+    if (isAdminAllBranches) {
+      const rows = await db.all(
+        `SELECT dcs.*, b.name as branch_name
+         FROM daily_cash_summaries dcs
+         LEFT JOIN branches b ON b.id = dcs.branch_id
+         WHERE COALESCE(dcs.is_reconciled, FALSE) = FALSE
+         ORDER BY dcs.date DESC, dcs.id DESC
+         LIMIT ?`,
+        [limit]
+      );
+      return res.json(rows || []);
+    }
+
+    const rows = await db.all(
+      `SELECT dcs.*, b.name as branch_name
+       FROM daily_cash_summaries dcs
+       LEFT JOIN branches b ON b.id = dcs.branch_id
+       WHERE COALESCE(dcs.is_reconciled, FALSE) = FALSE
+       AND dcs.branch_id = ?
+       ORDER BY dcs.date DESC, dcs.id DESC
+       LIMIT ?`,
+      [branchId, limit]
+    );
+    return res.json(rows || []);
+  } catch (err) {
+    console.error('Error fetching unreconciled daily closings:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Get cash summary range (single branch or consolidated for admin when no branch)
 router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { start_date, end_date } = req.query;

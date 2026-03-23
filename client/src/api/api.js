@@ -751,6 +751,7 @@ export async function getTodayCashSummary() {
 }
 export const createDailyCashSummary = (data) => api.post('/cash-management/daily', data);
 export const reconcileDailyCash = (date, data) => api.post(`/cash-management/reconcile/${date}`, data);
+export const getUnreconciledClosings = (params = {}) => api.get('/cash-management/unreconciled', { params });
 export async function getCashSummaryRange(startDate, endDate) {
   if (isOffline()) {
     try {
