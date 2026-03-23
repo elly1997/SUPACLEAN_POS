@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
-const { generateReceiptNumber, calculateTotal, formatReceipt, formatReceiptAsync, generateReceiptQRCode } = require('../utils/receipt');
+const { generateReceiptNumber, calculateTotal, formatReceipt, formatReceiptAsync, generateReceiptQRCode, formatCustomerReceiptId } = require('../utils/receipt');
 const { sendSMS, generateReadyNotification, generateOrderReceiptSms } = require('../utils/sms');
 const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny } = require('../middleware/auth');
@@ -332,8 +332,10 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), a
     const itemsDescription = itemParts.join('; ');
 
     const estimatedDate = first.estimated_collection_date || null;
+    const totalReceiptItems = allOrders.reduce((sum, row) => sum + (parseFloat(row.quantity) || 1), 0);
+    const customerReceiptId = formatCustomerReceiptId(receiptNumber, totalReceiptItems);
     const message = generateOrderReceiptSms(
-      receiptNumber,
+      customerReceiptId,
       customerName,
       customerId,
       itemsDescription,

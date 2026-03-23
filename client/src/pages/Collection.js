@@ -7,6 +7,7 @@ import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
+import { formatCustomerReceiptId } from '../utils/receiptId';
 import { playSuccessSound } from '../utils/sound';
 import './Collection.css';
 
@@ -617,17 +618,19 @@ const Collection = () => {
 
     const itemsToShow = orders.length > 0 ? orders : (mainOrder.all_items || [mainOrder]);
     const useCompact = itemsToShow.length > RECEIPT_COMPACT_THRESHOLD;
+    const totalReceiptItems = itemsToShow.reduce((sum, item) => sum + (parseFloat(item?.quantity) || 1), 0);
+    const customerReceiptId = formatCustomerReceiptId(mainOrder.receipt_number, totalReceiptItems);
     const branchLabel = mainOrder.branch_name || (branch?.id === mainOrder.branch_id ? branch?.name : null) || (mainOrder.branch_id ? `Branch ID ${mainOrder.branch_id}` : null) || 'Arusha';
     const branchLine = (mainOrder.branch_name || mainOrder.branch_id) ? `Branch: ${branchLabel}\n` : '';
 
     const headerText = useCompact
-      ? `SUPACLEAN | ${branchLabel}\nReceipt: ${mainOrder.receipt_number} | ${dateStr}\n${estimatedCollectionDate}${mainOrder.customer_name} | ${mainOrder.customer_phone}\n`
+      ? `SUPACLEAN | ${branchLabel}\nReceipt: ${customerReceiptId} | ${dateStr}\n${estimatedCollectionDate}${mainOrder.customer_name} | ${mainOrder.customer_phone}\n`
       : `═══════════════════════════════════
    Laundry & Dry Cleaning
    ${branchLabel}, Tanzania
 ═══════════════════════════════════
 
-Receipt No: ${mainOrder.receipt_number}
+Receipt No: ${customerReceiptId}
 ${branchLine}Date: ${dateStr}
 ${estimatedCollectionDate}
 Customer: ${mainOrder.customer_name}

@@ -8,6 +8,7 @@ import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
+import { formatCustomerReceiptId } from '../utils/receiptId';
 import './Orders.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
@@ -350,19 +351,21 @@ const Orders = () => {
         : '';
 
       const useCompact = receiptOrders.length > RECEIPT_COMPACT_THRESHOLD;
+      const totalReceiptItems = receiptOrders.reduce((sum, order) => sum + (parseFloat(order?.quantity) || 1), 0);
+      const customerReceiptId = formatCustomerReceiptId(receiptGroup.receipt_number, totalReceiptItems);
       const firstOrder = receiptOrders[0];
       const branchLabel = firstOrder?.branch_name || (branch?.id === firstOrder?.branch_id ? branch?.name : null) || (firstOrder?.branch_id ? `Branch ID ${firstOrder.branch_id}` : null) || 'Arusha';
       const branchLine = (firstOrder?.branch_name || firstOrder?.branch_id) ? `Branch: ${branchLabel}\n` : '';
 
       const headerText = useCompact
-        ? `SUPACLEAN | ${branchLabel}\nReceipt: ${receiptGroup.receipt_number} | ${dateStr}\n${estimatedCollectionDate}${receiptGroup.customer_name} | ${receiptGroup.customer_phone}\n`
+        ? `SUPACLEAN | ${branchLabel}\nReceipt: ${customerReceiptId} | ${dateStr}\n${estimatedCollectionDate}${receiptGroup.customer_name} | ${receiptGroup.customer_phone}\n`
         : `
 ═══════════════════════════════════
    Laundry & Dry Cleaning
    ${branchLabel}, Tanzania
 ═══════════════════════════════════
 
-Receipt No: ${receiptGroup.receipt_number}
+Receipt No: ${customerReceiptId}
 ${branchLine}Date: ${dateStr}
 ${estimatedCollectionDate}
 Customer: ${receiptGroup.customer_name}

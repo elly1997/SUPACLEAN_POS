@@ -3,6 +3,7 @@ import { getServices, getItems, getCustomers, createCustomer, createOrder, getCu
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
+import { formatCustomerReceiptId } from '../utils/receiptId';
 import { playSuccessSound } from '../utils/sound';
 import './NewOrder.css';
 
@@ -812,18 +813,20 @@ const NewOrder = () => {
       : '';
 
     const useCompact = receipts.length > RECEIPT_COMPACT_THRESHOLD;
+    const totalReceiptItems = receipts.reduce((sum, r) => sum + (parseFloat(r?.order?.quantity) || 1), 0);
+    const customerReceiptId = formatCustomerReceiptId(receipts[0]?.order?.receipt_number, totalReceiptItems);
     const branchLabel = receipts[0]?.order?.branch_name || (branch?.id === receipts[0]?.order?.branch_id ? branch?.name : null) || (receipts[0]?.order?.branch_id ? `Branch ID ${receipts[0].order.branch_id}` : null) || 'Arusha';
     const branchLine = (receipts[0]?.order?.branch_name || receipts[0]?.order?.branch_id) ? `Branch: ${branchLabel}\n` : '';
 
     const headerText = useCompact
-      ? `SUPACLEAN | ${branchLabel}\nReceipt: ${receipts[0].order.receipt_number} | ${dateStr}\n${estimatedCollectionDate}${customer.name} | ${customer.phone}\n`
+      ? `SUPACLEAN | ${branchLabel}\nReceipt: ${customerReceiptId} | ${dateStr}\n${estimatedCollectionDate}${customer.name} | ${customer.phone}\n`
       : `
 ═══════════════════════════════════
    Laundry & Dry Cleaning
    ${branchLabel}, Tanzania
 ═══════════════════════════════════
 
-Receipt No: ${receipts[0].order.receipt_number}
+Receipt No: ${customerReceiptId}
 ${branchLine}Date: ${dateStr}
 ${estimatedCollectionDate}
 Customer: ${customer.name}

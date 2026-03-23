@@ -118,6 +118,18 @@ function generateReceiptNumberSync() {
   return `${sequence}-${day}-${month} (${year})`;
 }
 
+/**
+ * Customer-facing receipt ID:
+ * - remove trailing year suffix like " (26)" from canonical receipt number
+ * - append total item count in brackets, e.g. "9-23-03 (26)"
+ */
+function formatCustomerReceiptId(receiptNumber, itemCount = null) {
+  const base = String(receiptNumber || '').replace(/\s*\(\d{2}\)\s*$/, '').trim();
+  const count = Number.parseInt(itemCount, 10);
+  if (!Number.isFinite(count) || count <= 0) return base || String(receiptNumber || '');
+  return `${base} (${count})`;
+}
+
 // Calculate order total with express service support (sync version - no DB needed)
 async function calculateTotal(service, quantity = 1, weight = 0, deliveryType = 'standard', expressMultiplier = 0) {
   
@@ -309,5 +321,6 @@ module.exports = {
   calculateTotalAsync: calculateTotal,
   formatReceipt,
   formatReceiptAsync,
-  generateReceiptQRCode
+  generateReceiptQRCode,
+  formatCustomerReceiptId
 };
