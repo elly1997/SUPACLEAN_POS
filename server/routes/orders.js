@@ -2,7 +2,14 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
 const { generateReceiptNumber, calculateTotal, formatReceipt, formatReceiptAsync, generateReceiptQRCode, formatCustomerReceiptId } = require('../utils/receipt');
-const { sendSMS, generateReadyNotification, generateOrderReceiptSms } = require('../utils/sms');
+const {
+  sendSMS,
+  generateReadyNotification,
+  generateOrderReceiptSms,
+  generateCollectionReminder,
+  MAX_STORAGE_DAYS,
+  calendarDaysUtc
+} = require('../utils/sms');
 const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
@@ -1243,6 +1250,16 @@ function getYesterdayNoonUtcIso() {
   return dateToOrderTimestampIso(d);
 }
 
+/** Collection due date = receipt/received day + this many days (e.g. 3 days to collect). */
+const COLLECTION_DUE_AFTER_RECEIPT_DAYS = 3;
+
+function addUtcDaysToOrderIso(orderDateIso, daysToAdd) {
+  const d = new Date(orderDateIso);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCDate(d.getUTCDate() + daysToAdd);
+  return d.toISOString();
+}
+
 // Upload Excel file and import stock/orders
 router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('canManageOrders'), upload.single('file'), async (req, res) => {
   if (!req.file) {
@@ -1468,6 +1485,8 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
       // are historical for that day; stock is still uncollected until collection.
       const orderDateIso =
         deriveOrderDateFromReceiptId(receiptId) || getYesterdayNoonUtcIso();
+      const estimatedCollectionIso =
+        addUtcDaysToOrderIso(orderDateIso, COLLECTION_DUE_AFTER_RECEIPT_DAYS) || null;
 
       if (!receiptId || !customerName) {
         errors.push(`Row ${index + 2}: Missing id (or receipt) and/or name`);
@@ -1574,9 +1593,9 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
         // No transaction rows: "paid" reflects payment when receipt was issued, not cash taken at upload.
         try {
           const result = await db.run(
-            `INSERT INTO orders (receipt_number, customer_id, service_id, quantity, total_amount, paid_amount, payment_status, payment_method, status, order_date, branch_id, created_at_branch_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?) RETURNING id`,
-            [receiptId, customerId, serviceId, quantity, finalTotalAmount, paidAmount, paymentStatus, 'cash', orderDateIso, branchId, branchId]
+            `INSERT INTO orders (receipt_number, customer_id, service_id, quantity, total_amount, paid_amount, payment_status, payment_method, status, order_date, estimated_collection_date, branch_id, created_at_branch_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?) RETURNING id`,
+            [receiptId, customerId, serviceId, quantity, finalTotalAmount, paidAmount, paymentStatus, 'cash', orderDateIso, estimatedCollectionIso, branchId, branchId]
           );
           
           processed++;
@@ -1679,10 +1698,19 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
         order.estimated_collection_date
       );
     } else if (notification_type === 'reminder') {
-      const { generateCollectionReminder } = require('../utils/sms');
-      const hoursOverdue = order.estimated_collection_date 
-        ? Math.max(0, Math.floor((new Date() - new Date(order.estimated_collection_date)) / (1000 * 60 * 60)))
-        : 0;
+      const now = new Date();
+      let daysOverdue = 0;
+      if (order.estimated_collection_date) {
+        const due = new Date(order.estimated_collection_date);
+        if (due < now) {
+          daysOverdue = calendarDaysUtc(due, now);
+        }
+      }
+      let daysInStorage = 0;
+      if (order.order_date) {
+        daysInStorage = calendarDaysUtc(order.order_date, now);
+      }
+      const daysUntilMaxStorage = Math.max(0, MAX_STORAGE_DAYS - daysInStorage);
       const receiptSums = await db.get(
         `SELECT 
            COALESCE(SUM(total_amount), 0) as receipt_total_amount,
@@ -1696,7 +1724,10 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
         0,
         (parseFloat(receiptSums?.receipt_total_amount || 0) - parseFloat(receiptSums?.receipt_paid_amount || 0))
       );
-      message = generateCollectionReminder(order.receipt_number, order.customer_name, hoursOverdue, balanceDue);
+      message = generateCollectionReminder(order.receipt_number, order.customer_name, daysOverdue, balanceDue, {
+        daysInStorage,
+        daysUntilMaxStorage
+      });
     } else {
       return res.status(400).json({ error: 'Invalid notification type' });
     }

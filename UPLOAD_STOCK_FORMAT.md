@@ -38,9 +38,15 @@ If the first row looks like **CUST ID | NAME | PHONE NO. | AMOUNT (TZS) | STATUS
 You **do not** need a separate date column. The system sets **`order_date`** from the **id / CUST ID / receipt number**, using the same idea as printed receipts:
 
 - **With year:** `{sequence}-{DD}-{MM} ({YY})` — e.g. `15-15-03 (26)` → 15 March 2026  
-- **Without year:** `{sequence}-{DD}-{MM}` — e.g. `9-7-12` → day **7**, month **12** (7 December), year inferred so reports stay sensible  
+- **Without year:** `{sequence}-{DD}-{MM}` — e.g. `3-25-2` → **25 February** (day **25**, month **2**); `9-7-12` → day **7**, month **12** (7 December), year inferred so reports stay sensible  
 
 If the ID cannot be parsed, `order_date` falls back to **yesterday** (so today’s cash is not inflated).
+
+### Collection due date & reminders (uploaded stock)
+
+- **`estimated_collection_date`** is set automatically to **order/receipt day + 3 days** (when the customer should collect).
+- **Overdue** (for queue + SMS reminders) = full calendar days **after** that due date if items are still not collected.
+- **Storage policy:** **45 days** maximum from receipt/received day; reminder SMS includes days since receipt and days remaining before the 45-day limit.
 
 ### Paid vs not paid (no “payment date” row)
 
