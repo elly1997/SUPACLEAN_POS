@@ -8,6 +8,107 @@ const { getEffectiveBranchId } = require('../utils/branchFilter');
 // All cash-management routes require branch feature 'cash_management' (admin bypasses)
 router.use(authenticate, requireBranchFeature('cash_management'));
 
+async function upsertDailySummaryFromComputed(date, branchId, computed, notes = null) {
+  const existing = await db.get(
+    'SELECT id, is_reconciled, notes FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
+    [date, branchId]
+  );
+
+  // Never overwrite reconciled rows automatically (audit stability).
+  if (existing && existing.is_reconciled) {
+    return db.get('SELECT * FROM daily_cash_summaries WHERE id = ?', [existing.id]);
+  }
+
+  const payload = {
+    opening_balance: computed.opening_balance || 0,
+    cash_sales: computed.cash_sales || 0,
+    book_sales: computed.book_sales || 0,
+    card_sales: computed.card_sales || 0,
+    mobile_money_sales: computed.mobile_money_sales || 0,
+    bank_deposits: computed.bank_deposits || 0,
+    bank_payments: computed.bank_payments || 0,
+    mpesa_received: computed.mpesa_received || 0,
+    mpesa_paid: computed.mpesa_paid || 0,
+    expenses_from_cash: computed.expenses_from_cash || 0,
+    expenses_from_bank: computed.expenses_from_bank || 0,
+    expenses_from_mpesa: computed.expenses_from_mpesa || 0,
+    cash_in_hand: computed.cash_in_hand || 0,
+    closing_balance: computed.closing_balance || 0
+  };
+
+  if (existing) {
+    await db.run(
+      `UPDATE daily_cash_summaries SET
+        opening_balance = ?,
+        cash_sales = ?,
+        book_sales = ?,
+        card_sales = ?,
+        mobile_money_sales = ?,
+        bank_deposits = ?,
+        bank_payments = ?,
+        mpesa_received = ?,
+        mpesa_paid = ?,
+        expenses_from_cash = ?,
+        expenses_from_bank = ?,
+        expenses_from_mpesa = ?,
+        cash_in_hand = ?,
+        closing_balance = ?,
+        notes = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?`,
+      [
+        payload.opening_balance,
+        payload.cash_sales,
+        payload.book_sales,
+        payload.card_sales,
+        payload.mobile_money_sales,
+        payload.bank_deposits,
+        payload.bank_payments,
+        payload.mpesa_received,
+        payload.mpesa_paid,
+        payload.expenses_from_cash,
+        payload.expenses_from_bank,
+        payload.expenses_from_mpesa,
+        payload.cash_in_hand,
+        payload.closing_balance,
+        notes != null ? notes : existing.notes || null,
+        existing.id
+      ]
+    );
+    return db.get('SELECT * FROM daily_cash_summaries WHERE id = ?', [existing.id]);
+  }
+
+  await db.run(
+    `INSERT INTO daily_cash_summaries (
+      date, branch_id, opening_balance, cash_sales, book_sales, card_sales, mobile_money_sales,
+      bank_deposits, bank_payments, mpesa_received, mpesa_paid,
+      expenses_from_cash, expenses_from_bank, expenses_from_mpesa,
+      cash_in_hand, closing_balance, notes, is_reconciled
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
+    [
+      date,
+      branchId,
+      payload.opening_balance,
+      payload.cash_sales,
+      payload.book_sales,
+      payload.card_sales,
+      payload.mobile_money_sales,
+      payload.bank_deposits,
+      payload.bank_payments,
+      payload.mpesa_received,
+      payload.mpesa_paid,
+      payload.expenses_from_cash,
+      payload.expenses_from_bank,
+      payload.expenses_from_mpesa,
+      payload.cash_in_hand,
+      payload.closing_balance,
+      notes
+    ]
+  );
+
+  return db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+}
+
 // Get daily cash summary by date (cashiers, managers, admins can view)
 router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { date } = req.params;
@@ -19,24 +120,35 @@ router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCa
     const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
     
     if (!row) {
-      // Return empty summary if not found
-      return res.json({
-        date,
-        opening_balance: 0,
-        cash_sales: 0,
-        book_sales: 0,
-        card_sales: 0,
-        mobile_money_sales: 0,
-        bank_deposits: 0,
-        bank_payments: 0,
-        mpesa_received: 0,
-        mpesa_paid: 0,
-        expenses_from_cash: 0,
-        expenses_from_bank: 0,
-        expenses_from_mpesa: 0,
-        closing_balance: 0,
-        is_reconciled: false
-      });
+      // Auto-generate and persist missing day summary from recorded transactions.
+      const yesterday = new Date(date);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
+      const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+
+      const cashSalesRow = await db.all(`
+        SELECT SUM(paid_amount) as cash_sales
+        FROM orders
+        WHERE DATE(order_date) = ?
+        AND payment_status = 'paid_full'
+        AND payment_method = 'cash'
+        AND paid_amount > 0
+        AND branch_id = ?
+      `, [date, branchId]);
+      const cashSales = cashSalesRow[0]?.cash_sales || 0;
+
+      const { calculateBookSales } = require('../utils/cashValidation');
+      let bookSales = 0;
+      try {
+        bookSales = await calculateBookSales(date, branchId);
+      } catch (err) {
+        console.error('Error calculating book sales for daily summary:', err);
+      }
+
+      const calculated = await calculateRemaining(date, openingBalance, cashSales, bookSales, branchId);
+      const persisted = await upsertDailySummaryFromComputed(date, branchId, calculated);
+      return res.json(persisted);
     }
     
     res.json(row);
@@ -84,7 +196,8 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
           bookSales = 0;
         }
         const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, bid);
-        results.push(result);
+        const persisted = await upsertDailySummaryFromComputed(today, bid, result);
+        results.push(persisted || result);
       }
       const consolidated = consolidateSummaries(results, today);
       consolidated.all_branches = true;
@@ -121,7 +234,8 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       bookSales = 0;
     }
     const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, branchId);
-    res.json(result);
+    const persisted = await upsertDailySummaryFromComputed(today, branchId, result);
+    res.json(persisted || result);
   } catch (err) {
     console.error('Error calculating today\'s cash summary:', err);
     res.status(500).json({ error: err.message });
