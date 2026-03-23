@@ -228,8 +228,8 @@ const Dashboard = () => {
         <ListViewToggle view={listView} setView={setListView} />
       </div>
 
-      <div className="dashboard-grid">
-        <div className="dashboard-card">
+      <div className="dashboard-grid dashboard-queues-grid">
+        <div className="dashboard-card queue-card ready-queue-card">
           <div className="card-header">
             <div>
               <h2>✅ Ready Orders Queue ({readyQueue.length})</h2>
@@ -256,7 +256,7 @@ const Dashboard = () => {
           </div>
           {readyQueue.length > 0 ? (
             listView === 'card' ? (
-              <div className="dashboard-cards-grid">
+              <div className="dashboard-cards-grid queue-scroll-area">
                 {readyQueue.map(receipt => {
                   const balance = (receipt.total_amount || 0) - (receipt.paid_amount || 0);
                   const isOverdue = receipt.is_overdue;
@@ -294,7 +294,7 @@ const Dashboard = () => {
                 })}
               </div>
             ) : (
-              <div className="dashboard-table-wrap">
+              <div className="dashboard-table-wrap queue-scroll-area">
                 <table className="dashboard-table">
                   <thead>
                     <tr>
@@ -362,7 +362,7 @@ const Dashboard = () => {
           )}
         </div>
 
-        <div className="dashboard-card">
+        <div className="dashboard-card queue-card pending-queue-card">
           <div className="card-header">
             <h2>⏳ Pending Orders ({groupedPending.length})</h2>
             <button className="btn-link" onClick={() => navigate('/orders')}>
@@ -382,7 +382,7 @@ const Dashboard = () => {
           </div>
           {groupedPending.length > 0 ? (
             listView === 'card' ? (
-              <div className="dashboard-cards-grid">
+              <div className="dashboard-cards-grid queue-scroll-area">
                 {groupedPending.map((receiptGroup) => (
                   <div key={receiptGroup.receipt_number} className="dashboard-list-card">
                     <div className="dashboard-list-card-header">
@@ -401,7 +401,7 @@ const Dashboard = () => {
                 ))}
               </div>
             ) : (
-              <div className="dashboard-table-wrap">
+              <div className="dashboard-table-wrap queue-scroll-area">
                 <table className="dashboard-table">
                   <thead>
                     <tr>

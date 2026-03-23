@@ -190,6 +190,11 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
   gap: 20px;
+  align-items: stretch;
+}
+
+.dashboard-queues-grid {
+  grid-template-columns: minmax(560px, 1.2fr) minmax(460px, 1fr);
 }
 
 .dashboard-card {
@@ -200,6 +205,19 @@
   padding: 20px;
   box-shadow: var(--shadow-sm);
   border: 0.5px solid var(--border-color);
+}
+
+.queue-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Keep both queue panels visible in one viewport section */
+  height: clamp(420px, 62vh, 760px);
+}
+
+.queue-scroll-area {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 [data-theme="dark"] .dashboard-card {
@@ -287,7 +305,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 14px;
-  max-height: min(60vh, 520px);
+  max-height: none;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 2px;
@@ -333,7 +351,7 @@
 
 .dashboard-table-wrap {
   overflow: auto;
-  max-height: min(60vh, 520px);
+  max-height: none;
   -webkit-overflow-scrolling: touch;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-light);
@@ -466,6 +484,7 @@
   transition: var(--transition);
   border: 1px solid var(--border-light);
   border-left: 5px solid var(--primary-color);
+  -webkit-backdrop-filter: blur(5px);
   backdrop-filter: blur(5px);
 }
 
@@ -710,6 +729,10 @@
   .dashboard-grid {
     grid-template-columns: 1fr;
   }
+
+  .dashboard-queues-grid {
+    grid-template-columns: 1fr;
+  }
   
   .dashboard-header {
     flex-direction: column;
@@ -718,7 +741,11 @@
   }
 
   .dashboard-table-wrap {
-    max-height: min(50vh, 400px);
+    max-height: min(50vh, 420px);
+  }
+
+  .queue-card {
+    height: auto;
   }
 
   .dashboard-search-wrap {
@@ -731,11 +758,23 @@
   .dashboard-grid {
     grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   }
+
+  .dashboard-queues-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .queue-card {
+    height: clamp(380px, 56vh, 680px);
+  }
 }
 
 @media (min-width: 1401px) {
   .dashboard-grid {
     grid-template-columns: repeat(2, 1fr);
     max-width: 1600px;
+  }
+
+  .dashboard-queues-grid {
+    grid-template-columns: minmax(560px, 1.2fr) minmax(460px, 1fr);
   }
 }
