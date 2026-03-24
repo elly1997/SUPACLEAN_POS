@@ -18,7 +18,7 @@ router.get('/', requireBranchAccess(), requirePermission('canManageExpenses'), a
   
   // Add branch filter
   if (branchFilter.clause) {
-    query += ' ' + branchFilter.clause.replace('e.', '');
+    query += ` ${branchFilter.clause}`;
     params.push(...branchFilter.params);
     paramIndex += branchFilter.params.length;
   }
@@ -258,7 +258,7 @@ router.get('/summary/by-category', requireBranchAccess(), requirePermission('can
   
   // Add branch filter
   if (branchFilter.clause) {
-    query += ' ' + branchFilter.clause.replace('e.', '');
+    query += ` ${branchFilter.clause}`;
     params.push(...branchFilter.params);
     paramIndex += branchFilter.params.length;
   }
