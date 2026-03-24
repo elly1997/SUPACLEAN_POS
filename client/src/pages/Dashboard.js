@@ -35,7 +35,7 @@ const Dashboard = () => {
         getDailySummary(today),
         getOrders({ status: 'pending', ...(pendingCustomer && { customer: pendingCustomer }) }),
         getOrders({ status: 'ready', ...(readyCustomer && { customer: readyCustomer }) }),
-        getCollectionQueue({ limit: 20, ...(readyCustomer && { customer: readyCustomer }) })
+        getCollectionQueue({ limit: 100, ...(readyCustomer && { customer: readyCustomer }) })
       ]);
 
       setSummary(summaryRes.data);

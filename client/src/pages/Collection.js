@@ -104,7 +104,7 @@ const Collection = () => {
   const loadQueue = useCallback(async () => {
     try {
       setQueueLoading(true);
-      const params = { limit: 20 };
+      const params = { limit: 500 };
       if (queueSearchDebounced && queueSearchDebounced.trim()) {
         params.customer = queueSearchDebounced.trim();
       }

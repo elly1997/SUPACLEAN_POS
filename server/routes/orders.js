@@ -838,26 +838,42 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
           const smsEnabled = orderWithCustomer.sms_notifications_enabled !== 0;
           
           if (smsEnabled && orderWithCustomer.customer_phone) {
-            const message = generateReadyNotification(
-              orderWithCustomer.receipt_number, 
-              orderWithCustomer.customer_name,
-              orderWithCustomer.estimated_collection_date
+            // Send one ready notification per receipt (not per item)
+            const otherReadyItems = await db.get(
+              `SELECT id
+               FROM orders
+               WHERE UPPER(receipt_number) = UPPER(?)
+                 AND customer_id = ?
+                 AND id <> ?
+                 AND status IN ('ready', 'collected')
+               LIMIT 1`,
+              [orderWithCustomer.receipt_number, orderWithCustomer.customer_id, orderWithCustomer.id]
             );
-            
-            // Try SMS first; if SMS fails, send via WhatsApp (don't block the response)
-            sendSmsWithWhatsAppFallback(orderWithCustomer.customer_phone, message, {
-              customerId: orderWithCustomer.customer_id,
-              orderId: orderWithCustomer.id,
-              notificationType: 'ready'
-            }).then(result => {
-              if (result.success) {
-                console.log(`✅ Ready notification sent via ${result.channel || 'sms'} to ${orderWithCustomer.customer_phone} for order ${orderWithCustomer.receipt_number}`);
-              } else {
-                console.error(`❌ Failed to send to ${orderWithCustomer.customer_phone}:`, result.error);
-              }
-            }).catch(err => {
-              console.error(`❌ Error sending ready notification:`, err);
-            });
+
+            if (!otherReadyItems) {
+              const message = generateReadyNotification(
+                orderWithCustomer.receipt_number,
+                orderWithCustomer.customer_name,
+                orderWithCustomer.estimated_collection_date
+              );
+              
+              // Try SMS first; if SMS fails, send via WhatsApp (don't block the response)
+              sendSmsWithWhatsAppFallback(orderWithCustomer.customer_phone, message, {
+                customerId: orderWithCustomer.customer_id,
+                orderId: orderWithCustomer.id,
+                notificationType: 'ready'
+              }).then(result => {
+                if (result.success) {
+                  console.log(`✅ Ready notification sent via ${result.channel || 'sms'} to ${orderWithCustomer.customer_phone} for receipt ${orderWithCustomer.receipt_number}`);
+                } else {
+                  console.error(`❌ Failed to send to ${orderWithCustomer.customer_phone}:`, result.error);
+                }
+              }).catch(err => {
+                console.error(`❌ Error sending ready notification:`, err);
+              });
+            } else {
+              console.log(`📩 Ready notification already sent for receipt ${orderWithCustomer.receipt_number}; skipping duplicate.`);
+            }
           } else if (!smsEnabled) {
             console.log(`📱 SMS notifications disabled for customer ${orderWithCustomer.customer_name}`);
           }
@@ -1362,6 +1378,7 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
   let imported = 0;
   let skipped = 0;
   const errors = [];
+  let missingRequiredRows = 0;
   let processed = 0;
 
   // Define sendResponse function before db.get so it's accessible from nested callbacks
@@ -1373,12 +1390,21 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
       console.error('Error deleting file:', unlinkErr);
     }
 
-    res.json({
+    const payload = {
       imported,
       skipped,
       total: data.length,
       errors: errors.slice(0, 20) // Limit errors to first 20
-    });
+    };
+
+    if (missingRequiredRows > 0) {
+      return res.status(400).json({
+        error: `Upload failed for ${missingRequiredRows} row(s): missing required id/receipt or customer name`,
+        ...payload
+      });
+    }
+
+    res.json(payload);
   }
 
   // Get default service (first active service) as fallback
@@ -1489,7 +1515,11 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
         addUtcDaysToOrderIso(orderDateIso, COLLECTION_DUE_AFTER_RECEIPT_DAYS) || null;
 
       if (!receiptId || !customerName) {
-        errors.push(`Row ${index + 2}: Missing id (or receipt) and/or name`);
+        const missingFields = [];
+        if (!receiptId) missingFields.push('id/receipt');
+        if (!customerName) missingFields.push('customer name');
+        errors.push(`Row ${index + 2}: Missing required ${missingFields.join(' and ')}`);
+        missingRequiredRows++;
         skipped++;
         processed++;
         if (processed === data.length) { sendResponse(); }
