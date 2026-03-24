@@ -7,7 +7,6 @@ const {
   generateReadyNotification,
   generateOrderReceiptSms,
   generateCollectionReminder,
-  MAX_STORAGE_DAYS,
   calendarDaysUtc
 } = require('../utils/sms');
 const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
@@ -923,6 +922,7 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
     // Get ALL orders for this receipt number (not just one) - case-insensitive
     // Join with items table to get item names
     const branchFilter = getBranchFilter(req, 'o');
+    const updateBranchFilter = getBranchFilter(req);
     const allOrders = await db.all(
       `SELECT o.*, c.name as customer_name, c.phone as customer_phone,
               s.name as service_name, i.name as item_name, i.category as item_category
@@ -964,8 +964,8 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
          SET status = ?, collected_date = CURRENT_TIMESTAMP, 
              paid_amount = ?, payment_status = ?, payment_method = ?
          WHERE UPPER(receipt_number) = UPPER(?)
-         ${branchFilter.clause}`,
-        ['collected', finalPaidAmount, finalPaymentStatus, payment_method, receiptNumber, ...branchFilter.params]
+         ${updateBranchFilter.clause}`,
+        ['collected', finalPaidAmount, finalPaymentStatus, payment_method, receiptNumber, ...updateBranchFilter.params]
       );
       
       // Award loyalty points on collection (only if fully paid) - use receipt total
@@ -1706,11 +1706,6 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
           daysOverdue = calendarDaysUtc(due, now);
         }
       }
-      let daysInStorage = 0;
-      if (order.order_date) {
-        daysInStorage = calendarDaysUtc(order.order_date, now);
-      }
-      const daysUntilMaxStorage = Math.max(0, MAX_STORAGE_DAYS - daysInStorage);
       const receiptSums = await db.get(
         `SELECT 
            COALESCE(SUM(total_amount), 0) as receipt_total_amount,
@@ -1724,10 +1719,7 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
         0,
         (parseFloat(receiptSums?.receipt_total_amount || 0) - parseFloat(receiptSums?.receipt_paid_amount || 0))
       );
-      message = generateCollectionReminder(order.receipt_number, order.customer_name, daysOverdue, balanceDue, {
-        daysInStorage,
-        daysUntilMaxStorage
-      });
+      message = generateCollectionReminder(order.receipt_number, order.customer_name, daysOverdue, balanceDue);
     } else {
       return res.status(400).json({ error: 'Invalid notification type' });
     }

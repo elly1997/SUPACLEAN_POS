@@ -275,13 +275,18 @@ function calendarDaysUtc(from, to) {
  * @param {number} balanceDue
  */
 function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0, balanceDue = 0) {
+  const MAX_REMINDER_SMS_LEN = 140;
   const overdueDays = Number.isFinite(Number(daysOverdue)) ? Math.max(0, Number(daysOverdue)) : 0;
   const safeBalance = Number.isFinite(Number(balanceDue)) ? Math.max(0, Number(balanceDue)) : 0;
   const balanceText = Number(safeBalance).toLocaleString();
-  let msg = `Habari ${customerName}, oda yako ipo tayari kuchukuliwa. Risiti: ${receiptNumber}.`;
-  msg += ` Siku ulizochelewa ni ${overdueDays} sasa. Tafadhali chukua oda yako haraka iwezekanavyo.`;
-  msg += ` Salio: TSh ${balanceText}. Asante kwa kuchagua SUPACLEAN.`;
-  return msg;
+  const safeName = String(customerName || 'Mteja').replace(/\s+/g, ' ').trim() || 'Mteja';
+  const safeReceipt = String(receiptNumber || '').replace(/\s+/g, ' ').trim();
+
+  const base = `Habari ${safeName}, oda yako tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio: TSh ${balanceText}. Karibu sana - SUPACLEAN.`;
+  const normalized = base.replace(/\s+/g, ' ').trim();
+  return normalized.length <= MAX_REMINDER_SMS_LEN
+    ? normalized
+    : `${normalized.slice(0, MAX_REMINDER_SMS_LEN - 3).trimEnd()}...`;
 }
 
 /**

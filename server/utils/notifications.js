@@ -1,4 +1,4 @@
-const { sendSMS, generateReadyNotification, generateOrderConfirmation, generateCollectionReminder, MAX_STORAGE_DAYS, calendarDaysUtc, generateInvoiceReminder, generatePaymentNoticeShort } = require('./sms');
+const { sendSMS, generateReadyNotification, generateOrderConfirmation, generateCollectionReminder, calendarDaysUtc, generateInvoiceReminder, generatePaymentNoticeShort } = require('./sms');
 const { sendWhatsApp } = require('./whatsapp');
 const db = require('../database/db');
 
@@ -72,11 +72,7 @@ async function sendNotification(options) {
         orderData.receiptNumber,
         customerName,
         orderData.daysOverdue ?? 0,
-        orderData.balanceDue ?? 0,
-        {
-          daysInStorage: orderData.daysInStorage,
-          daysUntilMaxStorage: orderData.daysUntilMaxStorage
-        }
+        orderData.balanceDue ?? 0
       );
       break;
     case 'balance_reminder':
@@ -224,11 +220,6 @@ async function sendCollectionReminder(customerId, orderId, channels = ['sms']) {
             daysOverdue = calendarDaysUtc(due, now);
           }
         }
-        let daysInStorage = 0;
-        if (order.order_date) {
-          daysInStorage = calendarDaysUtc(order.order_date, now);
-        }
-        const daysUntilMaxStorage = Math.max(0, MAX_STORAGE_DAYS - daysInStorage);
 
         try {
           const receiptTotal = parseFloat(order.receipt_total_amount || 0);
@@ -244,9 +235,7 @@ async function sendCollectionReminder(customerId, orderId, channels = ['sms']) {
               receiptNumber: order.receipt_number,
               daysOverdue,
               estimatedDate: order.estimated_collection_date,
-              balanceDue,
-              daysInStorage,
-              daysUntilMaxStorage
+              balanceDue
             },
             channels: actualChannels
           });
