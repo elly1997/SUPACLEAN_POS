@@ -231,7 +231,6 @@ input, select, textarea {
 * {
   -webkit-overflow-scrolling: touch;
   scroll-behavior: smooth;
-  overscroll-behavior: contain;
 }
 
 /* iOS-style focus */

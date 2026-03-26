@@ -13,6 +13,7 @@ const Layout = ({ children }) => {
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false);
   const [soundOn, setSoundOn] = useState(() => isSoundEnabled());
   const { theme, toggleTheme } = useTheme();
   const { user, branch, logout, isAdmin, hasPermission, selectedBranchId, setSelectedBranch } = useAuth();
@@ -165,7 +166,7 @@ const Layout = ({ children }) => {
           aria-label="Close menu"
         />
       )}
-      <aside className={`sidebar ${(isMobile ? mobileMenuOpen : true) ? 'open' : 'closed'}`}>
+      <aside className={`sidebar ${(isMobile ? mobileMenuOpen : true) ? 'open' : 'closed'} ${!isMobile && desktopSidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-header">
           <div className="logo-container">
             <img src="/supaclean-logo.svg" alt="SUPACLEAN Logo" className="logo" />
@@ -250,7 +251,18 @@ const Layout = ({ children }) => {
           <p className="business-info">Arusha, Tanzania</p>
         </div>
       </aside>
-      <main className={`main-content ${(isMobile ? mobileMenuOpen : true) ? 'sidebar-open' : 'sidebar-closed'}`}>
+      <main className={`main-content ${(isMobile ? mobileMenuOpen : true) ? 'sidebar-open' : 'sidebar-closed'} ${!isMobile && desktopSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+        {!isMobile && (
+          <button
+            type="button"
+            className="desktop-sidebar-toggle"
+            onClick={() => setDesktopSidebarCollapsed((s) => !s)}
+            aria-label={desktopSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+            title={desktopSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+          >
+            {desktopSidebarCollapsed ? '»' : '«'}
+          </button>
+        )}
         <button
           type="button"
           className="mobile-menu-btn"
