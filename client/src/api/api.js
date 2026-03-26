@@ -705,6 +705,7 @@ export async function getExpenseSummary(params = {}) {
 export const getPayrollEmployees = () => api.get('/payroll/employees');
 export const getPayrollEmployeesForAdvances = () => api.get('/payroll/employees/for-advances');
 export const createPayrollEmployee = (data) => api.post('/payroll/employees', data);
+export const updatePayrollEmployee = (id, data) => api.put(`/payroll/employees/${id}`, data);
 export const getSalaryAdvances = (params = {}) => api.get('/payroll/advances', { params });
 export const createSalaryAdvance = (data) => api.post('/payroll/advances', data);
 export const getMonthlyPayroll = (month) => api.get('/payroll/monthly', { params: { month } });
@@ -762,6 +763,7 @@ export async function getTodayCashSummary() {
   }
 }
 export const createDailyCashSummary = (data) => api.post('/cash-management/daily', data);
+export const saveOpeningSession = (date, data) => api.post(`/cash-management/opening-session/${date}`, data);
 /** Recompute daily closing for a calendar date from live orders/transactions/expenses (fails if day is reconciled). */
 export const recalculateDailyCashForDate = (date) => api.post(`/cash-management/daily/recalculate/${date}`);
 export const reconcileDailyCash = (date, data) => api.post(`/cash-management/reconcile/${date}`, data);

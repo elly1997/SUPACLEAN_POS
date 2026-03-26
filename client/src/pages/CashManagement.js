@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit, getActiveBankAccounts, getCashSummaryRange, getUnreconciledClosings } from '../api/api';
+import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit, getActiveBankAccounts, getCashSummaryRange, getUnreconciledClosings, saveOpeningSession } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
@@ -33,6 +33,9 @@ const CashManagement = () => {
   const [unreconciledClosings, setUnreconciledClosings] = useState([]);
   const [unreconciledLoading, setUnreconciledLoading] = useState(false);
   const [reconcilingDate, setReconcilingDate] = useState('');
+  const [openingCashInput, setOpeningCashInput] = useState('');
+  const [openingNotes, setOpeningNotes] = useState('');
+  const [savingOpening, setSavingOpening] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
   const today = new Date().toISOString().split('T')[0];
   const isAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
@@ -44,6 +47,12 @@ const CashManagement = () => {
   useEffect(() => {
     getActiveBankAccounts().then((res) => setActiveBankAccounts(res.data || [])).catch(() => setActiveBankAccounts([]));
   }, []);
+
+  useEffect(() => {
+    if (!summary) return;
+    const declared = summary.opening_cash_declared != null ? Number(summary.opening_cash_declared) : Number(summary.opening_balance || 0);
+    setOpeningCashInput(String(declared));
+  }, [summary?.opening_cash_declared, summary?.opening_balance]);
 
   const loadData = async () => {
     setErrorMessage(null);
@@ -120,6 +129,79 @@ const CashManagement = () => {
     }
   };
 
+  const downloadCsv = (filename, rows) => {
+    const csv = rows.map((r) => r.map((v) => {
+      const s = v == null ? '' : String(v);
+      if (s.includes('"') || s.includes(',') || s.includes('\n')) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    }).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportReconciliationCsv = () => {
+    if (!unreconciledClosings.length) {
+      showToast('No reconciliation data to export.', 'info');
+      return;
+    }
+    const rows = [
+      ['Date', 'Branch', 'ExpectedOpening', 'OpeningVariance', 'CashSales', 'BookSales', 'ExpensesCash', 'BankDeposits', 'ClosingBalance', 'Status']
+    ];
+    unreconciledClosings.forEach((row) => {
+      rows.push([
+        row.date,
+        row.branch_name || row.branch_id || '',
+        Number(row.opening_balance || 0).toFixed(2),
+        Number(row.opening_variance || 0).toFixed(2),
+        Number(row.cash_sales || 0).toFixed(2),
+        Number(row.book_sales || 0).toFixed(2),
+        Number(row.expenses_from_cash || 0).toFixed(2),
+        Number(row.bank_deposits || 0).toFixed(2),
+        Number(row.closing_balance || 0).toFixed(2),
+        'Pending'
+      ]);
+    });
+    downloadCsv(`reconciliation-pending-${today}.csv`, rows);
+    showToast('Reconciliation CSV exported.', 'success');
+  };
+
+  const exportCashflowCsv = () => {
+    if (!rangeData.length) {
+      showToast('No cashflow range data to export.', 'info');
+      return;
+    }
+    const rows = [
+      ['Date', 'Opening', 'OpeningVariance', 'CashSales', 'BookSales', 'CardSales', 'MobileMoneySales', 'ExpensesCash', 'BankDeposits', 'Closing']
+    ];
+    rangeData.forEach((row) => {
+      rows.push([
+        row.date,
+        Number(row.opening_balance || 0).toFixed(2),
+        Number(row.opening_variance || 0).toFixed(2),
+        Number(row.cash_sales || 0).toFixed(2),
+        Number(row.book_sales || 0).toFixed(2),
+        Number(row.card_sales || 0).toFixed(2),
+        Number(row.mobile_money_sales || 0).toFixed(2),
+        Number(row.expenses_from_cash || 0).toFixed(2),
+        Number(row.bank_deposits || 0).toFixed(2),
+        Number(row.closing_balance || 0).toFixed(2)
+      ]);
+    });
+    const start = reportStartDate || today;
+    const end = reportEndDate || today;
+    downloadCsv(`cashflow-${start}-to-${end}.csv`, rows);
+    showToast('Cashflow CSV exported.', 'success');
+  };
+
   const handleTestReceiptPrint = () => {
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Test receipt</title>
       <style>
@@ -175,6 +257,29 @@ const CashManagement = () => {
       showToast('Error saving cash summary: ' + (error.response?.data?.error || error.message), 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveOpeningSession = async () => {
+    if (summary?.all_branches) {
+      showToast('Select a specific branch to set opening session.', 'error');
+      return;
+    }
+    const val = Number(openingCashInput);
+    if (!Number.isFinite(val) || val < 0) {
+      showToast('Enter a valid opening cash amount.', 'error');
+      return;
+    }
+    setSavingOpening(true);
+    try {
+      await saveOpeningSession(today, { opening_cash: val, notes: openingNotes });
+      showToast('Opening session saved.', 'success');
+      setOpeningNotes('');
+      loadData();
+    } catch (error) {
+      showToast('Error saving opening session: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setSavingOpening(false);
     }
   };
 
@@ -287,6 +392,9 @@ const CashManagement = () => {
                      (summary.book_sales || 0) - 
                      (summary.expenses_from_cash || 0) - 
                      (summary.bank_deposits || 0);
+  const declaredOpening = summary.opening_cash_declared != null ? Number(summary.opening_cash_declared) : Number(summary.opening_balance || 0);
+  const openingVariance = Number(summary.opening_variance || 0);
+  const openingBalanced = Math.abs(openingVariance) < 0.01;
 
   return (
     <div className="cash-management-page">
@@ -326,6 +434,49 @@ const CashManagement = () => {
         </div>
       </div>
 
+      {!summary.all_branches && !summary.is_reconciled && (
+        <div className="opening-session-card">
+          <h2>Opening Session</h2>
+          <p className="subtitle">Enter physical cash at start of day and compare to previous closing.</p>
+          <div className="opening-session-grid">
+            <div className="form-group">
+              <label>Expected opening (prev closing)</label>
+              <input type="text" value={`TSh ${Number(summary.opening_balance || 0).toLocaleString()}`} disabled />
+            </div>
+            <div className="form-group">
+              <label>Declared opening cash *</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={openingCashInput}
+                onChange={(e) => setOpeningCashInput(e.target.value)}
+                placeholder={String(declaredOpening || 0)}
+              />
+            </div>
+            <div className="form-group">
+              <label>Session note (optional)</label>
+              <input
+                type="text"
+                value={openingNotes}
+                onChange={(e) => setOpeningNotes(e.target.value)}
+                placeholder="Reason if short/over"
+              />
+            </div>
+            <button type="button" className="btn-primary" onClick={handleSaveOpeningSession} disabled={savingOpening}>
+              {savingOpening ? 'Saving...' : 'Save Opening Session'}
+            </button>
+          </div>
+          <div className={`opening-variance-banner ${openingBalanced ? 'ok' : (openingVariance < 0 ? 'short' : 'over')}`}>
+            {openingBalanced
+              ? 'Balanced: Opening cash matches previous closing.'
+              : openingVariance < 0
+                ? `Short at opening: TSh ${Math.abs(openingVariance).toLocaleString()}`
+                : `Over at opening: TSh ${openingVariance.toLocaleString()}`}
+          </div>
+        </div>
+      )}
+
       {/* Daily summary as table for data density and scalability */}
       <div className="cash-summary-table-section">
         <h2>Daily cash summary</h2>
@@ -343,6 +494,18 @@ const CashManagement = () => {
                 <td>🌅 Opening Balance</td>
                 <td className="num">{parseFloat(summary.opening_balance || 0).toLocaleString()}</td>
                 <td className="text-muted">From previous day&apos;s closing balance</td>
+              </tr>
+              <tr>
+                <td>🧾 Declared Opening Cash</td>
+                <td className="num">{declaredOpening.toLocaleString()}</td>
+                <td className="text-muted">Cashier opening session declaration</td>
+              </tr>
+              <tr>
+                <td>⚖️ Opening Variance</td>
+                <td className={`num ${openingVariance < 0 ? 'value-negative' : 'value-positive'}`}>
+                  {openingVariance < 0 ? '-' : '+'} {Math.abs(openingVariance).toLocaleString()}
+                </td>
+                <td className="text-muted">Difference between expected and declared opening cash</td>
               </tr>
               <tr>
                 <td>💰 Cash Sales</td>
@@ -565,6 +728,12 @@ const CashManagement = () => {
       <div className="cash-range-section">
         <h2>Pending reconciliations</h2>
         <p className="subtitle">Daily closing entries that were saved but are not yet reconciled</p>
+        <div className="section-header">
+          <div />
+          <button type="button" className="btn-secondary btn-small" onClick={exportReconciliationCsv}>
+            Export Reconciliation CSV
+          </button>
+        </div>
         {unreconciledLoading ? (
           <p className="range-empty">Loading unreconciled entries...</p>
         ) : unreconciledClosings.length > 0 ? (
@@ -575,6 +744,7 @@ const CashManagement = () => {
                   <th>Date</th>
                   {summary.all_branches && <th>Branch</th>}
                   <th className="num">Opening</th>
+                  <th className="num">Open Var.</th>
                   <th className="num">Cash sales</th>
                   <th className="num">Book sales</th>
                   <th className="num">Expenses (cash)</th>
@@ -590,6 +760,9 @@ const CashManagement = () => {
                     <td>{new Date(row.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                     {summary.all_branches && <td>{row.branch_name || `Branch ${row.branch_id || 'N/A'}`}</td>}
                     <td className="num">{(parseFloat(row.opening_balance) || 0).toLocaleString()}</td>
+                    <td className={`num ${(parseFloat(row.opening_variance) || 0) < 0 ? 'value-negative' : 'value-positive'}`}>
+                      {(parseFloat(row.opening_variance) || 0).toLocaleString()}
+                    </td>
                     <td className="num">{(parseFloat(row.cash_sales) || 0).toLocaleString()}</td>
                     <td className="num">{(parseFloat(row.book_sales) || 0).toLocaleString()}</td>
                     <td className="num">{(parseFloat(row.expenses_from_cash) || 0).toLocaleString()}</td>
@@ -643,6 +816,9 @@ const CashManagement = () => {
           <button type="button" className="btn-primary" onClick={loadRangeReport} disabled={rangeLoading}>
             {rangeLoading ? 'Loading...' : 'View report'}
           </button>
+          <button type="button" className="btn-secondary" onClick={exportCashflowCsv} disabled={rangeLoading || !rangeData.length}>
+            Export Cashflow CSV
+          </button>
         </div>
         {rangeData.length > 0 && (
           <div className="range-table-wrap interactive-scroll-region" tabIndex={0} role="region" aria-label="Cashflow report table" {...tableScrollHandlers}>
@@ -651,6 +827,7 @@ const CashManagement = () => {
                 <tr>
                   <th>Date</th>
                   <th className="num">Opening</th>
+                  <th className="num">Open Var.</th>
                   <th className="num">Cash sales</th>
                   <th className="num">Book sales</th>
                   <th className="num">Card & M-Pesa</th>
@@ -664,6 +841,9 @@ const CashManagement = () => {
                   <tr key={row.date}>
                     <td>{new Date(row.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                     <td className="num">{(parseFloat(row.opening_balance) || 0).toLocaleString()}</td>
+                    <td className={`num ${(parseFloat(row.opening_variance) || 0) < 0 ? 'value-negative' : 'value-positive'}`}>
+                      {(parseFloat(row.opening_variance) || 0).toLocaleString()}
+                    </td>
                     <td className="num">{(parseFloat(row.cash_sales) || 0).toLocaleString()}</td>
                     <td className="num">{(parseFloat(row.book_sales) || 0).toLocaleString()}</td>
                     <td className="num">{(parseFloat(row.card_sales || 0) + parseFloat(row.mobile_money_sales || 0)).toLocaleString()}</td>

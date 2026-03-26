@@ -21,6 +21,8 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
 
   const payload = {
     opening_balance: computed.opening_balance || 0,
+    opening_cash_declared: computed.opening_cash_declared != null ? computed.opening_cash_declared : null,
+    opening_variance: computed.opening_variance || 0,
     cash_sales: computed.cash_sales || 0,
     book_sales: computed.book_sales || 0,
     card_sales: computed.card_sales || 0,
@@ -40,6 +42,8 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
     await db.run(
       `UPDATE daily_cash_summaries SET
         opening_balance = ?,
+        opening_cash_declared = ?,
+        opening_variance = ?,
         cash_sales = ?,
         book_sales = ?,
         card_sales = ?,
@@ -58,6 +62,8 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
       WHERE id = ?`,
       [
         payload.opening_balance,
+        payload.opening_cash_declared,
+        payload.opening_variance,
         payload.cash_sales,
         payload.book_sales,
         payload.card_sales,
@@ -80,15 +86,17 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
 
   await db.run(
     `INSERT INTO daily_cash_summaries (
-      date, branch_id, opening_balance, cash_sales, book_sales, card_sales, mobile_money_sales,
+      date, branch_id, opening_balance, opening_cash_declared, opening_variance, cash_sales, book_sales, card_sales, mobile_money_sales,
       bank_deposits, bank_payments, mpesa_received, mpesa_paid,
       expenses_from_cash, expenses_from_bank, expenses_from_mpesa,
       cash_in_hand, closing_balance, notes, is_reconciled
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
     [
       date,
       branchId,
       payload.opening_balance,
+      payload.opening_cash_declared,
+      payload.opening_variance,
       payload.cash_sales,
       payload.book_sales,
       payload.card_sales,
@@ -119,6 +127,10 @@ async function computeAndPersistDailySummary(date, branchId) {
   const yesterdayStr = yesterday.toISOString().split('T')[0];
   const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
   const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+  const existingRow = await db.get(
+    'SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
+    [date, branchId]
+  );
 
   const cashSalesRow = await db.all(`
     SELECT SUM(paid_amount) as cash_sales
@@ -139,7 +151,14 @@ async function computeAndPersistDailySummary(date, branchId) {
     console.error('Error calculating book sales for daily summary:', err);
   }
 
-  const calculated = await calculateRemaining(date, openingBalance, cashSales, bookSales, branchId);
+  const calculated = await calculateRemaining(
+    date,
+    openingBalance,
+    cashSales,
+    bookSales,
+    branchId,
+    existingRow?.opening_cash_declared
+  );
   return upsertDailySummaryFromComputed(date, branchId, calculated);
 }
 
@@ -202,6 +221,59 @@ router.post('/daily/recalculate/:date', requireBranchAccess(), requirePermission
   }
 });
 
+// Record opening session cash declaration and compare with previous closing balance.
+router.post('/opening-session/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+  const { date } = req.params;
+  const openingCash = parseFloat(req.body?.opening_cash);
+  const notes = req.body?.notes || null;
+  const branchId = getEffectiveBranchId(req);
+  if (branchId == null) {
+    return res.status(400).json({ error: 'Select a branch to start opening session' });
+  }
+  if (!Number.isFinite(openingCash) || openingCash < 0) {
+    return res.status(400).json({ error: 'opening_cash must be a valid non-negative number' });
+  }
+  try {
+    const existing = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    if (existing?.is_reconciled) {
+      return res.status(409).json({ error: 'This day is already reconciled and cannot be changed.' });
+    }
+    const yesterday = new Date(date);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
+    const expectedOpening = yesterdayRow ? parseFloat(yesterdayRow.closing_balance || 0) : 0;
+    const openingVariance = openingCash - expectedOpening;
+
+    if (existing) {
+      await db.run(
+        `UPDATE daily_cash_summaries
+         SET opening_balance = ?, opening_cash_declared = ?, opening_variance = ?, opening_session_by = ?, opening_session_at = CURRENT_TIMESTAMP, notes = COALESCE(?, notes), updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [expectedOpening, openingCash, openingVariance, req.user?.fullName || req.user?.username || 'Cashier', notes, existing.id]
+      );
+    } else {
+      await db.run(
+        `INSERT INTO daily_cash_summaries (date, branch_id, opening_balance, opening_cash_declared, opening_variance, opening_session_by, opening_session_at, notes, is_reconciled)
+         VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, FALSE)`,
+        [date, branchId, expectedOpening, openingCash, openingVariance, req.user?.fullName || req.user?.username || 'Cashier', notes]
+      );
+    }
+    // Recompute today's rolling values using declared opening cash
+    await refreshUnreconciledDailySummary(date, branchId);
+    const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    res.json({
+      ...row,
+      opening_balanced: Math.abs(parseFloat(row.opening_variance || 0)) < 0.01,
+      opening_short: parseFloat(row.opening_variance || 0) < 0 ? Math.abs(parseFloat(row.opening_variance || 0)) : 0,
+      opening_over: parseFloat(row.opening_variance || 0) > 0 ? parseFloat(row.opening_variance || 0) : 0
+    });
+  } catch (err) {
+    console.error('Error saving opening session:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get today's cash summary (with automatic calculations) (cashiers, managers, admins can view)
 // When admin and no branch selected: return consolidated totals across all branches
 router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
@@ -227,6 +299,7 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       for (const bid of branchIds) {
         const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, bid]);
         const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+        const existingToday = await db.get('SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [today, bid]);
         const cashSalesRow = await db.all(`
           SELECT SUM(paid_amount) as cash_sales FROM orders
           WHERE DATE(order_date) = ? AND payment_status = 'paid_full' AND payment_method = 'cash' AND paid_amount > 0 AND branch_id = ?
@@ -239,7 +312,7 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
         } catch (err) {
           bookSales = 0;
         }
-        const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, bid);
+        const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, bid, existingToday?.opening_cash_declared);
         const persisted = await upsertDailySummaryFromComputed(today, bid, result);
         results.push(persisted || result);
       }
@@ -259,6 +332,7 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
   try {
     const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
     const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+    const existingToday = await db.get('SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [today, branchId]);
     const cashSalesRow = await db.all(`
       SELECT SUM(paid_amount) as cash_sales
       FROM orders
@@ -277,7 +351,7 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       console.error('Error calculating book sales:', err);
       bookSales = 0;
     }
-    const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, branchId);
+    const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, branchId, existingToday?.opening_cash_declared);
     const persisted = await upsertDailySummaryFromComputed(today, branchId, result);
     res.json(persisted || result);
   } catch (err) {
@@ -330,7 +404,7 @@ function consolidateSummaries(results, date) {
   };
 }
 
-async function calculateRemaining(date, openingBalance, cashSales, bookSales, branchId) {
+async function calculateRemaining(date, openingBalance, cashSales, bookSales, branchId, declaredOpeningCash = null) {
   const { calculateMobileMoneyReceived, calculateCardReceived, calculateBankReceived } = require('../utils/cashValidation');
 
   // Card, M-Pesa, and bank from transactions (advance + full payments on this date)
@@ -370,13 +444,17 @@ async function calculateRemaining(date, openingBalance, cashSales, bookSales, br
   
   const bankDeposits = depositsRow?.total || 0;
   
-  // Calculate total cash in hand = opening + cash sales + book sales - expenses from cash - bank deposits
-  const cashInHand = openingBalance + cashSales + bookSales - expensesFromCash - bankDeposits;
+  const effectiveOpening = declaredOpeningCash != null ? parseFloat(declaredOpeningCash) : openingBalance;
+  const openingVariance = effectiveOpening - openingBalance;
+  // Cash in hand starts from declared opening cash (if provided), else previous day closing.
+  const cashInHand = effectiveOpening + cashSales + bookSales - expensesFromCash - bankDeposits;
   const closingBalance = cashInHand;
   
   return {
     date,
     opening_balance: openingBalance,
+    opening_cash_declared: declaredOpeningCash != null ? effectiveOpening : null,
+    opening_variance: openingVariance,
     cash_sales: cashSales,
     book_sales: bookSales,
     card_sales: cardSales,
@@ -423,6 +501,10 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
     const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
     
     const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+    const existingRow = await db.get(
+      'SELECT opening_cash_declared, opening_variance, opening_session_by, opening_session_at FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
+      [today, branchId]
+    );
     
     // Calculate cash sales (orders paid in full with cash on order date)
     const cashSalesRow = await db.all(`
@@ -482,8 +564,12 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
     const mpesaReceived = mpesa_received || mobileMoneySales;
     const mpesaPaid = mpesa_paid || 0;
     
-    // Cash in hand = opening + cash sales + book sales - expenses from cash - bank deposits
-    const cashInHand = openingBalance + cashSales + bookSales - expensesFromCash - bankDepositsAmount;
+    const declaredOpening = existingRow?.opening_cash_declared != null
+      ? parseFloat(existingRow.opening_cash_declared)
+      : openingBalance;
+    const openingVariance = declaredOpening - openingBalance;
+    // Cash in hand = declared opening (or expected opening) + sales - cash outflows.
+    const cashInHand = declaredOpening + cashSales + bookSales - expensesFromCash - bankDepositsAmount;
     const closingBalance = cashInHand;
     
     // Check if record exists
@@ -494,6 +580,8 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
       await db.run(
         `UPDATE daily_cash_summaries SET
           opening_balance = ?,
+          opening_cash_declared = ?,
+          opening_variance = ?,
           cash_sales = ?,
           book_sales = ?,
           card_sales = ?,
@@ -510,7 +598,7 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
           notes = ?,
           updated_at = CURRENT_TIMESTAMP
         WHERE date = ? AND branch_id = ?`,
-        [openingBalance, cashSales, bookSales, cardSales, mobileMoneySales,
+        [openingBalance, declaredOpening, openingVariance, cashSales, bookSales, cardSales, mobileMoneySales,
          bankDepositsAmount, bankPayments, mpesaReceived, mpesaPaid,
          expensesFromCash, expensesFromBank, expensesFromMpesa,
          cashInHand, closingBalance, notes || null, today, branchId]
@@ -522,13 +610,13 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
       // Insert new record
       await db.run(
         `INSERT INTO daily_cash_summaries (
-          date, branch_id, opening_balance, cash_sales, book_sales, card_sales, mobile_money_sales,
+          date, branch_id, opening_balance, opening_cash_declared, opening_variance, cash_sales, book_sales, card_sales, mobile_money_sales,
           bank_deposits, bank_payments, mpesa_received, mpesa_paid,
           expenses_from_cash, expenses_from_bank, expenses_from_mpesa,
           cash_in_hand, closing_balance, notes
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-        [today, branchId, openingBalance, cashSales, bookSales, cardSales, mobileMoneySales,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        [today, branchId, openingBalance, declaredOpening, openingVariance, cashSales, bookSales, cardSales, mobileMoneySales,
          bankDepositsAmount, bankPayments, mpesaReceived, mpesaPaid,
          expensesFromCash, expensesFromBank, expensesFromMpesa,
          cashInHand, closingBalance, notes || null]
@@ -624,6 +712,10 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
         console.warn('Reconcile: No director WhatsApp number in settings – daily report not sent.');
       } else {
         const opening = parseFloat(row.opening_balance) || 0;
+        const openingDeclared = row.opening_cash_declared != null ? parseFloat(row.opening_cash_declared) : opening;
+        const openingVariance = parseFloat(row.opening_variance || 0);
+        const openingShortage = openingVariance < 0 ? Math.abs(openingVariance) : 0;
+        const openingOverage = openingVariance > 0 ? openingVariance : 0;
         const cashSales = parseFloat(row.cash_sales) || 0;
         const bookSales = parseFloat(row.book_sales) || 0;
         const cardSales = parseFloat(row.card_sales) || 0;
@@ -636,6 +728,7 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
         const closing = parseFloat(row.closing_balance) || 0;
         const cashOut = expensesCash;
         const expectedCash = opening + cashSales + bookSales - cashOut;
+        const actualCash = openingDeclared + cashSales + bookSales - cashOut;
         const dateFormatted = new Date(date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
         const cashierName = reconciled_by || 'Cashier';
 
@@ -646,6 +739,7 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
         const grossProfit = revenue - discounts - costOfGoods;
         const operatingExpenses = totalExpenses;
         const netProfit = grossProfit - operatingExpenses;
+        const adjustedNetProfit = netProfit - openingShortage;
 
         const fmt = (n) => Number(n).toLocaleString();
         const report = [
@@ -656,7 +750,9 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
           `👤 Cashier: ${cashierName}`,
           '',
           '💰 *OPENING CASH*',
-          `TZS ${fmt(opening)}`,
+          `Expected (Prev Closing): TZS ${fmt(opening)}`,
+          `Declared (Session Start): TZS ${fmt(openingDeclared)}`,
+          `Variance: ${openingVariance < 0 ? '-' : '+'}TZS ${fmt(Math.abs(openingVariance))}`,
           '',
           '📈 *SALES BREAKDOWN*',
           `• Cash Sales: TZS ${fmt(cashSales)}`,
@@ -678,14 +774,18 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
           `• Cost of Goods: (TZS ${fmt(costOfGoods)})`,
           `• *Gross Profit: TZS ${fmt(grossProfit)}*`,
           `• Operating Expenses: (TZS ${fmt(operatingExpenses)})`,
-          `*💰 NET PROFIT: TZS ${fmt(netProfit)}*`,
+          `• Opening Shortage Loss: (TZS ${fmt(openingShortage)})`,
+          openingOverage > 0 ? `• Opening Overage: +TZS ${fmt(openingOverage)}` : null,
+          `*💰 NET PROFIT (Adjusted): TZS ${fmt(adjustedNetProfit)}*`,
           '',
           '💵 *CASH POSITION*',
-          `Opening: TZS ${fmt(opening)}`,
+          `Opening (Expected): TZS ${fmt(opening)}`,
+          `Opening (Declared): TZS ${fmt(openingDeclared)}`,
           `+ Cash Sales: TZS ${fmt(cashSales)}`,
           `+ Collections: TZS ${fmt(bookSales)}`,
           `- Cash Out: TZS ${fmt(cashOut)}`,
           `*Expected Cash: TZS ${fmt(expectedCash)}*`,
+          `*Actual Cash: TZS ${fmt(actualCash)}*`,
           '━━━━━━━━━━━━━━━━',
           branchName ? `📍 ${branchName}` : ''
         ].filter(Boolean).join('\n');
@@ -774,6 +874,7 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
       const rows = await db.all(
         `SELECT date,
           SUM(COALESCE(opening_balance, 0)) as opening_balance,
+          SUM(COALESCE(opening_variance, 0)) as opening_variance,
           SUM(COALESCE(cash_sales, 0)) as cash_sales,
           SUM(COALESCE(book_sales, 0)) as book_sales,
           SUM(COALESCE(card_sales, 0)) as card_sales,
@@ -791,6 +892,7 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
       const normalized = (rows || []).map((r) => ({
         date: r.date,
         opening_balance: r.opening_balance,
+        opening_variance: r.opening_variance,
         cash_sales: r.cash_sales,
         book_sales: r.book_sales,
         card_sales: r.card_sales,

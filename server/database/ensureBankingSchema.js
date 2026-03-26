@@ -28,6 +28,11 @@ async function ensure() {
     await db.run('ALTER TABLE expenses ADD COLUMN IF NOT EXISTS bank_account_id INTEGER', []);
     await db.run('ALTER TABLE expenses ADD COLUMN IF NOT EXISTS deposit_reference_number TEXT', []);
     await db.run('ALTER TABLE expenses ADD COLUMN IF NOT EXISTS bank_deposit_id INTEGER', []);
+    // Cash session controls for opening/closing reconciliation quality
+    await db.run('ALTER TABLE daily_cash_summaries ADD COLUMN IF NOT EXISTS opening_cash_declared NUMERIC(14,2)', []);
+    await db.run('ALTER TABLE daily_cash_summaries ADD COLUMN IF NOT EXISTS opening_variance NUMERIC(14,2) NOT NULL DEFAULT 0', []);
+    await db.run('ALTER TABLE daily_cash_summaries ADD COLUMN IF NOT EXISTS opening_session_by TEXT', []);
+    await db.run('ALTER TABLE daily_cash_summaries ADD COLUMN IF NOT EXISTS opening_session_at TIMESTAMP', []);
     console.log('✅ Banking schema (bank_accounts + expenses bank deposit) ready');
   } catch (err) {
     console.error('❌ Banking schema migration error:', err.message);
