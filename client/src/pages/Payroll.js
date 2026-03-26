@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   createPayrollEmployee,
   getMonthlyPayroll,
@@ -6,7 +6,8 @@ import {
   getPayrollHistory,
   getSavedMonthlyPayroll,
   getSalaryAdvances,
-  saveMonthlyPayroll
+  saveMonthlyPayroll,
+  updatePayrollEmployee
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
@@ -47,13 +48,19 @@ const Payroll = () => {
   const [payrollHistory, setPayrollHistory] = useState([]);
   const [selectedHistoryMonth, setSelectedHistoryMonth] = useState('');
   const [selectedEmployeeStatement, setSelectedEmployeeStatement] = useState('');
+  const [staffSearch, setStaffSearch] = useState('');
+  const [editingStaffId, setEditingStaffId] = useState(null);
+  const [staffDraft, setStaffDraft] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingStaff, setSavingStaff] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
+  const verificationWrapRef = useRef(null);
 
   const [employeeForm, setEmployeeForm] = useState({
     full_name: '',
     employee_code: '',
+    tin_number: '',
     phone: '',
     gross_salary: '',
     default_allowances: '',
@@ -125,6 +132,17 @@ const Payroll = () => {
   }, [monthKey, canManagePayroll, canRecordAdvances]);
 
   const employeeOptions = useMemo(() => employees.map((e) => ({ id: e.id, name: e.full_name })), [employees]);
+  const filteredEmployees = useMemo(() => {
+    const q = String(staffSearch || '').trim().toLowerCase();
+    if (!q) return employees;
+    return employees.filter((e) => {
+      const fullName = String(e.full_name || '').toLowerCase();
+      const code = String(e.employee_code || '').toLowerCase();
+      const tin = String(e.tin_number || '').toLowerCase();
+      const phone = String(e.phone || '').toLowerCase();
+      return fullName.includes(q) || code.includes(q) || tin.includes(q) || phone.includes(q);
+    });
+  }, [employees, staffSearch]);
   const totalEmployees = employees.length;
   const processedEmployees = payroll.length;
   const remainingEmployees = Math.max(0, totalEmployees - processedEmployees);
@@ -146,6 +164,7 @@ const Payroll = () => {
       setEmployeeForm({
         full_name: '',
         employee_code: '',
+        tin_number: '',
         phone: '',
         gross_salary: '',
         default_allowances: '',
@@ -159,6 +178,40 @@ const Payroll = () => {
       load();
     } catch (err) {
       showToast(`Error adding employee: ${err.response?.data?.error || err.message}`, 'error');
+    }
+  };
+
+  const startEditStaff = (emp) => {
+    setEditingStaffId(emp.id);
+    setStaffDraft({
+      full_name: emp.full_name || '',
+      employee_code: emp.employee_code || '',
+      tin_number: emp.tin_number || '',
+      phone: emp.phone || '',
+      gross_salary: Number(emp.gross_salary || 0),
+      nssf_enabled: !!emp.nssf_enabled,
+      paye_enabled: !!emp.paye_enabled,
+      is_active: !!emp.is_active
+    });
+  };
+
+  const cancelEditStaff = () => {
+    setEditingStaffId(null);
+    setStaffDraft({});
+  };
+
+  const saveEditStaff = async () => {
+    if (!editingStaffId) return;
+    setSavingStaff(true);
+    try {
+      await updatePayrollEmployee(editingStaffId, staffDraft);
+      showToast('Staff details updated', 'success');
+      cancelEditStaff();
+      load();
+    } catch (err) {
+      showToast(`Error updating staff: ${err.response?.data?.error || err.message}`, 'error');
+    } finally {
+      setSavingStaff(false);
     }
   };
 
@@ -322,6 +375,29 @@ const Payroll = () => {
     }
   };
 
+  const exportStaffDirectory = () => {
+    if (!employees.length) {
+      showToast('No staff to export', 'error');
+      return;
+    }
+    const csv = [
+      'Full Name,Employee Code,TIN Number,Phone,Branch,Gross Salary,NSSF,PAYE,Status',
+      ...employees.map((e) => [
+        `"${String(e.full_name || '').replace(/"/g, '""')}"`,
+        `"${String(e.employee_code || '').replace(/"/g, '""')}"`,
+        `"${String(e.tin_number || '').replace(/"/g, '""')}"`,
+        `"${String(e.phone || '').replace(/"/g, '""')}"`,
+        `"${String(e.branch_name || '').replace(/"/g, '""')}"`,
+        Number(e.gross_salary || 0).toFixed(2),
+        e.nssf_enabled ? 'Enabled' : 'Disabled',
+        e.paye_enabled ? 'Enabled' : 'Disabled',
+        e.is_active ? 'Active' : 'Inactive'
+      ].join(','))
+    ].join('\n');
+    downloadFile(`staff-directory-${monthKey}.csv`, csv, 'text/csv;charset=utf-8');
+    showToast('Staff directory exported', 'success');
+  };
+
   const updateLineField = (employeeId, key, value, numeric = true) => {
     setPayroll((prev) =>
       prev.map((row) => {
@@ -330,6 +406,12 @@ const Payroll = () => {
         return recomputeLine(next);
       })
     );
+  };
+
+  const scrollVerificationX = (delta) => {
+    const el = verificationWrapRef.current;
+    if (!el) return;
+    el.scrollBy({ left: delta, behavior: 'smooth' });
   };
 
   if (!canManagePayroll && !canRecordAdvances) {
@@ -394,6 +476,7 @@ const Payroll = () => {
           <form onSubmit={submitEmployee} className="payroll-form-grid">
             <input required placeholder="Full name" value={employeeForm.full_name} onChange={(e) => setEmployeeForm({ ...employeeForm, full_name: e.target.value })} />
             <input placeholder="Employee code" value={employeeForm.employee_code} onChange={(e) => setEmployeeForm({ ...employeeForm, employee_code: e.target.value })} />
+            <input placeholder="TIN number" value={employeeForm.tin_number} onChange={(e) => setEmployeeForm({ ...employeeForm, tin_number: e.target.value })} />
             <input placeholder="Phone" value={employeeForm.phone} onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })} />
             <input type="number" required placeholder="Gross salary" value={employeeForm.gross_salary} onChange={(e) => setEmployeeForm({ ...employeeForm, gross_salary: e.target.value })} />
             <input type="number" placeholder="Allowances" value={employeeForm.default_allowances} onChange={(e) => setEmployeeForm({ ...employeeForm, default_allowances: e.target.value })} />
@@ -410,13 +493,180 @@ const Payroll = () => {
         </div>
       )}
 
+      {canManagePayroll && activeStep === 'inputs' && (
+        <div className="payroll-card">
+          <div className="payroll-card-head">
+            <h3>All Staff Directory</h3>
+            <div className="payroll-staff-controls">
+              <input
+                className="payroll-search-input"
+                type="search"
+                placeholder="Search name / code / TIN / phone"
+                value={staffSearch}
+                onChange={(e) => setStaffSearch(e.target.value)}
+                aria-label="Search staff"
+              />
+              <button type="button" className="payroll-action-btn transfer" onClick={exportStaffDirectory}>
+                Export Staff CSV
+              </button>
+              <span className="payroll-count-chip">{filteredEmployees.length} staff</span>
+            </div>
+          </div>
+          <div
+            className="payroll-table-wrap staff-wrap interactive-scroll-region"
+            tabIndex={0}
+            role="region"
+            aria-label="All staff details table"
+            {...tableScrollHandlers}
+          >
+            <table className="payroll-table payroll-table--staff">
+              <thead>
+                <tr>
+                  <th>Full Name</th>
+                  <th>Employee Code</th>
+                  <th>TIN Number</th>
+                  <th>Phone</th>
+                  <th>Branch</th>
+                  <th className="num">Gross Salary</th>
+                  <th>NSSF</th>
+                  <th>PAYE</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredEmployees.map((emp) => (
+                  <tr key={emp.id}>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="text"
+                          value={staffDraft.full_name || ''}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, full_name: e.target.value }))}
+                        />
+                      ) : emp.full_name}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="text"
+                          value={staffDraft.employee_code || ''}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, employee_code: e.target.value }))}
+                        />
+                      ) : (emp.employee_code || '-')}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="text"
+                          value={staffDraft.tin_number || ''}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, tin_number: e.target.value }))}
+                        />
+                      ) : (emp.tin_number || '-')}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="text"
+                          value={staffDraft.phone || ''}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, phone: e.target.value }))}
+                        />
+                      ) : (emp.phone || '-')}
+                    </td>
+                    <td>{emp.branch_name || '-'}</td>
+                    <td className="num">
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="number"
+                          value={staffDraft.gross_salary ?? 0}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, gross_salary: Number(e.target.value || 0) }))}
+                        />
+                      ) : Number(emp.gross_salary || 0).toLocaleString()}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="checkbox"
+                          checked={!!staffDraft.nssf_enabled}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, nssf_enabled: e.target.checked }))}
+                        />
+                      ) : (emp.nssf_enabled ? 'Enabled' : 'Disabled')}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="checkbox"
+                          checked={!!staffDraft.paye_enabled}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, paye_enabled: e.target.checked }))}
+                        />
+                      ) : (emp.paye_enabled ? 'Enabled' : 'Disabled')}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <select
+                          value={staffDraft.is_active ? 'active' : 'inactive'}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, is_active: e.target.value === 'active' }))}
+                        >
+                          <option value="active">Active</option>
+                          <option value="inactive">Inactive</option>
+                        </select>
+                      ) : (emp.is_active ? 'Active' : 'Inactive')}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <div className="staff-row-actions">
+                          <button type="button" className="btn-primary" disabled={savingStaff} onClick={saveEditStaff}>
+                            {savingStaff ? 'Saving...' : 'Save'}
+                          </button>
+                          <button type="button" className="btn-secondary" onClick={cancelEditStaff}>Cancel</button>
+                        </div>
+                      ) : (
+                        <button type="button" className="btn-secondary" onClick={() => startEditStaff(emp)}>Edit</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {employees.length === 0 && (
+                  <tr>
+                    <td colSpan={10}>{loading ? 'Loading staff...' : 'No staff recorded yet'}</td>
+                  </tr>
+                )}
+                {employees.length > 0 && filteredEmployees.length === 0 && (
+                  <tr>
+                    <td colSpan={10}>No staff matched your search.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {canManagePayroll && activeStep === 'verification' && (
         <div className="payroll-card">
           <div className="payroll-card-head">
             <h3>Monthly Payroll ({monthKey})</h3>
-            <button className="btn-primary" onClick={savePayroll} disabled={saving || loading}>
-              {saving ? 'Saving...' : 'Save payroll'}
-            </button>
+            <div className="verification-head-actions">
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                onClick={() => scrollVerificationX(-320)}
+                title="Scroll left"
+              >
+                ◀ Left
+              </button>
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                onClick={() => scrollVerificationX(320)}
+                title="Scroll right"
+              >
+                Right ▶
+              </button>
+              <button className="btn-primary" onClick={savePayroll} disabled={saving || loading}>
+                {saving ? 'Saving...' : 'Save payroll'}
+              </button>
+            </div>
           </div>
           <div className="payroll-note">
             PAYE estimate follows Tanzania monthly income tax bands and is calculated on taxable income after employee NSSF.
@@ -424,12 +674,13 @@ const Payroll = () => {
           </div>
           <div
             className="payroll-table-wrap verification-wrap interactive-scroll-region"
+            ref={verificationWrapRef}
             tabIndex={0}
             role="region"
             aria-label="Monthly payroll table"
             {...tableScrollHandlers}
           >
-            <table className="payroll-table payroll-table--verification">
+            <table className="payroll-table payroll-table--verification payroll-table--compact">
               <thead>
                 <tr>
                   <th>Employee</th>
