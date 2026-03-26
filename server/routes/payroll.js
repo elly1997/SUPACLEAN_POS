@@ -187,6 +187,59 @@ router.get('/monthly', requirePermission('canManagePayroll'), async (req, res) =
   }
 });
 
+router.get('/monthly/saved', requirePermission('canManagePayroll'), async (req, res) => {
+  const month = monthKeyOrNow(req.query.month);
+  const branchId = getEffectiveBranchId(req);
+  try {
+    const rows = await db.all(
+      `SELECT pm.*, e.full_name, e.employee_code
+       FROM payroll_monthly pm
+       JOIN employees e ON e.id = pm.employee_id
+       WHERE pm.month_key = ?
+         AND (?::int IS NULL OR pm.branch_id = ?)
+       ORDER BY e.full_name ASC`,
+      [month, branchId, branchId]
+    );
+    res.json({ month_key: month, lines: rows || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/history', requirePermission('canManagePayroll'), async (req, res) => {
+  const branchId = getEffectiveBranchId(req);
+  const limitRaw = Number.parseInt(req.query.limit, 10);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 60) : 24;
+  const currentMonth = monthKeyOrNow();
+  try {
+    const rows = await db.all(
+      `SELECT
+         pm.month_key,
+         COUNT(*)::int AS processed_employees,
+         COUNT(DISTINCT to_char(pm.computed_at, 'YYYY-MM-DD HH24:MI:SS'))::int AS payroll_runs,
+         MAX(pm.computed_at) AS last_run_at,
+         COALESCE(SUM(pm.net_salary), 0) AS total_net_salary,
+         COALESCE(SUM(pm.paye_amount), 0) AS total_paye,
+         COALESCE(SUM(pm.nssf_amount), 0) AS total_nssf
+       FROM payroll_monthly pm
+       WHERE (?::int IS NULL OR pm.branch_id = ?)
+       GROUP BY pm.month_key
+       ORDER BY pm.month_key DESC
+       LIMIT ?`,
+      [branchId, branchId, limit]
+    );
+    const history = (rows || []).map((r) => ({
+      ...r,
+      payroll_status: r.month_key === currentMonth ? 'Open' : 'Closed',
+      salary_statement_status: 'Approved',
+      bank_transfer_status: 'Pending'
+    }));
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/monthly/save', requirePermission('canManagePayroll'), async (req, res) => {
   const month = monthKeyOrNow(req.body.month_key);
   const branchId = getEffectiveBranchId(req);

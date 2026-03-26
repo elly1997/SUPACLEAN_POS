@@ -4,11 +4,14 @@ import {
   createSalaryAdvance,
   getMonthlyPayroll,
   getPayrollEmployees,
+  getPayrollHistory,
+  getSavedMonthlyPayroll,
   getSalaryAdvances,
   saveMonthlyPayroll
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import './Payroll.css';
 
 const monthNow = () => {
   const d = new Date();
@@ -33,6 +36,8 @@ const Payroll = () => {
   const [employees, setEmployees] = useState([]);
   const [advances, setAdvances] = useState([]);
   const [payroll, setPayroll] = useState([]);
+  const [payrollHistory, setPayrollHistory] = useState([]);
+  const [selectedHistoryMonth, setSelectedHistoryMonth] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -72,13 +77,16 @@ const Payroll = () => {
     setLoading(true);
     try {
       const calls = [];
-      if (canManagePayroll) calls.push(getPayrollEmployees(), getMonthlyPayroll(monthKey));
+      if (canManagePayroll) calls.push(getPayrollEmployees(), getMonthlyPayroll(monthKey), getPayrollHistory({ limit: 24 }));
       if (canRecordAdvances) calls.push(getSalaryAdvances({ month: monthKey }));
       const results = await Promise.all(calls);
       let idx = 0;
       if (canManagePayroll) {
         setEmployees(results[idx++].data || []);
         setPayroll(results[idx++].data?.lines || []);
+        const h = results[idx++].data || [];
+        setPayrollHistory(h);
+        if (h.length > 0) setSelectedHistoryMonth((prev) => prev || h[0].month_key);
       }
       if (canRecordAdvances) {
         setAdvances(results[idx++].data || []);
@@ -95,6 +103,10 @@ const Payroll = () => {
   }, [monthKey, canManagePayroll, canRecordAdvances]);
 
   const employeeOptions = useMemo(() => employees.map((e) => ({ id: e.id, name: e.full_name })), [employees]);
+  const totalEmployees = employees.length;
+  const processedEmployees = payroll.length;
+  const remainingEmployees = Math.max(0, totalEmployees - processedEmployees);
+  const advancesTotal = advances.reduce((sum, a) => sum + Number(a.amount || 0), 0);
 
   const submitEmployee = async (e) => {
     e.preventDefault();
@@ -153,6 +165,83 @@ const Payroll = () => {
     }
   };
 
+  const downloadFile = (filename, content, mime = 'text/plain;charset=utf-8') => {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const actionLoadLines = async () => {
+    const month = selectedHistoryMonth || monthKey;
+    const res = await getSavedMonthlyPayroll(month);
+    return res?.data?.lines || [];
+  };
+
+  const handleSalaryStatement = async () => {
+    try {
+      const lines = await actionLoadLines();
+      if (!lines.length) return showToast('No saved payroll lines for selected month', 'error');
+      const totalNet = lines.reduce((s, r) => s + Number(r.net_salary || 0), 0);
+      const totalPaye = lines.reduce((s, r) => s + Number(r.paye_amount || 0), 0);
+      const text = [
+        `SUPACLEAN Payroll Statement (${selectedHistoryMonth || monthKey})`,
+        `Employees: ${lines.length}`,
+        `Total Net: TSh ${totalNet.toLocaleString()}`,
+        `Total PAYE: TSh ${totalPaye.toLocaleString()}`,
+        '',
+        ...lines.map((r) => `${r.full_name} | Gross ${Number(r.gross_salary || 0).toLocaleString()} | Net ${Number(r.net_salary || 0).toLocaleString()}`)
+      ].join('\n');
+      downloadFile(`payroll-statement-${selectedHistoryMonth || monthKey}.txt`, text);
+      showToast('Salary statement exported', 'success');
+    } catch (err) {
+      showToast(`Error generating statement: ${err.response?.data?.error || err.message}`, 'error');
+    }
+  };
+
+  const handleBankTransfer = async () => {
+    try {
+      const lines = await actionLoadLines();
+      if (!lines.length) return showToast('No saved payroll lines for selected month', 'error');
+      const csv = [
+        'Employee,Employee Code,Net Salary',
+        ...lines.map((r) => `"${(r.full_name || '').replace(/"/g, '""')}","${r.employee_code || ''}","${Number(r.net_salary || 0).toFixed(2)}"`)
+      ].join('\n');
+      downloadFile(`bank-transfer-${selectedHistoryMonth || monthKey}.csv`, csv, 'text/csv;charset=utf-8');
+      showToast('Bank transfer file generated', 'success');
+    } catch (err) {
+      showToast(`Error generating transfer: ${err.response?.data?.error || err.message}`, 'error');
+    }
+  };
+
+  const handlePayslips = async () => {
+    try {
+      const lines = await actionLoadLines();
+      if (!lines.length) return showToast('No saved payroll lines for selected month', 'error');
+      const slips = lines.map((r) => ([
+        '--- PAYSLIP ---',
+        `Month: ${selectedHistoryMonth || monthKey}`,
+        `Employee: ${r.full_name}`,
+        `Gross: TSh ${Number(r.gross_salary || 0).toLocaleString()}`,
+        `Allowances: TSh ${Number(r.allowances || 0).toLocaleString()}`,
+        `Bonuses: TSh ${Number(r.bonuses || 0).toLocaleString()}`,
+        `NSSF: TSh ${Number(r.nssf_amount || 0).toLocaleString()}`,
+        `PAYE: TSh ${Number(r.paye_amount || r.paye_estimate || 0).toLocaleString()}`,
+        `Advances: TSh ${Number(r.salary_advances || 0).toLocaleString()}`,
+        `Other Deductions: TSh ${Number(r.other_deductions || 0).toLocaleString()}`,
+        `Net Salary: TSh ${Number(r.net_salary || 0).toLocaleString()}`,
+        ''
+      ].join('\n'))).join('\n');
+      downloadFile(`payslips-${selectedHistoryMonth || monthKey}.txt`, slips);
+      showToast('Payslips exported', 'success');
+    } catch (err) {
+      showToast(`Error generating payslips: ${err.response?.data?.error || err.message}`, 'error');
+    }
+  };
+
   const updateLineMoney = (employeeId, key, value) => {
     setPayroll((prev) =>
       prev.map((row) => {
@@ -168,20 +257,51 @@ const Payroll = () => {
   }
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div className="payroll-page">
       <ToastContainer />
-      <div className="page-header">
-        <div>
-          <h1>Payroll</h1>
-          <p className="subtitle">Salary advances, monthly payroll, PAYE/NSSF estimates</p>
+      <div className="payroll-header">
+        <div className="payroll-header-text">
+          <h1>Payroll Process</h1>
+          <p className="subtitle">Manage salary inputs, advances, and monthly run outputs</p>
         </div>
-        <input type="month" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} />
+        <input className="payroll-month-input" type="month" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} />
+      </div>
+
+      <div className="payroll-steps">
+        <span className={`payroll-step ${canManagePayroll ? 'active' : ''}`}>Payroll Inputs</span>
+        <span className={`payroll-step ${canManagePayroll ? 'active' : ''}`}>Data Verification</span>
+        <span className={`payroll-step ${canManagePayroll ? 'active' : ''}`}>Run Payroll</span>
+      </div>
+
+      <div className="payroll-summary-grid">
+        <div className="payroll-summary-card">
+          <div className="label">Payroll Month</div>
+          <div className="value">{monthKey}</div>
+        </div>
+        <div className="payroll-summary-card">
+          <div className="label">Payroll Status</div>
+          <div className="value">
+            <span className="payroll-badge open">{saving ? 'Saving' : 'Open'}</span>
+          </div>
+        </div>
+        <div className="payroll-summary-card">
+          <div className="label">Processed Employees</div>
+          <div className="value">{processedEmployees}</div>
+        </div>
+        <div className="payroll-summary-card">
+          <div className="label">Remaining Employees</div>
+          <div className="value">{remainingEmployees}</div>
+        </div>
+        <div className="payroll-summary-card">
+          <div className="label">Salary Advances ({monthKey})</div>
+          <div className="value">TSh {advancesTotal.toLocaleString()}</div>
+        </div>
       </div>
 
       {canManagePayroll && (
-        <div className="dashboard-card">
+        <div className="payroll-card">
           <h3>Add Employee</h3>
-          <form onSubmit={submitEmployee} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,minmax(120px,1fr))', gap: 8 }}>
+          <form onSubmit={submitEmployee} className="payroll-form-grid">
             <input required placeholder="Full name" value={employeeForm.full_name} onChange={(e) => setEmployeeForm({ ...employeeForm, full_name: e.target.value })} />
             <input placeholder="Employee code" value={employeeForm.employee_code} onChange={(e) => setEmployeeForm({ ...employeeForm, employee_code: e.target.value })} />
             <input placeholder="Phone" value={employeeForm.phone} onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })} />
@@ -189,17 +309,67 @@ const Payroll = () => {
             <input type="number" placeholder="Allowances" value={employeeForm.default_allowances} onChange={(e) => setEmployeeForm({ ...employeeForm, default_allowances: e.target.value })} />
             <input type="number" placeholder="Bonuses" value={employeeForm.default_bonuses} onChange={(e) => setEmployeeForm({ ...employeeForm, default_bonuses: e.target.value })} />
             <input type="number" placeholder="Other deductions" value={employeeForm.default_other_deductions} onChange={(e) => setEmployeeForm({ ...employeeForm, default_other_deductions: e.target.value })} />
-            <label><input type="checkbox" checked={employeeForm.nssf_enabled} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_enabled: e.target.checked })} /> NSSF</label>
-            <label><input type="checkbox" checked={employeeForm.paye_enabled} onChange={(e) => setEmployeeForm({ ...employeeForm, paye_enabled: e.target.checked })} /> PAYE</label>
-            <button className="btn-primary" type="submit">Add employee</button>
+            <div className="payroll-toggle-wrap">
+              <label><input type="checkbox" checked={employeeForm.nssf_enabled} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_enabled: e.target.checked })} /> NSSF</label>
+              <label><input type="checkbox" checked={employeeForm.paye_enabled} onChange={(e) => setEmployeeForm({ ...employeeForm, paye_enabled: e.target.checked })} /> PAYE</label>
+            </div>
+            <button className="btn-primary payroll-submit-btn" type="submit">Add employee</button>
           </form>
         </div>
       )}
 
+      {canManagePayroll && (
+        <div className="payroll-card">
+          <div className="payroll-card-head">
+            <h3>Run Payroll History</h3>
+            <select value={selectedHistoryMonth} onChange={(e) => setSelectedHistoryMonth(e.target.value)}>
+              <option value="">Select month...</option>
+              {payrollHistory.map((h) => (
+                <option key={h.month_key} value={h.month_key}>{h.month_key}</option>
+              ))}
+            </select>
+          </div>
+          <div className="payroll-table-wrap">
+            <table className="payroll-table">
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th className="num">Payroll Runs</th>
+                  <th className="num">Processed Employees</th>
+                  <th className="num">Total Net</th>
+                  <th>Payroll Status</th>
+                  <th>Salary Statement</th>
+                  <th>Bank Transfer</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payrollHistory.map((h) => (
+                  <tr key={h.month_key}>
+                    <td>{h.month_key}</td>
+                    <td className="num">{Number(h.payroll_runs || 0)}</td>
+                    <td className="num">{Number(h.processed_employees || 0)}</td>
+                    <td className="num">TSh {Number(h.total_net_salary || 0).toLocaleString()}</td>
+                    <td><span className={`payroll-badge ${String(h.payroll_status).toLowerCase()}`}>{h.payroll_status}</span></td>
+                    <td><span className="payroll-badge approved">{h.salary_statement_status}</span></td>
+                    <td><span className="payroll-badge pending">{h.bank_transfer_status}</span></td>
+                  </tr>
+                ))}
+                {payrollHistory.length === 0 && <tr><td colSpan={7}>No payroll history yet</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div className="payroll-action-bar">
+            <button type="button" className="payroll-action-btn statement" onClick={handleSalaryStatement}>Salary Statement</button>
+            <button type="button" className="payroll-action-btn transfer" onClick={handleBankTransfer}>Generate Bank Transfer</button>
+            <button type="button" className="payroll-action-btn slips" onClick={handlePayslips}>Get Payslips</button>
+          </div>
+        </div>
+      )}
+
       {canRecordAdvances && (
-        <div className="dashboard-card">
+        <div className="payroll-card">
           <h3>Record Salary Advance</h3>
-          <form onSubmit={submitAdvance} style={{ display: 'grid', gridTemplateColumns: 'repeat(4,minmax(120px,1fr))', gap: 8 }}>
+          <form onSubmit={submitAdvance} className="payroll-form-grid">
             <select required value={advanceForm.employee_id} onChange={(e) => setAdvanceForm({ ...advanceForm, employee_id: e.target.value })}>
               <option value="">Select employee</option>
               {employeeOptions.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
@@ -207,21 +377,21 @@ const Payroll = () => {
             <input type="date" required value={advanceForm.advance_date} onChange={(e) => setAdvanceForm({ ...advanceForm, advance_date: e.target.value })} />
             <input type="number" required placeholder="Amount" value={advanceForm.amount} onChange={(e) => setAdvanceForm({ ...advanceForm, amount: e.target.value })} />
             <input placeholder="Notes" value={advanceForm.notes} onChange={(e) => setAdvanceForm({ ...advanceForm, notes: e.target.value })} />
-            <button className="btn-primary" type="submit">Save advance</button>
+            <button className="btn-primary payroll-submit-btn" type="submit">Save advance</button>
           </form>
         </div>
       )}
 
       {canManagePayroll && (
-        <div className="dashboard-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="payroll-card">
+          <div className="payroll-card-head">
             <h3>Monthly Payroll ({monthKey})</h3>
             <button className="btn-primary" onClick={savePayroll} disabled={saving || loading}>
               {saving ? 'Saving…' : 'Save payroll'}
             </button>
           </div>
-          <div className="range-table-wrap">
-            <table className="range-table">
+          <div className="payroll-table-wrap">
+            <table className="payroll-table">
               <thead>
                 <tr>
                   <th>Employee</th><th className="num">Gross</th><th className="num">Allow.</th><th className="num">Bonus</th>
@@ -234,21 +404,21 @@ const Payroll = () => {
                     <td>{r.full_name}</td>
                     <td className="num">{Number(r.gross_salary || 0).toLocaleString()}</td>
                     <td className="num">
-                      <input type="number" value={r.allowances || 0} onChange={(e) => updateLineMoney(r.employee_id, 'allowances', e.target.value)} style={{ width: 100 }} />
+                      <input type="number" value={r.allowances || 0} onChange={(e) => updateLineMoney(r.employee_id, 'allowances', e.target.value)} />
                     </td>
                     <td className="num">
-                      <input type="number" value={r.bonuses || 0} onChange={(e) => updateLineMoney(r.employee_id, 'bonuses', e.target.value)} style={{ width: 100 }} />
+                      <input type="number" value={r.bonuses || 0} onChange={(e) => updateLineMoney(r.employee_id, 'bonuses', e.target.value)} />
                     </td>
                     <td className="num">{Number(r.nssf_amount || 0).toLocaleString()}</td>
                     <td className="num">{Number(r.paye_estimate || 0).toLocaleString()}</td>
                     <td className="num">{Number(r.salary_advances || 0).toLocaleString()}</td>
                     <td className="num">
-                      <input type="number" value={r.other_deductions || 0} onChange={(e) => updateLineMoney(r.employee_id, 'other_deductions', e.target.value)} style={{ width: 100 }} />
+                      <input type="number" value={r.other_deductions || 0} onChange={(e) => updateLineMoney(r.employee_id, 'other_deductions', e.target.value)} />
                     </td>
                     <td className="num"><strong>{Number(r.net_salary || 0).toLocaleString()}</strong></td>
                   </tr>
                 ))}
-                {payroll.length === 0 && <tr><td colSpan={9}>No payroll rows</td></tr>}
+                {payroll.length === 0 && <tr><td colSpan={9}>{loading ? 'Loading payroll rows...' : 'No payroll rows'}</td></tr>}
               </tbody>
             </table>
           </div>
@@ -256,10 +426,10 @@ const Payroll = () => {
       )}
 
       {canRecordAdvances && (
-        <div className="dashboard-card">
+        <div className="payroll-card">
           <h3>Salary Advances ({monthKey})</h3>
-          <div className="range-table-wrap">
-            <table className="range-table">
+          <div className="payroll-table-wrap">
+            <table className="payroll-table">
               <thead><tr><th>Date</th><th>Employee</th><th className="num">Amount</th><th>Notes</th></tr></thead>
               <tbody>
                 {advances.map((a) => (
@@ -270,7 +440,7 @@ const Payroll = () => {
                     <td>{a.notes || '-'}</td>
                   </tr>
                 ))}
-                {advances.length === 0 && <tr><td colSpan={4}>No advances recorded</td></tr>}
+                {advances.length === 0 && <tr><td colSpan={4}>{loading ? 'Loading salary advances...' : 'No advances recorded'}</td></tr>}
               </tbody>
             </table>
           </div>
