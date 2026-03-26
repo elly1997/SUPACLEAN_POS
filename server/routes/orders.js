@@ -891,10 +891,23 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
             );
 
             if (!otherReadyItems) {
+              const receiptSums = await db.get(
+                `SELECT 
+                   COALESCE(SUM(total_amount), 0) as receipt_total_amount,
+                   COALESCE(SUM(paid_amount), 0) as receipt_paid_amount
+                 FROM orders
+                 WHERE UPPER(receipt_number) = UPPER(?)
+                   AND customer_id = ?`,
+                [orderWithCustomer.receipt_number, orderWithCustomer.customer_id]
+              );
+              const totalAmount = parseFloat(receiptSums?.receipt_total_amount || 0);
+              const paidAmount = parseFloat(receiptSums?.receipt_paid_amount || 0);
+              const balanceDue = Math.max(0, totalAmount - paidAmount);
               const message = generateReadyNotification(
                 orderWithCustomer.receipt_number,
                 orderWithCustomer.customer_name,
-                orderWithCustomer.estimated_collection_date
+                orderWithCustomer.estimated_collection_date,
+                { totalAmount, paidAmount, balanceDue }
               );
               
               // Try SMS first; if SMS fails, send via WhatsApp (don't block the response)
@@ -1762,10 +1775,23 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
     
     let message;
     if (notification_type === 'ready') {
+      const receiptSums = await db.get(
+        `SELECT 
+           COALESCE(SUM(total_amount), 0) as receipt_total_amount,
+           COALESCE(SUM(paid_amount), 0) as receipt_paid_amount
+         FROM orders
+         WHERE UPPER(receipt_number) = UPPER(?)
+           AND customer_id = ?`,
+        [order.receipt_number, order.customer_id]
+      );
+      const totalAmount = parseFloat(receiptSums?.receipt_total_amount || 0);
+      const paidAmount = parseFloat(receiptSums?.receipt_paid_amount || 0);
+      const balanceDue = Math.max(0, totalAmount - paidAmount);
       message = generateReadyNotification(
         order.receipt_number,
         order.customer_name,
-        order.estimated_collection_date
+        order.estimated_collection_date,
+        { totalAmount, paidAmount, balanceDue }
       );
     } else if (notification_type === 'reminder') {
       const now = new Date();

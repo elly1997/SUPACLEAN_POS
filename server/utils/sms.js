@@ -181,8 +181,20 @@ function includeSwahili() {
   return process.env.SMS_INCLUDE_SWAHILI !== 'false';
 }
 
-function generateReadyNotification(receiptNumber, customerName, estimatedDate = null) {
-  return `SUPACLEAN: Habari ${customerName}, oda yako iko tayari kuchukuliwa. Risiti: ${receiptNumber}. Asante kwa kuchagua SUPACLEAN.`;
+function generateReadyNotification(receiptNumber, customerName, estimatedDate = null, payment = {}) {
+  const name = String(customerName || 'Mteja').trim();
+  const receipt = String(receiptNumber || '').trim();
+  const totalAmount = Number(payment.totalAmount ?? 0);
+  const paidAmount = Number(payment.paidAmount ?? 0);
+  const balanceDue = Number(payment.balanceDue ?? Math.max(0, totalAmount - paidAmount));
+  const amountText = Math.max(0, Math.round((Number.isFinite(totalAmount) ? totalAmount : 0) * 100) / 100).toLocaleString();
+  const paidText = Math.max(0, Math.round((Number.isFinite(paidAmount) ? paidAmount : 0) * 100) / 100).toLocaleString();
+  const balanceText = Math.max(0, Math.round((Number.isFinite(balanceDue) ? balanceDue : 0) * 100) / 100).toLocaleString();
+
+  if (Math.max(0, balanceDue) <= 0) {
+    return `Habari ${name}, oda yako ${receipt} imepokelewa Tsh. ${amountText} PAID. Karibu sana SUPACLEAN`;
+  }
+  return `Habari ${name} oda yako ${receipt} imepokelewa, Advance ${paidText} Salio ${balanceText} Tshs. Karibu sana SUPACLEAN`;
 }
 
 function generateOrderConfirmation(receiptNumber, customerName, totalAmount, estimatedDate = null) {

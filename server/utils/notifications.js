@@ -56,7 +56,12 @@ async function sendNotification(options) {
       message = generateReadyNotification(
         orderData.receiptNumber,
         customerName,
-        orderData.estimatedDate
+        orderData.estimatedDate,
+        {
+          totalAmount: orderData.totalAmount,
+          paidAmount: orderData.paidAmount,
+          balanceDue: orderData.balanceDue
+        }
       );
       break;
     case 'confirmation':
