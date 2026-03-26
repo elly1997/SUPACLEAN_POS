@@ -14,6 +14,7 @@ async function ensure() {
         id SERIAL PRIMARY KEY,
         full_name TEXT NOT NULL,
         employee_code TEXT UNIQUE,
+        tin_number TEXT,
         phone TEXT,
         branch_id INTEGER REFERENCES branches(id),
         gross_salary NUMERIC(14,2) NOT NULL DEFAULT 0,
@@ -95,6 +96,7 @@ async function ensure() {
 
     await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS nssf_employee_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
     await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS nssf_employer_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
+    await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS tin_number TEXT', []);
     await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS nssf_employee_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
     await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS nssf_employer_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
     await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS employer_nssf_amount NUMERIC(14,2) NOT NULL DEFAULT 0', []);

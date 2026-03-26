@@ -50,7 +50,7 @@ router.get('/employees', requirePermission('canManagePayroll'), async (req, res)
       `SELECT e.*, b.name AS branch_name
        FROM employees e
        LEFT JOIN branches b ON b.id = e.branch_id
-       WHERE (?::int IS NULL OR e.branch_id = ?)
+       WHERE (?::int IS NULL OR e.branch_id = ? OR e.branch_id IS NULL)
        ORDER BY e.full_name ASC`,
       [branchId, branchId]
     );
@@ -60,14 +60,14 @@ router.get('/employees', requirePermission('canManagePayroll'), async (req, res)
   }
 });
 
-router.get('/employees/for-advances', requirePermission('canRecordSalaryAdvances'), async (req, res) => {
+router.get('/employees/for-advances', requirePermission('canManageExpenses'), async (req, res) => {
   const branchId = getEffectiveBranchId(req);
   try {
     const rows = await db.all(
       `SELECT id, full_name, employee_code, branch_id
        FROM employees
        WHERE is_active = TRUE
-         AND (?::int IS NULL OR branch_id = ?)
+         AND (?::int IS NULL OR branch_id = ? OR branch_id IS NULL)
        ORDER BY full_name ASC`,
       [branchId, branchId]
     );
@@ -81,6 +81,7 @@ router.post('/employees', requirePermission('canManagePayroll'), async (req, res
   const {
     full_name,
     employee_code,
+    tin_number,
     phone,
     branch_id,
     gross_salary,
@@ -95,16 +96,21 @@ router.post('/employees', requirePermission('canManagePayroll'), async (req, res
   if (!full_name || gross_salary == null) {
     return res.status(400).json({ error: 'full_name and gross_salary are required' });
   }
+  const effectiveBranchId = getEffectiveBranchId(req);
+  const resolvedBranchId = branch_id != null && branch_id !== ''
+    ? Number(branch_id)
+    : (effectiveBranchId != null ? Number(effectiveBranchId) : null);
   try {
     const result = await db.run(
       `INSERT INTO employees
-      (full_name, employee_code, phone, branch_id, gross_salary, default_allowances, default_bonuses, default_other_deductions, nssf_enabled, nssf_employee_rate, nssf_employer_rate, paye_enabled)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      (full_name, employee_code, tin_number, phone, branch_id, gross_salary, default_allowances, default_bonuses, default_other_deductions, nssf_enabled, nssf_employee_rate, nssf_employer_rate, paye_enabled)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
       [
         String(full_name).trim(),
         employee_code ? String(employee_code).trim() : null,
+        tin_number ? String(tin_number).trim() : null,
         phone ? String(phone).trim() : null,
-        branch_id ? Number(branch_id) : null,
+        resolvedBranchId,
         parseMoney(gross_salary),
         parseMoney(default_allowances),
         parseMoney(default_bonuses),
@@ -117,6 +123,74 @@ router.post('/employees', requirePermission('canManagePayroll'), async (req, res
     );
     const row = await db.get('SELECT * FROM employees WHERE id = ?', [result.lastID]);
     res.status(201).json(row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/employees/:id', requirePermission('canManagePayroll'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'Invalid employee id' });
+  const {
+    full_name,
+    employee_code,
+    tin_number,
+    phone,
+    gross_salary,
+    default_allowances,
+    default_bonuses,
+    default_other_deductions,
+    nssf_enabled,
+    nssf_employee_rate,
+    nssf_employer_rate,
+    paye_enabled,
+    is_active
+  } = req.body || {};
+  try {
+    const existing = await db.get('SELECT id FROM employees WHERE id = $1', [id]);
+    if (!existing) return res.status(404).json({ error: 'Employee not found' });
+    await db.run(
+      `UPDATE employees SET
+         full_name = COALESCE($1, full_name),
+         employee_code = COALESCE($2, employee_code),
+         tin_number = COALESCE($3, tin_number),
+         phone = COALESCE($4, phone),
+         gross_salary = COALESCE($5, gross_salary),
+         default_allowances = COALESCE($6, default_allowances),
+         default_bonuses = COALESCE($7, default_bonuses),
+         default_other_deductions = COALESCE($8, default_other_deductions),
+         nssf_enabled = COALESCE($9, nssf_enabled),
+         nssf_employee_rate = COALESCE($10, nssf_employee_rate),
+         nssf_employer_rate = COALESCE($11, nssf_employer_rate),
+         paye_enabled = COALESCE($12, paye_enabled),
+         is_active = COALESCE($13, is_active),
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = $14`,
+      [
+        full_name != null ? String(full_name).trim() : null,
+        employee_code != null ? String(employee_code).trim() : null,
+        tin_number != null ? String(tin_number).trim() : null,
+        phone != null ? String(phone).trim() : null,
+        gross_salary != null ? parseMoney(gross_salary) : null,
+        default_allowances != null ? parseMoney(default_allowances) : null,
+        default_bonuses != null ? parseMoney(default_bonuses) : null,
+        default_other_deductions != null ? parseMoney(default_other_deductions) : null,
+        nssf_enabled != null ? !!nssf_enabled : null,
+        nssf_employee_rate != null ? parseMoney(nssf_employee_rate, 10) : null,
+        nssf_employer_rate != null ? parseMoney(nssf_employer_rate, 10) : null,
+        paye_enabled != null ? !!paye_enabled : null,
+        is_active != null ? !!is_active : null,
+        id
+      ]
+    );
+    const row = await db.get(
+      `SELECT e.*, b.name AS branch_name
+       FROM employees e
+       LEFT JOIN branches b ON b.id = e.branch_id
+       WHERE e.id = $1`,
+      [id]
+    );
+    res.json(row);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -172,7 +246,7 @@ router.get('/monthly', requirePermission('canManagePayroll'), async (req, res) =
     const employees = await db.all(
       `SELECT * FROM employees
        WHERE is_active = TRUE
-       AND (?::int IS NULL OR branch_id = ?)
+       AND (?::int IS NULL OR branch_id = ? OR branch_id IS NULL)
        ORDER BY full_name ASC`,
       [branchId, branchId]
     );
