@@ -114,6 +114,7 @@ const Layout = ({ children }) => {
       items: [
         { path: '/cash-management', label: 'Cash Management', icon: '💵', permission: 'canManageCash', feature: 'cash_management' },
         { path: '/expenses', label: 'Expenses', icon: '📝', permission: 'canManageExpenses', feature: 'expenses' },
+        { path: '/payroll', label: 'Payroll', icon: '👨‍💼', permission: ['canManagePayroll', 'canRecordSalaryAdvances'], feature: null },
         { path: '/reports', label: 'Reports', icon: '📈', permission: 'canViewReports', feature: 'reports_basic' },
       ]
     },

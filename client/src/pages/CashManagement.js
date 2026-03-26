@@ -31,6 +31,7 @@ const CashManagement = () => {
   const [rangeLoading, setRangeLoading] = useState(false);
   const [unreconciledClosings, setUnreconciledClosings] = useState([]);
   const [unreconciledLoading, setUnreconciledLoading] = useState(false);
+  const [reconcilingDate, setReconcilingDate] = useState('');
   const today = new Date().toISOString().split('T')[0];
   const isAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
 
@@ -202,6 +203,39 @@ const CashManagement = () => {
   const openWhatsAppToSendReport = () => {
     if (!manualWhatsAppReport?.directorPhoneWa || !manualWhatsAppReport?.reportText) return;
     window.open(`https://wa.me/${manualWhatsAppReport.directorPhoneWa}?text=${encodeURIComponent(manualWhatsAppReport.reportText)}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleReconcileUnreconciledDate = async (dateToReconcile) => {
+    if (!dateToReconcile) return;
+    if (summary?.all_branches) {
+      showToast('Select a specific branch to reconcile past dates.', 'error');
+      return;
+    }
+    if (!window.confirm(`Reconcile ${dateToReconcile} and send daily closing report? This cannot be undone.`)) return;
+    setReconcilingDate(dateToReconcile);
+    setManualWhatsAppReport(null);
+    try {
+      const cashierName = user?.fullName || user?.username || 'Cashier';
+      const result = await reconcileDailyCash(dateToReconcile, { reconciled_by: cashierName });
+      const data = result?.data || result;
+      if (data.report_sent) {
+        showToast(`Reconciled ${dateToReconcile}. Report sent to director.`, 'success');
+      } else if (data.report_text && data.director_phone_wa) {
+        const url = `https://wa.me/${data.director_phone_wa}?text=${encodeURIComponent(data.report_text)}`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+        showToast(`Reconciled ${dateToReconcile}. Send the message in WhatsApp to the director.`, 'success');
+        setManualWhatsAppReport({ reportText: data.report_text, directorPhoneWa: data.director_phone_wa });
+      } else {
+        showToast(`Reconciled ${dateToReconcile}. Set Director WhatsApp in Admin → Branches to auto-send report.`, 'info');
+      }
+      loadUnreconciledClosings();
+      if (dateToReconcile === today) loadData();
+      if (reportStartDate || reportEndDate) loadRangeReport();
+    } catch (error) {
+      showToast('Error: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setReconcilingDate('');
+    }
   };
 
   const handleAddDeposit = async (e) => {
@@ -545,6 +579,7 @@ const CashManagement = () => {
                   <th className="num">Bank deposits</th>
                   <th className="num">Closing</th>
                   <th>Status</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -559,6 +594,17 @@ const CashManagement = () => {
                     <td className="num">{(parseFloat(row.bank_deposits) || 0).toLocaleString()}</td>
                     <td className="num">{(parseFloat(row.closing_balance) || 0).toLocaleString()}</td>
                     <td>Pending</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn-small btn-success"
+                        onClick={() => handleReconcileUnreconciledDate(row.date)}
+                        disabled={summary.all_branches || reconcilingDate === row.date}
+                        title={summary.all_branches ? 'Select a single branch to reconcile this day' : 'Reconcile this unreconciled day'}
+                      >
+                        {reconcilingDate === row.date ? 'Reconciling…' : 'Reconcile'}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

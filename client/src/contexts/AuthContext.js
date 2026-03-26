@@ -254,6 +254,8 @@ export const AuthProvider = ({ children }) => {
         canManageCustomers: true,
         canManageExpenses: true,
         canViewDashboard: true,
+        canManagePayroll: true,
+        canRecordSalaryAdvances: true,
       },
       manager: {
         canManageUsers: false,
@@ -267,6 +269,8 @@ export const AuthProvider = ({ children }) => {
         canManageCustomers: true,
         canManageExpenses: true,
         canViewDashboard: true,
+        canManagePayroll: false,
+        canRecordSalaryAdvances: true,
       },
       cashier: {
         canManageUsers: false,
@@ -280,6 +284,8 @@ export const AuthProvider = ({ children }) => {
         canManageCustomers: false,
         canManageExpenses: false,
         canViewDashboard: true,
+        canManagePayroll: false,
+        canRecordSalaryAdvances: true,
       },
       processor: {
         canManageUsers: false,
@@ -293,6 +299,8 @@ export const AuthProvider = ({ children }) => {
         canManageCustomers: false,
         canManageExpenses: false,
         canViewDashboard: true,
+        canManagePayroll: false,
+        canRecordSalaryAdvances: false,
       }
     };
     

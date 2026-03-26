@@ -144,6 +144,46 @@ router.get('/', requireBranchAccess(), async (req, res) => {
   }
 });
 
+// Dashboard counts (receipt-based, branch-scoped) to keep Dashboard and Orders figures consistent
+router.get('/dashboard-stats', requireBranchAccess(), async (req, res) => {
+  const branchFilter = getBranchFilter(req, 'o');
+
+  const query = `
+    SELECT
+      COUNT(DISTINCT UPPER(o.receipt_number)) AS total_receipts,
+      COUNT(DISTINCT CASE
+        WHEN o.status IN ('pending', 'processing')
+        THEN UPPER(o.receipt_number)
+      END) AS pending_receipts,
+      COUNT(DISTINCT CASE
+        WHEN o.status = 'ready'
+        THEN UPPER(o.receipt_number)
+      END) AS ready_receipts,
+      COUNT(DISTINCT CASE
+        WHEN o.status = 'collected'
+        THEN UPPER(o.receipt_number)
+      END) AS collected_receipts,
+      COUNT(*) AS total_items
+    FROM orders o
+    WHERE 1=1
+    ${branchFilter.clause}
+  `;
+
+  try {
+    const row = await db.get(query, [...branchFilter.params]);
+    res.json({
+      total_receipts: Number(row?.total_receipts || 0),
+      pending_receipts: Number(row?.pending_receipts || 0),
+      ready_receipts: Number(row?.ready_receipts || 0),
+      collected_receipts: Number(row?.collected_receipts || 0),
+      total_items: Number(row?.total_items || 0)
+    });
+  } catch (err) {
+    console.error('Error fetching order dashboard stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get collection queue (ready orders with queue info) - grouped by receipt number. Branch-scoped; optional customer name/phone search.
 router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
   const { limit = 20, overdue_only, customer } = req.query;

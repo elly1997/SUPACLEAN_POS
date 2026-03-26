@@ -4,6 +4,56 @@ const db = require('../database/query');
 const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
+const cashManagement = require('./cashManagement');
+
+/** Normalize expense date to YYYY-MM-DD for consistent daily closing buckets */
+function normalizeExpenseDate(d) {
+  if (d == null || d === '') return null;
+  const s = String(d).trim();
+  return s.includes('T') ? s.split('T')[0] : s.slice(0, 10);
+}
+
+async function refreshDailyClosingForExpenseDates(branchId, ...dates) {
+  if (branchId == null) return;
+  const seen = new Set();
+  for (const d of dates) {
+    const day = normalizeExpenseDate(d);
+    if (!day || seen.has(day)) continue;
+    seen.add(day);
+    try {
+      await cashManagement.refreshUnreconciledDailySummary(day, branchId);
+    } catch (err) {
+      console.error('refreshUnreconciledDailySummary failed:', day, err.message);
+    }
+  }
+}
+
+async function isReconciledDay(date, branchId) {
+  const row = await db.get(
+    'SELECT is_reconciled FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
+    [date, branchId]
+  );
+  return !!(row && row.is_reconciled);
+}
+
+async function writeExpenseAudit(action, expenseId, oldData, newData, reason, req) {
+  try {
+    await db.run(
+      `INSERT INTO expense_audit_log (expense_id, action, old_data, new_data, reason, changed_by)
+       VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6)`,
+      [
+        expenseId || null,
+        action,
+        oldData ? JSON.stringify(oldData) : null,
+        newData ? JSON.stringify(newData) : null,
+        reason || null,
+        req.user?.fullName || req.user?.username || 'User'
+      ]
+    );
+  } catch (err) {
+    console.error('Failed to write expense audit log:', err.message);
+  }
+}
 
 router.use(authenticate, requireBranchFeature('expenses'));
 
@@ -12,7 +62,7 @@ router.get('/', requireBranchAccess(), requirePermission('canManageExpenses'), a
   const { start_date, end_date, category } = req.query;
   const branchFilter = getBranchFilter(req, 'e');
   
-  let query = 'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE 1=1';
+  let query = 'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE 1=1 AND COALESCE(e.is_voided, FALSE) = FALSE';
   const params = [];
   let paramIndex = 1;
   
@@ -57,7 +107,7 @@ router.get('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
   
   try {
     const row = await db.get(
-      `SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = ? ${whereClause}`,
+      `SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = ? AND COALESCE(e.is_voided, FALSE) = FALSE ${whereClause}`,
       branchFilter.params.length ? [...params, ...branchFilter.params] : params
     );
     if (!row) {
@@ -87,6 +137,8 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
   if (!date || !category || !amount || !payment_source) {
     return res.status(400).json({ error: 'Date, category, amount, and payment_source are required' });
   }
+
+  const expenseDate = normalizeExpenseDate(date);
   
   const branchId = getEffectiveBranchId(req) ?? req.user?.branchId ?? req.branch?.id ?? null;
   if (!branchId) {
@@ -114,7 +166,7 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
         `INSERT INTO bank_deposits (date, amount, reference_number, bank_name, bank_account_id, notes, created_by, branch_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
         [
-          date,
+          expenseDate,
           amount,
           deposit_reference_number || null,
           otherName || null,
@@ -127,17 +179,23 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
       bankDepositId = depResult.lastID ?? depResult.row?.id;
     }
     
+    if (await isReconciledDay(expenseDate, branchId)) {
+      return res.status(409).json({
+        error: 'This date is already reconciled. Record an adjustment on the current date or ask an administrator.'
+      });
+    }
+
     const result = await db.run(
       `INSERT INTO expenses (date, category, amount, payment_source, description, receipt_number, created_by, branch_id, bank_account_id, deposit_reference_number, bank_deposit_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
       [
-        date,
+        expenseDate,
         category,
         amount,
         payment_source,
         description || null,
         receipt_number || null,
-        created_by || null,
+        created_by || req.user?.fullName || req.user?.username || null,
         branchId,
         (bank_account_id != null && bank_account_id !== '') ? Number(bank_account_id) : null,
         deposit_reference_number || null,
@@ -149,7 +207,14 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
       'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = $1',
       [result.lastID]
     );
-    res.status(201).json(expense);
+
+    await writeExpenseAudit('create', result.lastID, null, expense, req.body?.update_reason || null, req);
+    const refresh = await cashManagement.refreshUnreconciledDailySummary(expenseDate, branchId);
+    res.status(201).json({
+      ...expense,
+      daily_closing_updated: !refresh.skipped,
+      daily_closing_locked: !!refresh.skipped && refresh.reason === 'reconciled'
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -171,18 +236,28 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
   } = req.body;
   
   try {
-    const existing = await db.get('SELECT * FROM expenses WHERE id = $1', [id]);
+    const existing = await db.get('SELECT * FROM expenses WHERE id = $1 AND COALESCE(is_voided, FALSE) = FALSE', [id]);
     if (!existing) {
       return res.status(404).json({ error: 'Expense not found' });
     }
+
+    const newDate = normalizeExpenseDate(date);
+    const oldDate = normalizeExpenseDate(existing.date);
+    const branchId = existing.branch_id != null ? existing.branch_id : (getEffectiveBranchId(req) ?? req.user?.branchId ?? null);
     
+    if (await isReconciledDay(oldDate, branchId) || await isReconciledDay(newDate, branchId)) {
+      return res.status(409).json({
+        error: 'This expense belongs to a reconciled day. Use adjustment entry or manager override process.'
+      });
+    }
+
     const result = await db.run(
       `UPDATE expenses 
        SET date = $1, category = $2, amount = $3, payment_source = $4, description = $5, receipt_number = $6,
-           bank_account_id = $7, deposit_reference_number = $8
-       WHERE id = $9`,
+           bank_account_id = $7, deposit_reference_number = $8, updated_by = $9, update_reason = $10
+       WHERE id = $11`,
       [
-        date,
+        newDate,
         category,
         amount,
         payment_source,
@@ -190,6 +265,8 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
         receipt_number || null,
         (bank_account_id != null && bank_account_id !== '') ? Number(bank_account_id) : null,
         deposit_reference_number || null,
+        req.user?.fullName || req.user?.username || null,
+        req.body?.update_reason || null,
         id
       ]
     );
@@ -201,9 +278,9 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
     if (existing.bank_deposit_id) {
       const accountId = (bank_account_id != null && bank_account_id !== '') ? Number(bank_account_id) : null;
       const otherName = deposit_bank_name && String(deposit_bank_name).trim() ? String(deposit_bank_name).trim() : null;
-      await db.run(
+        await db.run(
         `UPDATE bank_deposits SET date = $1, amount = $2, reference_number = $3, bank_name = $4, bank_account_id = $5, notes = $6 WHERE id = $7`,
-        [date, amount, deposit_reference_number || null, otherName, accountId, description || null, existing.bank_deposit_id]
+        [newDate, amount, deposit_reference_number || null, otherName, accountId, description || null, existing.bank_deposit_id]
       );
     }
     
@@ -211,29 +288,47 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
       'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = $1',
       [id]
     );
+
+    await writeExpenseAudit('update', Number(id), existing, expense, req.body?.update_reason || null, req);
+    await refreshDailyClosingForExpenseDates(branchId, oldDate, newDate);
     res.json(expense);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Delete expense (managers and admins only). If expense has linked bank_deposit, deletes it first.
+// Void expense (managers and admins only). Keeps audit trail and avoids hard-delete.
 router.delete('/:id', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
   const { id } = req.params;
   
   try {
-    const existing = await db.get('SELECT bank_deposit_id FROM expenses WHERE id = $1', [id]);
+    const existing = await db.get('SELECT * FROM expenses WHERE id = $1 AND COALESCE(is_voided, FALSE) = FALSE', [id]);
     if (!existing) {
       return res.status(404).json({ error: 'Expense not found' });
     }
-    if (existing.bank_deposit_id) {
-      await db.run('DELETE FROM bank_deposits WHERE id = $1', [existing.bank_deposit_id]);
+    const delDate = normalizeExpenseDate(existing.date);
+    const branchId = existing.branch_id != null ? existing.branch_id : (getEffectiveBranchId(req) ?? req.user?.branchId ?? null);
+    if (await isReconciledDay(delDate, branchId)) {
+      return res.status(409).json({
+        error: 'This expense belongs to a reconciled day. It cannot be voided without manager adjustment process.'
+      });
     }
-    const result = await db.run('DELETE FROM expenses WHERE id = $1', [id]);
+    const result = await db.run(
+      `UPDATE expenses
+       SET is_voided = TRUE, void_reason = $1, voided_by = $2, voided_at = CURRENT_TIMESTAMP, updated_by = $2, update_reason = $1
+       WHERE id = $3`,
+      [
+        req.body?.void_reason || 'Voided by user',
+        req.user?.fullName || req.user?.username || 'User',
+        id
+      ]
+    );
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Expense not found' });
     }
-    res.json({ message: 'Expense deleted successfully' });
+    await writeExpenseAudit('void', Number(id), existing, null, req.body?.void_reason || null, req);
+    await refreshDailyClosingForExpenseDates(branchId, delDate);
+    res.json({ message: 'Expense voided successfully' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -252,6 +347,7 @@ router.get('/summary/by-category', requireBranchAccess(), requirePermission('can
       COUNT(*) as count
     FROM expenses e
     WHERE 1=1
+      AND COALESCE(e.is_voided, FALSE) = FALSE
   `;
   const params = [];
   let paramIndex = 1;

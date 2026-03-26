@@ -18,6 +18,8 @@ const ROLE_PERMISSIONS = {
     canManageCustomers: true,      // Can add/edit/delete customers
     canManageExpenses: true,       // Can manage expenses
     canViewDashboard: true,        // Can view dashboard
+    canManagePayroll: true,        // Full payroll setup/run/reports
+    canRecordSalaryAdvances: true, // Can post salary advances
   },
   manager: {
     canManageUsers: false,
@@ -31,6 +33,8 @@ const ROLE_PERMISSIONS = {
     canManageCustomers: true,      // Can add/edit customers
     canManageExpenses: true,       // Can manage expenses for their branch
     canViewDashboard: true,        // Can view dashboard
+    canManagePayroll: false,
+    canRecordSalaryAdvances: true,
   },
   cashier: {
     canManageUsers: false,
@@ -44,6 +48,8 @@ const ROLE_PERMISSIONS = {
     canManageCustomers: false,     // Cannot add/edit customers (only view/search)
     canManageExpenses: false,      // Cannot manage expenses
     canViewDashboard: true,        // Can view dashboard
+    canManagePayroll: false,
+    canRecordSalaryAdvances: true,
   },
   processor: {
     canManageUsers: false,
@@ -57,6 +63,8 @@ const ROLE_PERMISSIONS = {
     canManageCustomers: false,     // Cannot manage customers
     canManageExpenses: false,      // Cannot manage expenses
     canViewDashboard: true,        // Can view dashboard (to see pending orders)
+    canManagePayroll: false,
+    canRecordSalaryAdvances: false,
   }
 };
 

@@ -18,6 +18,7 @@ import AdminBranches from './pages/AdminBranches';
 import AdminBanking from './pages/AdminBanking';
 import MonthlyBilling from './pages/MonthlyBilling';
 import CleaningServices from './pages/CleaningServices';
+import Payroll from './pages/Payroll';
 import Terms from './pages/Terms';
 import './App.css';
 
@@ -120,6 +121,7 @@ function App() {
                       <Route path="/expenses" element={<Expenses />} />
                       <Route path="/reports" element={<Reports />} />
                       <Route path="/monthly-billing" element={<MonthlyBilling />} />
+                      <Route path="/payroll" element={<Payroll />} />
                       <Route path="/cleaning-services" element={<CleaningServices />} />
                       <Route path="/admin/branches" element={<AdminBranches />} />
                       <Route path="/admin/banking" element={<AdminBanking />} />

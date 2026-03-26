@@ -282,6 +282,7 @@ export async function getOrders(params = {}) {
     throw err;
   }
 }
+export const getOrderDashboardStats = () => api.get('/orders/dashboard-stats');
 export const searchOrdersByCustomer = (params = {}) => api.get('/orders/search/customer', { params });
 export const getReceiptQRCode = (receiptNumber) => api.get(`/orders/receipt/${receiptNumber}/qrcode`);
 export const getOrder = (id) => api.get(`/orders/${id}`);
@@ -700,6 +701,14 @@ export async function getExpenseSummary(params = {}) {
   }
 }
 
+// Payroll
+export const getPayrollEmployees = () => api.get('/payroll/employees');
+export const createPayrollEmployee = (data) => api.post('/payroll/employees', data);
+export const getSalaryAdvances = (params = {}) => api.get('/payroll/advances', { params });
+export const createSalaryAdvance = (data) => api.post('/payroll/advances', data);
+export const getMonthlyPayroll = (month) => api.get('/payroll/monthly', { params: { month } });
+export const saveMonthlyPayroll = (payload) => api.post('/payroll/monthly/save', payload);
+
 // Cash Management (offline-first)
 export async function getDailyCashSummary(date) {
   if (isOffline()) {
@@ -750,6 +759,8 @@ export async function getTodayCashSummary() {
   }
 }
 export const createDailyCashSummary = (data) => api.post('/cash-management/daily', data);
+/** Recompute daily closing for a calendar date from live orders/transactions/expenses (fails if day is reconciled). */
+export const recalculateDailyCashForDate = (date) => api.post(`/cash-management/daily/recalculate/${date}`);
 export const reconcileDailyCash = (date, data) => api.post(`/cash-management/reconcile/${date}`, data);
 export const getUnreconciledClosings = (params = {}) => api.get('/cash-management/unreconciled', { params });
 export async function getCashSummaryRange(startDate, endDate) {

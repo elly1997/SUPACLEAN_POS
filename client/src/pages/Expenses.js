@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts } from '../api/api';
+import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts, recalculateDailyCashForDate } from '../api/api';
 import { useToast } from '../hooks/useToast';
+import { useAuth } from '../contexts/AuthContext';
 import Loader from '../components/Loader';
 import './Expenses.css';
 
@@ -28,6 +29,8 @@ const PAYMENT_SOURCES = [
 
 const Expenses = () => {
   const { showToast, ToastContainer } = useToast();
+  const { hasPermission } = useAuth();
+  const canManageCash = hasPermission?.('canManageCash') ?? false;
   const [expenses, setExpenses] = useState([]);
   const [summary, setSummary] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -47,6 +50,7 @@ const Expenses = () => {
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [savingClosing, setSavingClosing] = useState(false);
 
   useEffect(() => {
     loadExpenses();
@@ -82,6 +86,24 @@ const Expenses = () => {
     }
   };
 
+  const handleSaveDailyClosing = async () => {
+    if (!canManageCash) return;
+    setSavingClosing(true);
+    try {
+      await recalculateDailyCashForDate(filterDate);
+      showToast(`Daily closing updated for ${filterDate} (cash management report).`, 'success');
+    } catch (error) {
+      const msg = error.response?.data?.error || error.message || 'Failed to update daily closing';
+      if (error.response?.status === 409) {
+        showToast(msg, 'error');
+      } else {
+        showToast('Error updating daily closing: ' + msg, 'error');
+      }
+    } finally {
+      setSavingClosing(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -89,7 +111,7 @@ const Expenses = () => {
         await updateExpense(editingId, formData);
         showToast('Expense updated successfully', 'success');
       } else {
-        await createExpense({
+        const res = await createExpense({
           ...formData,
           created_by: 'Cashier',
           ...(formData.category === 'Bank Deposit' && {
@@ -98,7 +120,12 @@ const Expenses = () => {
             bank_name: formData.bank_account_id === 'other' ? formData.bank_name : undefined
           })
         });
-        showToast('Expense added successfully', 'success');
+        const data = res?.data;
+        if (data?.daily_closing_locked) {
+          showToast('Expense recorded. That day is already reconciled — daily closing was not changed automatically.', 'warning');
+        } else {
+          showToast('Expense added and daily closing updated for that date.', 'success');
+        }
       }
       resetForm();
       loadExpenses();
@@ -189,7 +216,7 @@ const Expenses = () => {
       )}
 
       {/* Date Filter */}
-      <div className="filter-section">
+      <div className="filter-section" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px' }}>
         <label>View Expenses for:</label>
         <input
           type="date"
@@ -197,6 +224,17 @@ const Expenses = () => {
           onChange={(e) => setFilterDate(e.target.value)}
           className="date-filter"
         />
+        {canManageCash && (
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={savingClosing}
+            onClick={handleSaveDailyClosing}
+            title="Recalculates daily closing and cashflow figures for this date from expenses and sales (skipped if the day is already reconciled)."
+          >
+            {savingClosing ? 'Saving…' : 'Save to daily closing'}
+          </button>
+        )}
       </div>
 
       {/* Summary Cards */}

@@ -64,6 +64,8 @@ if (process.env.NODE_ENV !== 'production') {
 require('./database/db');
 // Ensure bank_accounts table exists in PostgreSQL (no-op for SQLite)
 require('./database/ensureBankingSchema');
+// Ensure payroll and accounting control tables exist in PostgreSQL
+require('./database/ensurePayrollSchema');
 
 // Routes - with error handling
 try {
@@ -78,6 +80,7 @@ try {
   app.use('/api/reports', require('./routes/reports'));
   app.use('/api/settings', require('./routes/settings'));
   app.use('/api/expenses', require('./routes/expenses'));
+  app.use('/api/payroll', require('./routes/payroll'));
   app.use('/api/cash-management', require('./routes/cashManagement'));
   app.use('/api/bank-accounts', require('./routes/bankAccounts'));
   app.use('/api/bank-deposits', require('./routes/bankDeposits'));

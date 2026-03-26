@@ -109,6 +109,54 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
   return db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
 }
 
+/**
+ * Build daily cash summary from source data (orders, transactions, expenses, deposits) and persist.
+ * Used when the day has no row yet, or exists but is not reconciled (so expenses/backfills update totals).
+ */
+async function computeAndPersistDailySummary(date, branchId) {
+  const yesterday = new Date(date);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
+  const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+
+  const cashSalesRow = await db.all(`
+    SELECT SUM(paid_amount) as cash_sales
+    FROM orders
+    WHERE DATE(order_date) = ?
+    AND payment_status = 'paid_full'
+    AND payment_method = 'cash'
+    AND paid_amount > 0
+    AND branch_id = ?
+  `, [date, branchId]);
+  const cashSales = cashSalesRow[0]?.cash_sales || 0;
+
+  const { calculateBookSales } = require('../utils/cashValidation');
+  let bookSales = 0;
+  try {
+    bookSales = await calculateBookSales(date, branchId);
+  } catch (err) {
+    console.error('Error calculating book sales for daily summary:', err);
+  }
+
+  const calculated = await calculateRemaining(date, openingBalance, cashSales, bookSales, branchId);
+  return upsertDailySummaryFromComputed(date, branchId, calculated);
+}
+
+/**
+ * Recalculate and save daily summary for a date unless that day is already reconciled (audit lock).
+ * Call after expense create/update/delete so backdated expenses flow into the correct day.
+ * @returns {Promise<{ skipped: boolean, reason?: string, row?: object }>}
+ */
+async function refreshUnreconciledDailySummary(date, branchId) {
+  const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+  if (row && row.is_reconciled) {
+    return { skipped: true, reason: 'reconciled', row };
+  }
+  const persisted = await computeAndPersistDailySummary(date, branchId);
+  return { skipped: false, row: persisted };
+}
+
 // Get daily cash summary by date (cashiers, managers, admins can view)
 router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { date } = req.params;
@@ -118,42 +166,38 @@ router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCa
   }
   try {
     const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
-    
-    if (!row) {
-      // Auto-generate and persist missing day summary from recorded transactions.
-      const yesterday = new Date(date);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
-      const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
-      const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
 
-      const cashSalesRow = await db.all(`
-        SELECT SUM(paid_amount) as cash_sales
-        FROM orders
-        WHERE DATE(order_date) = ?
-        AND payment_status = 'paid_full'
-        AND payment_method = 'cash'
-        AND paid_amount > 0
-        AND branch_id = ?
-      `, [date, branchId]);
-      const cashSales = cashSalesRow[0]?.cash_sales || 0;
-
-      const { calculateBookSales } = require('../utils/cashValidation');
-      let bookSales = 0;
-      try {
-        bookSales = await calculateBookSales(date, branchId);
-      } catch (err) {
-        console.error('Error calculating book sales for daily summary:', err);
-      }
-
-      const calculated = await calculateRemaining(date, openingBalance, cashSales, bookSales, branchId);
-      const persisted = await upsertDailySummaryFromComputed(date, branchId, calculated);
-      return res.json(persisted);
+    // Reconciled days are immutable; otherwise always recompute so new expenses (incl. backdated) are included.
+    if (row && row.is_reconciled) {
+      return res.json(row);
     }
-    
-    res.json(row);
+
+    const persisted = await computeAndPersistDailySummary(date, branchId);
+    return res.json(persisted);
   } catch (err) {
     console.error('Error fetching daily cash summary:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Explicitly recalculate daily closing for a date from live data (same as GET /daily when not reconciled)
+router.post('/daily/recalculate/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+  const { date } = req.params;
+  const branchId = getEffectiveBranchId(req);
+  if (branchId == null) {
+    return res.status(400).json({ error: 'Select a branch to recalculate daily closing' });
+  }
+  try {
+    const result = await refreshUnreconciledDailySummary(date, branchId);
+    if (result.skipped) {
+      return res.status(409).json({
+        error: 'This date is already reconciled. Expenses are recorded, but the closed day cannot be auto-changed. Use an adjustment entry or contact an administrator.',
+        row: result.row
+      });
+    }
+    res.json(result.row);
+  } catch (err) {
+    console.error('Error recalculating daily cash summary:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -306,15 +350,15 @@ async function calculateRemaining(date, openingBalance, cashSales, bookSales, br
     console.error('Error calculating card/M-Pesa/bank from transactions:', err);
   }
   
-  // Calculate expenses (handle both date formats and NULL branch_id for backward compatibility)
+  // Calculate expenses (normalize to calendar day; NULL branch_id legacy rows)
   const expensesRow = await db.all(`
     SELECT 
-      SUM(CASE WHEN payment_source = 'cash' THEN amount ELSE 0 END) as expenses_from_cash,
-      SUM(CASE WHEN payment_source = 'bank' THEN amount ELSE 0 END) as expenses_from_bank,
-      SUM(CASE WHEN payment_source = 'mpesa' THEN amount ELSE 0 END) as expenses_from_mpesa
-    FROM expenses
-    WHERE date = $1
-    AND (branch_id = $2 OR branch_id IS NULL)
+      SUM(CASE WHEN e.payment_source = 'cash' THEN e.amount ELSE 0 END) as expenses_from_cash,
+      SUM(CASE WHEN e.payment_source = 'bank' THEN e.amount ELSE 0 END) as expenses_from_bank,
+      SUM(CASE WHEN e.payment_source = 'mpesa' THEN e.amount ELSE 0 END) as expenses_from_mpesa
+    FROM expenses e
+    WHERE e.date::date = $1::date
+    AND (e.branch_id = $2 OR e.branch_id IS NULL)
   `, [date, branchId]);
   
   const expensesFromCash = expensesRow[0]?.expenses_from_cash || 0;
@@ -418,15 +462,15 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
       console.error('Error calculating card/M-Pesa from transactions:', err);
     }
 
-    // Calculate expenses (handle both date formats and NULL branch_id for backward compatibility)
+    // Calculate expenses (calendar day; NULL branch_id legacy rows)
     const expensesRow = await db.all(`
       SELECT 
-        SUM(CASE WHEN payment_source = 'cash' THEN amount ELSE 0 END) as expenses_from_cash,
-        SUM(CASE WHEN payment_source = 'bank' THEN amount ELSE 0 END) as expenses_from_bank,
-        SUM(CASE WHEN payment_source = 'mpesa' THEN amount ELSE 0 END) as expenses_from_mpesa
-      FROM expenses
-      WHERE date = $1
-      AND (branch_id = $2 OR branch_id IS NULL)
+        SUM(CASE WHEN e.payment_source = 'cash' THEN e.amount ELSE 0 END) as expenses_from_cash,
+        SUM(CASE WHEN e.payment_source = 'bank' THEN e.amount ELSE 0 END) as expenses_from_bank,
+        SUM(CASE WHEN e.payment_source = 'mpesa' THEN e.amount ELSE 0 END) as expenses_from_mpesa
+      FROM expenses e
+      WHERE e.date::date = $1::date
+      AND (e.branch_id = $2 OR e.branch_id IS NULL)
     `, [today, branchId]);
     
     const expensesFromCash = expensesRow[0]?.expenses_from_cash || 0;
@@ -771,3 +815,4 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
 });
 
 module.exports = router;
+module.exports.refreshUnreconciledDailySummary = refreshUnreconciledDailySummary;

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { getDailySummary, getOrders, updateOrderStatus, getCollectionQueue } from '../api/api';
+import { getDailySummary, getOrders, updateOrderStatus, getCollectionQueue, getOrderDashboardStats } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
@@ -16,6 +16,7 @@ const Dashboard = () => {
   const canManageCash = hasPermission?.('canManageCash') ?? false;
   const [listView, setListView] = useListViewPreference();
   const [summary, setSummary] = useState(null);
+  const [orderStats, setOrderStats] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
   const [readyOrders, setReadyOrders] = useState([]);
   const [readyQueue, setReadyQueue] = useState([]); // Collection queue (grouped by receipt)
@@ -31,14 +32,16 @@ const Dashboard = () => {
     try {
       const readyCustomer = readySearchTerm.trim() || undefined;
       const pendingCustomer = pendingSearchTerm.trim() || undefined;
-      const [summaryRes, pendingRes, readyRes, queueRes] = await Promise.all([
+      const [summaryRes, statsRes, pendingRes, readyRes, queueRes] = await Promise.all([
         getDailySummary(today),
-        getOrders({ status: 'pending', ...(pendingCustomer && { customer: pendingCustomer }) }),
-        getOrders({ status: 'ready', ...(readyCustomer && { customer: readyCustomer }) }),
-        getCollectionQueue({ limit: 100, ...(readyCustomer && { customer: readyCustomer }) })
+        getOrderDashboardStats(),
+        getOrders({ status: 'pending', limit: 500, ...(pendingCustomer && { customer: pendingCustomer }) }),
+        getOrders({ status: 'ready', limit: 500, ...(readyCustomer && { customer: readyCustomer }) }),
+        getCollectionQueue({ limit: 500, ...(readyCustomer && { customer: readyCustomer }) })
       ]);
 
       setSummary(summaryRes.data);
+      setOrderStats(statsRes.data || null);
       setPendingOrders(pendingRes.data || []);
       setReadyOrders(readyRes.data || []);
       setReadyQueue(queueRes.data || []);
@@ -54,6 +57,7 @@ const Dashboard = () => {
       setPendingOrders([]);
       setReadyOrders([]);
       setReadyQueue([]);
+      setOrderStats(null);
     } finally {
       setLoading(false);
     }
@@ -197,8 +201,8 @@ const Dashboard = () => {
           <div className="stat-icon">📋</div>
           <div className="stat-content">
             <h3>Total Orders</h3>
-            <p className="stat-value">{summary?.total_transactions || 0}</p>
-            <small>Today's transactions</small>
+            <p className="stat-value">{orderStats?.total_receipts ?? 0}</p>
+            <small>Receipt-based (all statuses)</small>
           </div>
         </div>
 
@@ -206,7 +210,7 @@ const Dashboard = () => {
           <div className="stat-icon">⏳</div>
           <div className="stat-content">
             <h3>Pending</h3>
-            <p className="stat-value">{groupedPending.length}</p>
+            <p className="stat-value">{orderStats?.pending_receipts ?? groupedPending.length}</p>
             <small>Receipts in progress</small>
           </div>
         </div>
@@ -215,8 +219,8 @@ const Dashboard = () => {
           <div className="stat-icon">✅</div>
           <div className="stat-content">
             <h3>Ready</h3>
-            <p className="stat-value">{readyOrders.length}</p>
-            <small>Ready for collection</small>
+            <p className="stat-value">{orderStats?.ready_receipts ?? readyQueue.length}</p>
+            <small>Ready receipts</small>
           </div>
         </div>
       </div>
