@@ -703,6 +703,7 @@ export async function getExpenseSummary(params = {}) {
 
 // Payroll
 export const getPayrollEmployees = () => api.get('/payroll/employees');
+export const getPayrollEmployeesForAdvances = () => api.get('/payroll/employees/for-advances');
 export const createPayrollEmployee = (data) => api.post('/payroll/employees', data);
 export const getSalaryAdvances = (params = {}) => api.get('/payroll/advances', { params });
 export const createSalaryAdvance = (data) => api.post('/payroll/advances', data);

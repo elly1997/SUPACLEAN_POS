@@ -20,6 +20,7 @@ function parseMoney(v, fallback = 0) {
 
 function estimateMonthlyPAYE(taxableIncome) {
   const x = Math.max(0, parseMoney(taxableIncome));
+  // Tanzania monthly resident employment PAYE bands
   if (x <= 270000) return 0;
   if (x <= 520000) return (x - 270000) * 0.08;
   if (x <= 760000) return 20000 + (x - 520000) * 0.20;
@@ -59,6 +60,23 @@ router.get('/employees', requirePermission('canManagePayroll'), async (req, res)
   }
 });
 
+router.get('/employees/for-advances', requirePermission('canRecordSalaryAdvances'), async (req, res) => {
+  const branchId = getEffectiveBranchId(req);
+  try {
+    const rows = await db.all(
+      `SELECT id, full_name, employee_code, branch_id
+       FROM employees
+       WHERE is_active = TRUE
+         AND (?::int IS NULL OR branch_id = ?)
+       ORDER BY full_name ASC`,
+      [branchId, branchId]
+    );
+    res.json(rows || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/employees', requirePermission('canManagePayroll'), async (req, res) => {
   const {
     full_name,
@@ -70,6 +88,8 @@ router.post('/employees', requirePermission('canManagePayroll'), async (req, res
     default_bonuses = 0,
     default_other_deductions = 0,
     nssf_enabled = true,
+    nssf_employee_rate = 10,
+    nssf_employer_rate = 10,
     paye_enabled = true
   } = req.body;
   if (!full_name || gross_salary == null) {
@@ -78,8 +98,8 @@ router.post('/employees', requirePermission('canManagePayroll'), async (req, res
   try {
     const result = await db.run(
       `INSERT INTO employees
-      (full_name, employee_code, phone, branch_id, gross_salary, default_allowances, default_bonuses, default_other_deductions, nssf_enabled, paye_enabled)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+      (full_name, employee_code, phone, branch_id, gross_salary, default_allowances, default_bonuses, default_other_deductions, nssf_enabled, nssf_employee_rate, nssf_employer_rate, paye_enabled)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
       [
         String(full_name).trim(),
         employee_code ? String(employee_code).trim() : null,
@@ -90,6 +110,8 @@ router.post('/employees', requirePermission('canManagePayroll'), async (req, res
         parseMoney(default_bonuses),
         parseMoney(default_other_deductions),
         !!nssf_enabled,
+        parseMoney(nssf_employee_rate, 10),
+        parseMoney(nssf_employer_rate, 10),
         !!paye_enabled
       ]
     );
@@ -161,10 +183,13 @@ router.get('/monthly', requirePermission('canManagePayroll'), async (req, res) =
       const bonuses = parseMoney(e.default_bonuses);
       const otherDeductions = parseMoney(e.default_other_deductions);
       const advances = advMap.get(Number(e.id)) || 0;
-      const nssf = e.nssf_enabled ? gross * 0.1 : 0;
-      const taxable = Math.max(0, gross + allowances + bonuses - nssf);
+      const nssfEmployeeRate = parseMoney(e.nssf_employee_rate, 10);
+      const nssfEmployerRate = parseMoney(e.nssf_employer_rate, 10);
+      const nssfEmployeeAmount = e.nssf_enabled ? (gross * nssfEmployeeRate) / 100 : 0;
+      const nssfEmployerAmount = e.nssf_enabled ? (gross * nssfEmployerRate) / 100 : 0;
+      const taxable = Math.max(0, gross + allowances + bonuses - nssfEmployeeAmount);
       const paye = e.paye_enabled ? estimateMonthlyPAYE(taxable) : 0;
-      const totalDeductions = nssf + paye + otherDeductions + advances;
+      const totalDeductions = nssfEmployeeAmount + paye + otherDeductions + advances;
       const net = gross + allowances + bonuses - totalDeductions;
       return {
         employee_id: e.id,
@@ -173,12 +198,19 @@ router.get('/monthly', requirePermission('canManagePayroll'), async (req, res) =
         gross_salary: gross,
         allowances,
         bonuses,
-        nssf_amount: nssf,
+        nssf_enabled: !!e.nssf_enabled,
+        paye_enabled: !!e.paye_enabled,
+        nssf_employee_rate: nssfEmployeeRate,
+        nssf_employer_rate: nssfEmployerRate,
+        nssf_amount: nssfEmployeeAmount,
+        employer_nssf_amount: nssfEmployerAmount,
+        taxable_income: taxable,
         paye_estimate: paye,
         other_deductions: otherDeductions,
         salary_advances: advances,
         total_deductions: totalDeductions,
-        net_salary: net
+        net_salary: net,
+        total_employer_cost: gross + allowances + bonuses + nssfEmployerAmount
       };
     });
     res.json({ month_key: month, lines });
@@ -249,13 +281,17 @@ router.post('/monthly/save', requirePermission('canManagePayroll'), async (req, 
     for (const line of lines) {
       await db.run(
         `INSERT INTO payroll_monthly
-          (month_key, employee_id, gross_salary, allowances, bonuses, nssf_amount, paye_amount, other_deductions, salary_advances, total_deductions, net_salary, branch_id, computed_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          (month_key, employee_id, gross_salary, allowances, bonuses, nssf_amount, nssf_employee_rate, nssf_employer_rate, employer_nssf_amount, taxable_income, paye_amount, other_deductions, salary_advances, total_deductions, net_salary, branch_id, computed_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          ON CONFLICT (month_key, employee_id) DO UPDATE SET
           gross_salary = EXCLUDED.gross_salary,
           allowances = EXCLUDED.allowances,
           bonuses = EXCLUDED.bonuses,
           nssf_amount = EXCLUDED.nssf_amount,
+          nssf_employee_rate = EXCLUDED.nssf_employee_rate,
+          nssf_employer_rate = EXCLUDED.nssf_employer_rate,
+          employer_nssf_amount = EXCLUDED.employer_nssf_amount,
+          taxable_income = EXCLUDED.taxable_income,
           paye_amount = EXCLUDED.paye_amount,
           other_deductions = EXCLUDED.other_deductions,
           salary_advances = EXCLUDED.salary_advances,
@@ -271,6 +307,10 @@ router.post('/monthly/save', requirePermission('canManagePayroll'), async (req, 
           parseMoney(line.allowances),
           parseMoney(line.bonuses),
           parseMoney(line.nssf_amount),
+          parseMoney(line.nssf_employee_rate, 10),
+          parseMoney(line.nssf_employer_rate, 10),
+          parseMoney(line.employer_nssf_amount),
+          parseMoney(line.taxable_income),
           parseMoney(line.paye_estimate ?? line.paye_amount),
           parseMoney(line.other_deductions),
           parseMoney(line.salary_advances),

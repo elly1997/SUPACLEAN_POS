@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts, recalculateDailyCashForDate } from '../api/api';
+import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts, getPayrollEmployeesForAdvances, recalculateDailyCashForDate } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import Loader from '../components/Loader';
@@ -45,11 +45,13 @@ const Expenses = () => {
     receipt_number: '',
     bank_account_id: '',
     deposit_reference_number: '',
-    bank_name: ''
+    bank_name: '',
+    employee_id: ''
   });
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [payrollEmployees, setPayrollEmployees] = useState([]);
   const [savingClosing, setSavingClosing] = useState(false);
 
   useEffect(() => {
@@ -58,6 +60,7 @@ const Expenses = () => {
 
   useEffect(() => {
     getActiveBankAccounts().then((res) => setBankAccounts(res.data || [])).catch(() => setBankAccounts([]));
+    getPayrollEmployeesForAdvances().then((res) => setPayrollEmployees(res.data || [])).catch(() => setPayrollEmployees([]));
   }, []);
 
   const loadExpenses = async () => {
@@ -118,6 +121,9 @@ const Expenses = () => {
             bank_account_id: formData.bank_account_id === 'other' ? '' : formData.bank_account_id,
             deposit_reference_number: formData.deposit_reference_number || undefined,
             bank_name: formData.bank_account_id === 'other' ? formData.bank_name : undefined
+          }),
+          ...(formData.category === 'Salary Advance' && {
+            employee_id: Number(formData.employee_id || 0)
           })
         });
         const data = res?.data;
@@ -146,7 +152,8 @@ const Expenses = () => {
       receipt_number: expense.receipt_number || '',
       bank_account_id: hasOtherBank ? 'other' : (expense.bank_account_id != null ? String(expense.bank_account_id) : ''),
       deposit_reference_number: expense.deposit_reference_number || '',
-      bank_name: expense.deposit_bank_name || expense.bank_name || ''
+      bank_name: expense.deposit_bank_name || expense.bank_name || '',
+      employee_id: expense.salary_advance_employee_id != null ? String(expense.salary_advance_employee_id) : ''
     });
     setShowForm(true);
   };
@@ -174,7 +181,8 @@ const Expenses = () => {
       receipt_number: '',
       bank_account_id: '',
       deposit_reference_number: '',
-      bank_name: ''
+      bank_name: '',
+      employee_id: ''
     });
     setEditingId(null);
     setShowForm(false);
@@ -354,6 +362,23 @@ const Expenses = () => {
                   </div>
                 </>
               )}
+              {formData.category === 'Salary Advance' && (
+                <div className="form-group">
+                  <label>Employee *</label>
+                  <select
+                    value={formData.employee_id}
+                    onChange={(e) => setFormData({ ...formData, employee_id: e.target.value })}
+                    required
+                  >
+                    <option value="">Select employee...</option>
+                    {payrollEmployees.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.full_name}{emp.employee_code ? ` (${emp.employee_code})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="form-group full-width">
                 <label>Description</label>
                 <textarea
@@ -399,6 +424,7 @@ const Expenses = () => {
                   <th>Amount</th>
                   <th>Payment Source</th>
                   <th>Description</th>
+                  <th>Employee</th>
                   <th>Receipt</th>
                   <th>Actions</th>
                 </tr>
@@ -424,6 +450,7 @@ const Expenses = () => {
                       </span>
                     </td>
                     <td className="description-cell">{expense.description || '-'}</td>
+                    <td>{expense.salary_advance_employee_name || '-'}</td>
                     <td className="receipt-cell">{expense.receipt_number || '-'}</td>
                     <td>
                       <div className="action-buttons">

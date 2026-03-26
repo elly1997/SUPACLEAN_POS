@@ -43,6 +43,7 @@
   color: var(--text-secondary);
   background: var(--bg-tertiary);
   font-size: 13px;
+  cursor: pointer;
 }
 
 .payroll-step.active {
@@ -187,12 +188,22 @@
 }
 
 .payroll-table td input[type="number"] {
-  width: 96px;
+  width: 90px;
   padding: 6px 8px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
   color: var(--text-primary);
+}
+
+.payroll-table td input[type="checkbox"] {
+  transform: scale(1.1);
+}
+
+.payroll-note {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .payroll-action-bar {

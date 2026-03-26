@@ -55,6 +55,52 @@ async function writeExpenseAudit(action, expenseId, oldData, newData, reason, re
   }
 }
 
+function isSalaryAdvanceCategory(category) {
+  return String(category || '').trim().toLowerCase() === 'salary advance';
+}
+
+async function upsertLinkedSalaryAdvance({ expenseId, employeeId, date, amount, notes, branchId, req }) {
+  if (!expenseId) return;
+  const existing = await db.get('SELECT id FROM salary_advances WHERE source_expense_id = $1', [expenseId]);
+  if (!employeeId) {
+    throw new Error('employee_id is required for Salary Advance expense category');
+  }
+  const employee = await db.get(
+    'SELECT id FROM employees WHERE id = $1 AND is_active = TRUE AND ($2::int IS NULL OR branch_id = $2)',
+    [Number(employeeId), branchId]
+  );
+  if (!employee) {
+    throw new Error('Selected employee is not active or not in selected branch');
+  }
+  if (existing) {
+    await db.run(
+      `UPDATE salary_advances
+       SET employee_id = $1, advance_date = $2, amount = $3, notes = $4, branch_id = $5
+       WHERE source_expense_id = $6`,
+      [Number(employeeId), date, amount, notes || null, branchId, expenseId]
+    );
+    return;
+  }
+  await db.run(
+    `INSERT INTO salary_advances (employee_id, advance_date, amount, notes, branch_id, created_by, source_expense_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [
+      Number(employeeId),
+      date,
+      amount,
+      notes || null,
+      branchId,
+      req.user?.fullName || req.user?.username || 'User',
+      expenseId
+    ]
+  );
+}
+
+async function removeLinkedSalaryAdvance(expenseId) {
+  if (!expenseId) return;
+  await db.run('DELETE FROM salary_advances WHERE source_expense_id = $1', [expenseId]);
+}
+
 router.use(authenticate, requireBranchFeature('expenses'));
 
 // Get all expenses (managers and admins can view), with bank account name for Bank Deposit category
@@ -62,7 +108,14 @@ router.get('/', requireBranchAccess(), requirePermission('canManageExpenses'), a
   const { start_date, end_date, category } = req.query;
   const branchFilter = getBranchFilter(req, 'e');
   
-  let query = 'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE 1=1 AND COALESCE(e.is_voided, FALSE) = FALSE';
+  let query = `SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name,
+      sa.employee_id as salary_advance_employee_id, emp.full_name as salary_advance_employee_name
+    FROM expenses e
+    LEFT JOIN bank_accounts b ON e.bank_account_id = b.id
+    LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id
+    LEFT JOIN salary_advances sa ON sa.source_expense_id = e.id
+    LEFT JOIN employees emp ON emp.id = sa.employee_id
+    WHERE 1=1 AND COALESCE(e.is_voided, FALSE) = FALSE`;
   const params = [];
   let paramIndex = 1;
   
@@ -107,7 +160,14 @@ router.get('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
   
   try {
     const row = await db.get(
-      `SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = ? AND COALESCE(e.is_voided, FALSE) = FALSE ${whereClause}`,
+      `SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name,
+          sa.employee_id as salary_advance_employee_id, emp.full_name as salary_advance_employee_name
+       FROM expenses e
+       LEFT JOIN bank_accounts b ON e.bank_account_id = b.id
+       LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id
+       LEFT JOIN salary_advances sa ON sa.source_expense_id = e.id
+       LEFT JOIN employees emp ON emp.id = sa.employee_id
+       WHERE e.id = ? AND COALESCE(e.is_voided, FALSE) = FALSE ${whereClause}`,
       branchFilter.params.length ? [...params, ...branchFilter.params] : params
     );
     if (!row) {
@@ -131,7 +191,8 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
     created_by,
     bank_account_id,
     deposit_reference_number,
-    bank_name: deposit_bank_name
+    bank_name: deposit_bank_name,
+    employee_id
   } = req.body;
   
   if (!date || !category || !amount || !payment_source) {
@@ -155,6 +216,9 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
     if (!accountId && !otherName) {
       return res.status(400).json({ error: 'For Bank Deposit, select a bank account or enter bank name (Other)' });
     }
+  }
+  if (isSalaryAdvanceCategory(category) && !employee_id) {
+    return res.status(400).json({ error: 'employee_id is required when category is Salary Advance' });
   }
   
   try {
@@ -202,9 +266,27 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
         bankDepositId
       ]
     );
+    if (isSalaryAdvanceCategory(category)) {
+      await upsertLinkedSalaryAdvance({
+        expenseId: result.lastID,
+        employeeId: employee_id,
+        date: expenseDate,
+        amount,
+        notes: description,
+        branchId,
+        req
+      });
+    }
     
     const expense = await db.get(
-      'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = $1',
+      `SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name,
+          sa.employee_id as salary_advance_employee_id, emp.full_name as salary_advance_employee_name
+       FROM expenses e
+       LEFT JOIN bank_accounts b ON e.bank_account_id = b.id
+       LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id
+       LEFT JOIN salary_advances sa ON sa.source_expense_id = e.id
+       LEFT JOIN employees emp ON emp.id = sa.employee_id
+       WHERE e.id = $1`,
       [result.lastID]
     );
 
@@ -232,7 +314,8 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
     receipt_number,
     bank_account_id,
     deposit_reference_number,
-    bank_name: deposit_bank_name
+    bank_name: deposit_bank_name,
+    employee_id
   } = req.body;
   
   try {
@@ -249,6 +332,9 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
       return res.status(409).json({
         error: 'This expense belongs to a reconciled day. Use adjustment entry or manager override process.'
       });
+    }
+    if (isSalaryAdvanceCategory(category) && !employee_id) {
+      return res.status(400).json({ error: 'employee_id is required when category is Salary Advance' });
     }
 
     const result = await db.run(
@@ -283,9 +369,29 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
         [newDate, amount, deposit_reference_number || null, otherName, accountId, description || null, existing.bank_deposit_id]
       );
     }
+    if (isSalaryAdvanceCategory(category)) {
+      await upsertLinkedSalaryAdvance({
+        expenseId: Number(id),
+        employeeId: employee_id,
+        date: newDate,
+        amount,
+        notes: description,
+        branchId,
+        req
+      });
+    } else if (isSalaryAdvanceCategory(existing.category)) {
+      await removeLinkedSalaryAdvance(Number(id));
+    }
     
     const expense = await db.get(
-      'SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name FROM expenses e LEFT JOIN bank_accounts b ON e.bank_account_id = b.id LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id WHERE e.id = $1',
+      `SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name,
+          sa.employee_id as salary_advance_employee_id, emp.full_name as salary_advance_employee_name
+       FROM expenses e
+       LEFT JOIN bank_accounts b ON e.bank_account_id = b.id
+       LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id
+       LEFT JOIN salary_advances sa ON sa.source_expense_id = e.id
+       LEFT JOIN employees emp ON emp.id = sa.employee_id
+       WHERE e.id = $1`,
       [id]
     );
 
@@ -325,6 +431,9 @@ router.delete('/:id', requireBranchAccess(), requirePermission('canManageExpense
     );
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Expense not found' });
+    }
+    if (isSalaryAdvanceCategory(existing.category)) {
+      await removeLinkedSalaryAdvance(Number(id));
     }
     await writeExpenseAudit('void', Number(id), existing, null, req.body?.void_reason || null, req);
     await refreshDailyClosingForExpenseDates(branchId, delDate);

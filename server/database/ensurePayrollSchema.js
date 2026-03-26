@@ -21,6 +21,8 @@ async function ensure() {
         default_bonuses NUMERIC(14,2) NOT NULL DEFAULT 0,
         default_other_deductions NUMERIC(14,2) NOT NULL DEFAULT 0,
         nssf_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        nssf_employee_rate NUMERIC(5,2) NOT NULL DEFAULT 10,
+        nssf_employer_rate NUMERIC(5,2) NOT NULL DEFAULT 10,
         paye_enabled BOOLEAN NOT NULL DEFAULT TRUE,
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -52,6 +54,10 @@ async function ensure() {
         allowances NUMERIC(14,2) NOT NULL DEFAULT 0,
         bonuses NUMERIC(14,2) NOT NULL DEFAULT 0,
         nssf_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+        nssf_employee_rate NUMERIC(5,2) NOT NULL DEFAULT 10,
+        nssf_employer_rate NUMERIC(5,2) NOT NULL DEFAULT 10,
+        employer_nssf_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+        taxable_income NUMERIC(14,2) NOT NULL DEFAULT 0,
         paye_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
         other_deductions NUMERIC(14,2) NOT NULL DEFAULT 0,
         salary_advances NUMERIC(14,2) NOT NULL DEFAULT 0,
@@ -87,7 +93,16 @@ async function ensure() {
       []
     );
 
+    await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS nssf_employee_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
+    await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS nssf_employer_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
+    await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS nssf_employee_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
+    await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS nssf_employer_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
+    await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS employer_nssf_amount NUMERIC(14,2) NOT NULL DEFAULT 0', []);
+    await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS taxable_income NUMERIC(14,2) NOT NULL DEFAULT 0', []);
+    await db.run('ALTER TABLE salary_advances ADD COLUMN IF NOT EXISTS source_expense_id INTEGER REFERENCES expenses(id)', []);
+
     await db.run('CREATE INDEX IF NOT EXISTS idx_salary_advances_employee_date ON salary_advances(employee_id, advance_date)', []);
+    await db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_salary_advances_source_expense_id ON salary_advances(source_expense_id) WHERE source_expense_id IS NOT NULL', []);
     await db.run('CREATE INDEX IF NOT EXISTS idx_payroll_monthly_month_employee ON payroll_monthly(month_key, employee_id)', []);
     await db.run('CREATE INDEX IF NOT EXISTS idx_expenses_voided ON expenses(is_voided)', []);
     console.log('✅ Payroll and accounting schema ready');
