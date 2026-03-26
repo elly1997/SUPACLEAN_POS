@@ -159,7 +159,8 @@
 
 /* ===== COMPACT TABLE DESIGN ===== */
 .report-table-compact {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -199,8 +200,7 @@
 
 /* Responsive table wrapper */
 .table-wrapper {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  max-height: min(62vh, 560px);
   border-radius: 8px;
   border: 1px solid var(--border-color);
   margin-top: 12px;

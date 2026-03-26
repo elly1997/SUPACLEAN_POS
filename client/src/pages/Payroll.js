@@ -10,6 +10,7 @@ import {
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import './Payroll.css';
 
 const monthNow = () => {
@@ -48,6 +49,7 @@ const Payroll = () => {
   const [selectedEmployeeStatement, setSelectedEmployeeStatement] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const tableScrollHandlers = useHorizontalScrollRegion();
 
   const [employeeForm, setEmployeeForm] = useState({
     full_name: '',
@@ -420,8 +422,14 @@ const Payroll = () => {
             PAYE estimate follows Tanzania monthly income tax bands and is calculated on taxable income after employee NSSF.
             NSSF defaults to 10% employee + 10% employer and can be edited per employee.
           </div>
-          <div className="payroll-table-wrap">
-            <table className="payroll-table">
+          <div
+            className="payroll-table-wrap verification-wrap interactive-scroll-region"
+            tabIndex={0}
+            role="region"
+            aria-label="Monthly payroll table"
+            {...tableScrollHandlers}
+          >
+            <table className="payroll-table payroll-table--verification">
               <thead>
                 <tr>
                   <th>Employee</th>
@@ -481,8 +489,14 @@ const Payroll = () => {
               ))}
             </select>
           </div>
-          <div className="payroll-table-wrap">
-            <table className="payroll-table">
+          <div
+            className="payroll-table-wrap history-wrap interactive-scroll-region"
+            tabIndex={0}
+            role="region"
+            aria-label="Payroll history table"
+            {...tableScrollHandlers}
+          >
+            <table className="payroll-table payroll-table--history">
               <thead>
                 <tr>
                   <th>Month</th>
@@ -518,7 +532,7 @@ const Payroll = () => {
           </div>
           <div className="payroll-card-head" style={{ marginTop: 12 }}>
             <h3>Employee Statement</h3>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div className="employee-statement-controls">
               <select value={selectedEmployeeStatement} onChange={(e) => setSelectedEmployeeStatement(e.target.value)}>
                 <option value="">Select employee...</option>
                 {employeeOptions.map((emp) => (
@@ -534,8 +548,14 @@ const Payroll = () => {
       {canRecordAdvances && (
         <div className="payroll-card">
           <h3>Salary Advances ({monthKey})</h3>
-          <div className="payroll-table-wrap">
-            <table className="payroll-table">
+          <div
+            className="payroll-table-wrap advances-wrap interactive-scroll-region"
+            tabIndex={0}
+            role="region"
+            aria-label="Salary advances table"
+            {...tableScrollHandlers}
+          >
+            <table className="payroll-table payroll-table--advances">
               <thead><tr><th>Date</th><th>Employee</th><th className="num">Amount</th><th>Notes</th></tr></thead>
               <tbody>
                 {advances.map((a) => (

@@ -352,7 +352,8 @@
 }
 
 .orders-table table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
 }
 
@@ -369,6 +370,9 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
   white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .orders-table td {
@@ -479,9 +483,9 @@
 
 /* Responsive table wrapper for orders */
 .orders-table-wrapper {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  max-height: min(65vh, 560px);
   border-radius: 8px;
+  border: 1px solid var(--border-color);
 }
 
 .empty-state,

@@ -230,6 +230,10 @@ input, select, textarea {
 /* Enable momentum scrolling */
 * {
   -webkit-overflow-scrolling: touch;
+  scroll-behavior: auto;
+}
+
+html {
   scroll-behavior: smooth;
 }
 
@@ -322,4 +326,34 @@ textarea:focus {
     min-width: 0;
     width: 100%;
   }
+}
+
+/* Shared interaction pattern for wide table/list regions */
+.interactive-scroll-region {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-width: 100%;
+  touch-action: pan-x pan-y;
+  cursor: grab;
+}
+
+.interactive-scroll-region.is-dragging {
+  cursor: grabbing;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.interactive-scroll-region:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+.interactive-scroll-region::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.interactive-scroll-region::-webkit-scrollbar-thumb {
+  background: rgba(120, 120, 120, 0.5);
+  border-radius: 999px;
 }

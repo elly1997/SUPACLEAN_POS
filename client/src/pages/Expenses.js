@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts, getPayrollEmployeesForAdvances, recalculateDailyCashForDate } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
 import './Expenses.css';
 
@@ -53,6 +54,7 @@ const Expenses = () => {
   const [bankAccounts, setBankAccounts] = useState([]);
   const [payrollEmployees, setPayrollEmployees] = useState([]);
   const [savingClosing, setSavingClosing] = useState(false);
+  const tableScrollHandlers = useHorizontalScrollRegion();
 
   useEffect(() => {
     loadExpenses();
@@ -414,7 +416,13 @@ const Expenses = () => {
       <div className="expenses-list-card">
         <h2>Expenses List</h2>
         {expenses.length > 0 ? (
-          <div className="expenses-table-wrapper">
+          <div
+            className="expenses-table-wrapper interactive-scroll-region"
+            tabIndex={0}
+            role="region"
+            aria-label="Expenses table"
+            {...tableScrollHandlers}
+          >
             <table className="expenses-table">
               <thead>
                 <tr>

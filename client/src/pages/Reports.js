@@ -21,6 +21,7 @@ import {
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
 import './Reports.css';
 
@@ -138,6 +139,7 @@ const Reports = () => {
     dailyProfit: true
   });
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const tableScrollHandlers = useHorizontalScrollRegion();
 
   const loadReports = useCallback(async () => {
     setLoading(true);
@@ -459,7 +461,7 @@ const Reports = () => {
             )}
 
             {hasFinancialData && (
-              <div className="table-wrapper" style={{ marginTop: '16px' }}>
+              <div className="table-wrapper interactive-scroll-region" style={{ marginTop: '16px' }} tabIndex={0} role="region" aria-label="Financial report table" {...tableScrollHandlers}>
                 <table className="report-table-compact" aria-label="Financial report by period">
                   <caption className="sr-only">Financial report by period: revenue, expenses, profit, reconciled days</caption>
                   <thead>
@@ -532,7 +534,7 @@ const Reports = () => {
                   </ChartErrorBoundary>
                 )}
                 {hasProfitData ? (
-                  <div className="table-wrapper">
+                  <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" aria-label="Daily profit table" {...tableScrollHandlers}>
                     <table className="report-table-compact" aria-label="Daily profit by date">
                       <caption className="sr-only">Daily profit: date, revenue, expenses, profit</caption>
                       <thead>
@@ -600,7 +602,7 @@ const Reports = () => {
                   </div>
                 </ChartErrorBoundary>
               )}
-              <div className="table-wrapper">
+              <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" aria-label="Sales report table" {...tableScrollHandlers}>
                 {hasSalesData ? (
                   <>
                     <table className="report-table-compact" aria-label="Sales by date">
@@ -692,7 +694,7 @@ const Reports = () => {
                   </div>
                 </ChartErrorBoundary>
               )}
-              <div className="table-wrapper">
+              <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" aria-label="Service report table" {...tableScrollHandlers}>
                 {hasServiceData ? (
                   <>
                     <table className="report-table-compact" aria-label="Service performance">
@@ -815,7 +817,7 @@ const Reports = () => {
               <div className="info-banner-compact">
                 <strong>Loyalty Points:</strong> 1 point per 20,000 TSh spent. 100 points = Free wash worth 10,000 TSh
               </div>
-              <div className="table-wrapper">
+              <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" aria-label="Customer report table" {...tableScrollHandlers}>
                 {hasCustomerData ? (
                   <table className="report-table-compact" aria-label="Top customers loyalty">
                     <caption className="sr-only">Top customers by loyalty: orders, spent, points, tier, last order</caption>

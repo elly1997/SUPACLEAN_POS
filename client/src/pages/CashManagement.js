@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit, getActiveBankAccounts, getCashSummaryRange, getUnreconciledClosings } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
 import { receiptWidthCss } from '../utils/receiptPrintConfig';
 import './CashManagement.css';
@@ -32,6 +33,7 @@ const CashManagement = () => {
   const [unreconciledClosings, setUnreconciledClosings] = useState([]);
   const [unreconciledLoading, setUnreconciledLoading] = useState(false);
   const [reconcilingDate, setReconcilingDate] = useState('');
+  const tableScrollHandlers = useHorizontalScrollRegion();
   const today = new Date().toISOString().split('T')[0];
   const isAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
 
@@ -327,7 +329,7 @@ const CashManagement = () => {
       {/* Daily summary as table for data density and scalability */}
       <div className="cash-summary-table-section">
         <h2>Daily cash summary</h2>
-        <div className="cash-summary-table-wrap">
+        <div className="cash-summary-table-wrap interactive-scroll-region" tabIndex={0} role="region" aria-label="Daily cash summary table" {...tableScrollHandlers}>
           <table className="cash-summary-table">
             <thead>
               <tr>
@@ -385,7 +387,7 @@ const CashManagement = () => {
       {/* Calculation Breakdown as table */}
       <div className="breakdown-card">
         <h2>Calculation Breakdown</h2>
-        <div className="breakdown-table-wrap">
+        <div className="breakdown-table-wrap interactive-scroll-region" tabIndex={0} role="region" aria-label="Cash breakdown table" {...tableScrollHandlers}>
           <table className="breakdown-table">
             <thead>
               <tr>
@@ -510,7 +512,7 @@ const CashManagement = () => {
         )}
 
         {bankDeposits.length > 0 ? (
-          <div className="deposits-table-wrap">
+          <div className="deposits-table-wrap interactive-scroll-region" tabIndex={0} role="region" aria-label="Bank deposits table" {...tableScrollHandlers}>
             <table className="deposits-table">
               <thead>
                 <tr>
@@ -566,7 +568,7 @@ const CashManagement = () => {
         {unreconciledLoading ? (
           <p className="range-empty">Loading unreconciled entries...</p>
         ) : unreconciledClosings.length > 0 ? (
-          <div className="range-table-wrap">
+          <div className="range-table-wrap interactive-scroll-region" tabIndex={0} role="region" aria-label="Unreconciled closings table" {...tableScrollHandlers}>
             <table className="range-table">
               <thead>
                 <tr>
@@ -643,7 +645,7 @@ const CashManagement = () => {
           </button>
         </div>
         {rangeData.length > 0 && (
-          <div className="range-table-wrap">
+          <div className="range-table-wrap interactive-scroll-region" tabIndex={0} role="region" aria-label="Cashflow report table" {...tableScrollHandlers}>
             <table className="range-table">
               <thead>
                 <tr>

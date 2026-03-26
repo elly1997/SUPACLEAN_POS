@@ -4,6 +4,7 @@ import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStoc
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
+import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
@@ -62,6 +63,7 @@ const Orders = () => {
   const [exportingUncollected, setExportingUncollected] = useState(false);
   const [showExportPopup, setShowExportPopup] = useState(false);
   const ordersSearchInputRef = useRef(null);
+  const tableScrollHandlers = useHorizontalScrollRegion();
 
   // F2: focus order search (customer name or phone) for quick access
   useEffect(() => {
@@ -968,7 +970,13 @@ Phone: ${receiptGroup.customer_phone}
       ) : (
         <>
         <div className="orders-table">
-          <div className="orders-table-wrapper">
+          <div
+            className="orders-table-wrapper interactive-scroll-region"
+            tabIndex={0}
+            role="region"
+            aria-label="Orders table"
+            {...tableScrollHandlers}
+          >
             <table>
             <thead>
               <tr>

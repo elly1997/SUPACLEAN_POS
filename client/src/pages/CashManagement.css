@@ -105,12 +105,14 @@
 }
 
 .cash-summary-table-wrap {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  max-height: min(62vh, 560px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
 }
 
 .cash-summary-table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   min-width: 400px;
   border-collapse: collapse;
   font-size: 14px;
@@ -127,6 +129,9 @@
   font-weight: 600;
   color: var(--text-secondary);
   background: var(--bg-tertiary);
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .cash-summary-table th.num,
@@ -155,11 +160,14 @@
 
 /* Breakdown table */
 .breakdown-table-wrap {
-  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  max-height: min(56vh, 420px);
 }
 
 .breakdown-table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   min-width: 260px;
   border-collapse: collapse;
   font-size: 14px;
@@ -176,6 +184,9 @@
   font-weight: 600;
   color: var(--text-secondary);
   background: var(--bg-tertiary);
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .breakdown-table th.num,
@@ -204,12 +215,14 @@
 
 /* Bank deposits table */
 .deposits-table-wrap {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  max-height: min(56vh, 420px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
 }
 
 .deposits-table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   min-width: 400px;
   border-collapse: collapse;
   font-size: 14px;
@@ -226,6 +239,9 @@
   font-weight: 600;
   color: var(--text-secondary);
   background: var(--bg-tertiary);
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .deposits-table th.num,
@@ -598,12 +614,15 @@
 }
 
 .range-table-wrap {
-  overflow-x: auto;
   margin-top: 12px;
+  max-height: min(56vh, 420px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
 }
 
 .range-table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -619,6 +638,9 @@
   font-weight: 600;
   color: var(--text-secondary);
   background: var(--bg-tertiary);
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .range-table th.num,

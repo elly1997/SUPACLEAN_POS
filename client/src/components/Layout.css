@@ -299,6 +299,7 @@
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
+  overscroll-behavior-y: contain;
   transition: left 0.3s ease;
   background: var(--bg-primary);
   padding: 0;
