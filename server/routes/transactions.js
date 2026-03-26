@@ -44,24 +44,36 @@ router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
 router.get('/daily-summary', authenticate, requireBranchAccess(), async (req, res) => {
   const { date } = req.query;
   const targetDate = date || new Date().toISOString().split('T')[0];
-  const branchFilter = getBranchFilter(req, 't');
-
-  // Include both 'payment' (legacy/import) and 'payment_received' (receive-payment, collect, new order cash)
-  // so Today's Income reflects all amounts collected by the cashier (book + cash sales).
-  const query = `
-    SELECT 
-      SUM(CASE WHEN transaction_type IN ('payment', 'payment_received') THEN 1 ELSE 0 END) as total_transactions,
-      SUM(CASE WHEN transaction_type IN ('payment', 'payment_received') THEN amount ELSE 0 END) as total_income,
-      SUM(CASE WHEN transaction_type = 'expense' THEN amount ELSE 0 END) as total_expenses,
-      SUM(CASE WHEN transaction_type IN ('payment', 'payment_received') AND payment_method = 'cash' THEN amount ELSE 0 END) as cash_income,
-      SUM(CASE WHEN transaction_type IN ('payment', 'payment_received') AND (payment_method IS NULL OR payment_method != 'cash') THEN amount ELSE 0 END) as non_cash_income
-    FROM transactions t
-    WHERE DATE(t.transaction_date) = ?
-    ${branchFilter.clause}
-  `;
+  const branchFilterTx = getBranchFilter(req, 't');
+  const branchFilterCash = getBranchFilter(req, 'd');
 
   try {
-    const row = await db.get(query, [targetDate, ...branchFilter.params]);
+    // Source-of-truth financial totals from daily_cash_summaries (same as Cash Management).
+    const cashRow = await db.get(
+      `SELECT
+         COALESCE(SUM(COALESCE(d.cash_sales,0) + COALESCE(d.book_sales,0) + COALESCE(d.card_sales,0) + COALESCE(d.mobile_money_sales,0)), 0) AS total_income,
+         COALESCE(SUM(COALESCE(d.cash_sales,0) + COALESCE(d.book_sales,0)), 0) AS cash_income,
+         COALESCE(SUM(COALESCE(d.card_sales,0) + COALESCE(d.mobile_money_sales,0)), 0) AS non_cash_income,
+         COALESCE(SUM(COALESCE(d.expenses_from_cash,0) + COALESCE(d.expenses_from_bank,0) + COALESCE(d.expenses_from_mpesa,0)), 0) AS total_expenses
+       FROM daily_cash_summaries d
+       WHERE d.date = ?
+       ${branchFilterCash.clause}`,
+      [targetDate, ...branchFilterCash.params]
+    );
+    const txCountRow = await db.get(
+      `SELECT COALESCE(SUM(CASE WHEN transaction_type IN ('payment', 'payment_received') THEN 1 ELSE 0 END), 0) as total_transactions
+       FROM transactions t
+       WHERE DATE(t.transaction_date) = ?
+       ${branchFilterTx.clause}`,
+      [targetDate, ...branchFilterTx.params]
+    );
+    const row = {
+      total_transactions: Number(txCountRow?.total_transactions || 0),
+      total_income: Number(cashRow?.total_income || 0),
+      total_expenses: Number(cashRow?.total_expenses || 0),
+      cash_income: Number(cashRow?.cash_income || 0),
+      non_cash_income: Number(cashRow?.non_cash_income || 0)
+    };
     res.json({
       date: targetDate,
       ...row,

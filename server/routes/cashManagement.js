@@ -8,6 +8,11 @@ const { getEffectiveBranchId } = require('../utils/branchFilter');
 // All cash-management routes require branch feature 'cash_management' (admin bypasses)
 router.use(authenticate, requireBranchFeature('cash_management'));
 
+const num = (v, fallback = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+};
+
 async function upsertDailySummaryFromComputed(date, branchId, computed, notes = null) {
   const existing = await db.get(
     'SELECT id, is_reconciled, notes FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
@@ -20,22 +25,22 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
   }
 
   const payload = {
-    opening_balance: computed.opening_balance || 0,
+    opening_balance: num(computed.opening_balance),
     opening_cash_declared: computed.opening_cash_declared != null ? computed.opening_cash_declared : null,
-    opening_variance: computed.opening_variance || 0,
-    cash_sales: computed.cash_sales || 0,
-    book_sales: computed.book_sales || 0,
-    card_sales: computed.card_sales || 0,
-    mobile_money_sales: computed.mobile_money_sales || 0,
-    bank_deposits: computed.bank_deposits || 0,
-    bank_payments: computed.bank_payments || 0,
-    mpesa_received: computed.mpesa_received || 0,
-    mpesa_paid: computed.mpesa_paid || 0,
-    expenses_from_cash: computed.expenses_from_cash || 0,
-    expenses_from_bank: computed.expenses_from_bank || 0,
-    expenses_from_mpesa: computed.expenses_from_mpesa || 0,
-    cash_in_hand: computed.cash_in_hand || 0,
-    closing_balance: computed.closing_balance || 0
+    opening_variance: num(computed.opening_variance),
+    cash_sales: num(computed.cash_sales),
+    book_sales: num(computed.book_sales),
+    card_sales: num(computed.card_sales),
+    mobile_money_sales: num(computed.mobile_money_sales),
+    bank_deposits: num(computed.bank_deposits),
+    bank_payments: num(computed.bank_payments),
+    mpesa_received: num(computed.mpesa_received),
+    mpesa_paid: num(computed.mpesa_paid),
+    expenses_from_cash: num(computed.expenses_from_cash),
+    expenses_from_bank: num(computed.expenses_from_bank),
+    expenses_from_mpesa: num(computed.expenses_from_mpesa),
+    cash_in_hand: num(computed.cash_in_hand),
+    closing_balance: num(computed.closing_balance)
   };
 
   if (existing) {
@@ -126,7 +131,7 @@ async function computeAndPersistDailySummary(date, branchId) {
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayStr = yesterday.toISOString().split('T')[0];
   const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
-  const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+    const openingBalance = yesterdayRow ? num(yesterdayRow.closing_balance) : 0;
   const existingRow = await db.get(
     'SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
     [date, branchId]
@@ -141,7 +146,7 @@ async function computeAndPersistDailySummary(date, branchId) {
     AND paid_amount > 0
     AND branch_id = ?
   `, [date, branchId]);
-  const cashSales = cashSalesRow[0]?.cash_sales || 0;
+  const cashSales = num(cashSalesRow[0]?.cash_sales);
 
   const { calculateBookSales } = require('../utils/cashValidation');
   let bookSales = 0;
@@ -298,13 +303,13 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       const results = [];
       for (const bid of branchIds) {
         const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, bid]);
-        const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+        const openingBalance = yesterdayRow ? num(yesterdayRow.closing_balance) : 0;
         const existingToday = await db.get('SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [today, bid]);
         const cashSalesRow = await db.all(`
           SELECT SUM(paid_amount) as cash_sales FROM orders
           WHERE DATE(order_date) = ? AND payment_status = 'paid_full' AND payment_method = 'cash' AND paid_amount > 0 AND branch_id = ?
         `, [today, bid]);
-        const cashSales = cashSalesRow[0]?.cash_sales || 0;
+    const cashSales = num(cashSalesRow[0]?.cash_sales);
         const { calculateBookSales } = require('../utils/cashValidation');
         let bookSales = 0;
         try {
@@ -331,7 +336,7 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
 
   try {
     const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
-    const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+    const openingBalance = yesterdayRow ? num(yesterdayRow.closing_balance) : 0;
     const existingToday = await db.get('SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [today, branchId]);
     const cashSalesRow = await db.all(`
       SELECT SUM(paid_amount) as cash_sales
@@ -342,7 +347,7 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       AND paid_amount > 0
       AND branch_id = ?
     `, [today, branchId]);
-    const cashSales = cashSalesRow[0]?.cash_sales || 0;
+        const cashSales = num(cashSalesRow[0]?.cash_sales);
     const { calculateBookSales } = require('../utils/cashValidation');
     let bookSales = 0;
     try {
@@ -435,19 +440,19 @@ async function calculateRemaining(date, openingBalance, cashSales, bookSales, br
     AND (e.branch_id = $2 OR e.branch_id IS NULL)
   `, [date, branchId]);
   
-  const expensesFromCash = expensesRow[0]?.expenses_from_cash || 0;
-  const expensesFromBank = expensesRow[0]?.expenses_from_bank || 0;
-  const expensesFromMpesa = expensesRow[0]?.expenses_from_mpesa || 0;
+  const expensesFromCash = num(expensesRow[0]?.expenses_from_cash);
+  const expensesFromBank = num(expensesRow[0]?.expenses_from_bank);
+  const expensesFromMpesa = num(expensesRow[0]?.expenses_from_mpesa);
   
   // Calculate bank deposits
   const depositsRow = await db.get('SELECT COALESCE(SUM(amount), 0) as total FROM bank_deposits WHERE date = ? AND branch_id = ?', [date, branchId]);
   
-  const bankDeposits = depositsRow?.total || 0;
+  const bankDeposits = num(depositsRow?.total);
   
-  const effectiveOpening = declaredOpeningCash != null ? parseFloat(declaredOpeningCash) : openingBalance;
+  const effectiveOpening = declaredOpeningCash != null ? num(declaredOpeningCash) : num(openingBalance);
   const openingVariance = effectiveOpening - openingBalance;
   // Cash in hand starts from declared opening cash (if provided), else previous day closing.
-  const cashInHand = effectiveOpening + cashSales + bookSales - expensesFromCash - bankDeposits;
+  const cashInHand = effectiveOpening + num(cashSales) + num(bookSales) - expensesFromCash - bankDeposits;
   const closingBalance = cashInHand;
   
   return {
@@ -500,7 +505,7 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
   try {
     const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
     
-    const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
+    const openingBalance = yesterdayRow ? num(yesterdayRow.closing_balance) : 0;
     const existingRow = await db.get(
       'SELECT opening_cash_declared, opening_variance, opening_session_by, opening_session_at FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
       [today, branchId]
@@ -517,7 +522,7 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
       AND branch_id = ?
     `, [today, branchId]);
     
-    const cashSales = cashSalesRow[0]?.cash_sales || 0;
+    const cashSales = num(cashSalesRow[0]?.cash_sales);
     
     // Book sales = cash received from receive-payment / collection (daily sales report)
     const { calculateBookSales } = require('../utils/cashValidation');
@@ -555,17 +560,17 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
       AND (e.branch_id = $2 OR e.branch_id IS NULL)
     `, [today, branchId]);
     
-    const expensesFromCash = expensesRow[0]?.expenses_from_cash || 0;
-    const expensesFromBank = expensesRow[0]?.expenses_from_bank || 0;
-    const expensesFromMpesa = expensesRow[0]?.expenses_from_mpesa || 0;
+    const expensesFromCash = num(expensesRow[0]?.expenses_from_cash);
+    const expensesFromBank = num(expensesRow[0]?.expenses_from_bank);
+    const expensesFromMpesa = num(expensesRow[0]?.expenses_from_mpesa);
     
-    const bankDepositsAmount = bank_deposits || 0;
-    const bankPayments = bank_payments || 0;
-    const mpesaReceived = mpesa_received || mobileMoneySales;
-    const mpesaPaid = mpesa_paid || 0;
+    const bankDepositsAmount = num(bank_deposits);
+    const bankPayments = num(bank_payments);
+    const mpesaReceived = mpesa_received != null ? num(mpesa_received) : num(mobileMoneySales);
+    const mpesaPaid = num(mpesa_paid);
     
     const declaredOpening = existingRow?.opening_cash_declared != null
-      ? parseFloat(existingRow.opening_cash_declared)
+      ? num(existingRow.opening_cash_declared)
       : openingBalance;
     const openingVariance = declaredOpening - openingBalance;
     // Cash in hand = declared opening (or expected opening) + sales - cash outflows.
@@ -641,49 +646,12 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
     return res.status(400).json({ error: 'Select a branch to reconcile' });
   }
   try {
-    let row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
-    
-    if (!row) {
-      // No row yet: create daily summary from calculated values (same logic as GET /today)
-      const yesterday = new Date(date);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
-      const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
-      const openingBalance = yesterdayRow ? yesterdayRow.closing_balance : 0;
-      
-      const cashSalesRow = await db.all(`
-        SELECT SUM(paid_amount) as cash_sales
-        FROM orders
-        WHERE DATE(order_date) = ?
-        AND payment_status = 'paid_full'
-        AND payment_method = 'cash'
-        AND paid_amount > 0
-        AND branch_id = ?
-      `, [date, branchId]);
-      const cashSales = cashSalesRow[0]?.cash_sales || 0;
-      
-      const { calculateBookSales } = require('../utils/cashValidation');
-      let bookSales = 0;
-      try {
-        bookSales = await calculateBookSales(date, branchId);
-      } catch (e) {
-        bookSales = 0;
-      }
-      
-      const summary = await calculateRemaining(date, openingBalance, cashSales, bookSales, branchId);
-      await db.run(
-        `INSERT INTO daily_cash_summaries (
-          date, branch_id, opening_balance, cash_sales, book_sales, card_sales, mobile_money_sales,
-          bank_deposits, bank_payments, mpesa_received, mpesa_paid,
-          expenses_from_cash, expenses_from_bank, expenses_from_mpesa,
-          cash_in_hand, closing_balance, notes
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [date, branchId, summary.opening_balance, summary.cash_sales, summary.book_sales, summary.card_sales, summary.mobile_money_sales,
-         summary.bank_deposits, summary.bank_payments || 0, summary.mpesa_received, summary.mpesa_paid || 0,
-         summary.expenses_from_cash, summary.expenses_from_bank, summary.expenses_from_mpesa,
-         summary.cash_in_hand, summary.closing_balance, summary.notes || null]
-      );
+    // Always refresh from source data right before locking to ensure closing balance is correct.
+    const refresh = await refreshUnreconciledDailySummary(date, branchId);
+    let row = refresh.row || await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    if (!row) return res.status(404).json({ error: 'Daily summary not found' });
+    if (refresh.skipped) {
+      return res.status(409).json({ error: 'This date is already reconciled and cannot be reconciled again.', row });
     }
     
     const result = await db.run(
@@ -827,7 +795,7 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
 
   try {
     if (isAdminAllBranches) {
-      const rows = await db.all(
+      let rows = await db.all(
         `SELECT dcs.*, b.name as branch_name
          FROM daily_cash_summaries dcs
          LEFT JOIN branches b ON b.id = dcs.branch_id
@@ -836,10 +804,14 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
          LIMIT ?`,
         [limit]
       );
+      rows = await Promise.all((rows || []).map(async (r) => {
+        const refreshed = await refreshUnreconciledDailySummary(r.date, r.branch_id);
+        return refreshed.row ? { ...refreshed.row, branch_name: r.branch_name } : r;
+      }));
       return res.json(rows || []);
     }
 
-    const rows = await db.all(
+    let rows = await db.all(
       `SELECT dcs.*, b.name as branch_name
        FROM daily_cash_summaries dcs
        LEFT JOIN branches b ON b.id = dcs.branch_id
@@ -849,6 +821,10 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
        LIMIT ?`,
       [branchId, limit]
     );
+    rows = await Promise.all((rows || []).map(async (r) => {
+      const refreshed = await refreshUnreconciledDailySummary(r.date, branchId);
+      return refreshed.row ? { ...refreshed.row, branch_name: r.branch_name } : r;
+    }));
     return res.json(rows || []);
   } catch (err) {
     console.error('Error fetching unreconciled daily closings:', err);
@@ -905,10 +881,15 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
       }));
       return res.json(normalized);
     }
-    const rows = await db.all(
+    let rows = await db.all(
       'SELECT * FROM daily_cash_summaries WHERE date >= ? AND date <= ? AND branch_id = ? ORDER BY date DESC',
       [start_date, end_date, branchId]
     );
+    rows = await Promise.all((rows || []).map(async (r) => {
+      if (r?.is_reconciled) return r;
+      const refreshed = await refreshUnreconciledDailySummary(r.date, branchId);
+      return refreshed.row || r;
+    }));
     res.json(rows);
   } catch (err) {
     console.error('Error fetching cash summary range:', err);

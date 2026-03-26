@@ -39,6 +39,10 @@ const CashManagement = () => {
   const tableScrollHandlers = useHorizontalScrollRegion();
   const today = new Date().toISOString().split('T')[0];
   const isAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
 
   useEffect(() => {
     loadData();
@@ -387,13 +391,13 @@ const CashManagement = () => {
     );
   }
 
-  const cashInHand = (summary.opening_balance || 0) + 
-                     (summary.cash_sales || 0) + 
-                     (summary.book_sales || 0) - 
-                     (summary.expenses_from_cash || 0) - 
-                     (summary.bank_deposits || 0);
-  const declaredOpening = summary.opening_cash_declared != null ? Number(summary.opening_cash_declared) : Number(summary.opening_balance || 0);
-  const openingVariance = Number(summary.opening_variance || 0);
+  const cashInHand = toNum(summary.opening_balance) +
+                     toNum(summary.cash_sales) +
+                     toNum(summary.book_sales) -
+                     toNum(summary.expenses_from_cash) -
+                     toNum(summary.bank_deposits);
+  const declaredOpening = summary.opening_cash_declared != null ? toNum(summary.opening_cash_declared) : toNum(summary.opening_balance);
+  const openingVariance = toNum(summary.opening_variance);
   const openingBalanced = Math.abs(openingVariance) < 0.01;
 
   return (
@@ -434,10 +438,14 @@ const CashManagement = () => {
         </div>
       </div>
 
-      {!summary.all_branches && !summary.is_reconciled && (
+      {!summary.all_branches && (
         <div className="opening-session-card">
           <h2>Opening Session</h2>
-          <p className="subtitle">Enter physical cash at start of day and compare to previous closing.</p>
+          <p className="subtitle">
+            {summary.is_reconciled
+              ? 'This day is already reconciled. Opening session is locked and shown for reference.'
+              : 'Enter physical cash at start of day and compare to previous closing.'}
+          </p>
           <div className="opening-session-grid">
             <div className="form-group">
               <label>Expected opening (prev closing)</label>
@@ -452,6 +460,7 @@ const CashManagement = () => {
                 value={openingCashInput}
                 onChange={(e) => setOpeningCashInput(e.target.value)}
                 placeholder={String(declaredOpening || 0)}
+                disabled={summary.is_reconciled}
               />
             </div>
             <div className="form-group">
@@ -461,10 +470,16 @@ const CashManagement = () => {
                 value={openingNotes}
                 onChange={(e) => setOpeningNotes(e.target.value)}
                 placeholder="Reason if short/over"
+                disabled={summary.is_reconciled}
               />
             </div>
-            <button type="button" className="btn-primary" onClick={handleSaveOpeningSession} disabled={savingOpening}>
-              {savingOpening ? 'Saving...' : 'Save Opening Session'}
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleSaveOpeningSession}
+              disabled={savingOpening || summary.is_reconciled}
+            >
+              {summary.is_reconciled ? 'Opening Session Locked' : (savingOpening ? 'Saving...' : 'Save Opening Session')}
             </button>
           </div>
           <div className={`opening-variance-banner ${openingBalanced ? 'ok' : (openingVariance < 0 ? 'short' : 'over')}`}>
@@ -519,7 +534,7 @@ const CashManagement = () => {
               </tr>
               <tr>
                 <td>💳 Card & M-Pesa</td>
-                <td className="num">{parseFloat((summary.card_sales || 0) + (summary.mobile_money_sales || 0)).toLocaleString()}</td>
+                <td className="num">{(toNum(summary.card_sales) + toNum(summary.mobile_money_sales)).toLocaleString()}</td>
                 <td className="text-muted">Card: {parseFloat(summary.card_sales || 0).toLocaleString()} | M-Pesa: {parseFloat(summary.mobile_money_sales || 0).toLocaleString()}</td>
               </tr>
               <tr>

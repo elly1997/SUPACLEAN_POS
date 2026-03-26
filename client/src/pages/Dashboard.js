@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { getDailySummary, getOrders, updateOrderStatus, getCollectionQueue, getOrderDashboardStats } from '../api/api';
+import { getOrders, updateOrderStatus, getCollectionQueue, getOrderDashboardStats, getTodayCashSummary, getCashSummaryRange } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
@@ -16,6 +16,7 @@ const Dashboard = () => {
   const canManageCash = hasPermission?.('canManageCash') ?? false;
   const [listView, setListView] = useListViewPreference();
   const [summary, setSummary] = useState(null);
+  const [monthIncome, setMonthIncome] = useState(0);
   const [orderStats, setOrderStats] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
   const [readyOrders, setReadyOrders] = useState([]);
@@ -32,15 +33,21 @@ const Dashboard = () => {
     try {
       const readyCustomer = readySearchTerm.trim() || undefined;
       const pendingCustomer = pendingSearchTerm.trim() || undefined;
+      const monthStart = `${today.slice(0, 7)}-01`;
       const [summaryRes, statsRes, pendingRes, readyRes, queueRes] = await Promise.all([
-        getDailySummary(today),
+        getTodayCashSummary(),
         getOrderDashboardStats(),
         getOrders({ status: 'pending', limit: 500, ...(pendingCustomer && { customer: pendingCustomer }) }),
         getOrders({ status: 'ready', limit: 500, ...(readyCustomer && { customer: readyCustomer }) }),
         getCollectionQueue({ limit: 500, ...(readyCustomer && { customer: readyCustomer }) })
       ]);
+      const monthRes = await getCashSummaryRange(monthStart, today);
+      const monthTotal = (Array.isArray(monthRes?.data) ? monthRes.data : []).reduce((acc, row) => (
+        acc + (Number(row.cash_sales || 0) + Number(row.book_sales || 0) + Number(row.card_sales || 0) + Number(row.mobile_money_sales || 0))
+      ), 0);
 
       setSummary(summaryRes.data);
+      setMonthIncome(monthTotal);
       setOrderStats(statsRes.data || null);
       setPendingOrders(pendingRes.data || []);
       setReadyOrders(readyRes.data || []);
@@ -58,6 +65,7 @@ const Dashboard = () => {
       setReadyOrders([]);
       setReadyQueue([]);
       setOrderStats(null);
+      setMonthIncome(0);
     } finally {
       setLoading(false);
     }
@@ -192,8 +200,20 @@ const Dashboard = () => {
           <div className="stat-icon">💰</div>
           <div className="stat-content">
             <h3>Today's Income</h3>
-            <p className="stat-value">TSh {summary?.total_income?.toLocaleString() || '0'}</p>
-            <small>Cash: TSh {summary?.cash_income?.toLocaleString() || '0'}</small>
+            <p className="stat-value">
+              TSh {(
+                Number(summary?.cash_sales || 0) +
+                Number(summary?.book_sales || 0) +
+                Number(summary?.card_sales || 0) +
+                Number(summary?.mobile_money_sales || 0)
+              ).toLocaleString()}
+            </p>
+            <small>
+              Cash: TSh {(
+                Number(summary?.cash_sales || 0) +
+                Number(summary?.book_sales || 0)
+              ).toLocaleString()} | MTD: TSh {Number(monthIncome || 0).toLocaleString()}
+            </small>
           </div>
         </div>
 
