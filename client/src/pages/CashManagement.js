@@ -548,12 +548,12 @@ const CashManagement = () => {
                 <td className="text-muted">Deposited to bank</td>
               </tr>
               <tr className="total-row">
-                <td><strong>💵 Cash in Hand</strong></td>
+                <td><strong>💵 Cash in Hand (Closing Balance)</strong></td>
                 <td className="num"><strong>TSh {parseFloat(cashInHand).toLocaleString()}</strong></td>
-                <td className="text-muted">Opening + Sales - Expenses - Deposits</td>
+                <td className="text-muted">Opening + Cash Sales + Book Collections - Cash Expenses - Bank Deposits</td>
               </tr>
               <tr className="total-row">
-                <td><strong>🏁 Closing Balance</strong></td>
+                <td><strong>🏁 Closing Balance (Same as Cash in Hand)</strong></td>
                 <td className="num"><strong>TSh {parseFloat(summary.closing_balance || cashInHand).toLocaleString()}</strong></td>
                 <td className="text-muted">{summary.is_reconciled ? '✅ Reconciled' : 'Pending reconciliation'}</td>
               </tr>

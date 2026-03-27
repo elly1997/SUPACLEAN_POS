@@ -13,6 +13,18 @@ const num = (v, fallback = 0) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+async function getExpectedOpeningBalance(date, branchId) {
+  const row = await db.get(
+    `SELECT closing_balance
+     FROM daily_cash_summaries
+     WHERE date < ? AND branch_id = ?
+     ORDER BY date DESC
+     LIMIT 1`,
+    [date, branchId]
+  );
+  return row ? num(row.closing_balance) : 0;
+}
+
 async function upsertDailySummaryFromComputed(date, branchId, computed, notes = null) {
   const existing = await db.get(
     'SELECT id, is_reconciled, notes FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
@@ -127,11 +139,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
  * Used when the day has no row yet, or exists but is not reconciled (so expenses/backfills update totals).
  */
 async function computeAndPersistDailySummary(date, branchId) {
-  const yesterday = new Date(date);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
-  const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
-    const openingBalance = yesterdayRow ? num(yesterdayRow.closing_balance) : 0;
+  const openingBalance = await getExpectedOpeningBalance(date, branchId);
   const existingRow = await db.get(
     'SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
     [date, branchId]
@@ -243,11 +251,7 @@ router.post('/opening-session/:date', requireBranchAccess(), requirePermission('
     if (existing?.is_reconciled) {
       return res.status(409).json({ error: 'This day is already reconciled and cannot be changed.' });
     }
-    const yesterday = new Date(date);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
-    const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
-    const expectedOpening = yesterdayRow ? parseFloat(yesterdayRow.closing_balance || 0) : 0;
+    const expectedOpening = await getExpectedOpeningBalance(date, branchId);
     const openingVariance = openingCash - expectedOpening;
 
     if (existing) {
@@ -297,13 +301,9 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       if (branchIds.length === 0) {
         return res.json(emptyDailySummary(today, true));
       }
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
       const results = [];
       for (const bid of branchIds) {
-        const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, bid]);
-        const openingBalance = yesterdayRow ? num(yesterdayRow.closing_balance) : 0;
+        const openingBalance = await getExpectedOpeningBalance(today, bid);
         const existingToday = await db.get('SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [today, bid]);
         const cashSalesRow = await db.all(`
           SELECT SUM(paid_amount) as cash_sales FROM orders
@@ -330,13 +330,8 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
     }
   }
 
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
-
   try {
-    const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
-    const openingBalance = yesterdayRow ? num(yesterdayRow.closing_balance) : 0;
+    const openingBalance = await getExpectedOpeningBalance(today, branchId);
     const existingToday = await db.get('SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [today, branchId]);
     const cashSalesRow = await db.all(`
       SELECT SUM(paid_amount) as cash_sales
@@ -497,15 +492,8 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
   }
   const today = date || new Date().toISOString().split('T')[0];
   
-  // Get yesterday's closing balance for opening balance
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
-  
   try {
-    const yesterdayRow = await db.get('SELECT closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [yesterdayStr, branchId]);
-    
-    const openingBalance = yesterdayRow ? num(yesterdayRow.closing_balance) : 0;
+    const openingBalance = await getExpectedOpeningBalance(today, branchId);
     const existingRow = await db.get(
       'SELECT opening_cash_declared, opening_variance, opening_session_by, opening_session_at FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
       [today, branchId]
