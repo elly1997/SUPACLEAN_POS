@@ -30,6 +30,27 @@ if (!fs.existsSync(uploadsDir)) {
 const upload = multer({ dest: uploadsDir });
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
+const roundFigure = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x));
+
+function buildPerOrderPaidAllocations(orders, receiptPaidAmount) {
+  const sorted = [...orders].sort((a, b) => Number(a.id) - Number(b.id));
+  let remaining = Math.max(0, roundFigure(receiptPaidAmount));
+  const allocations = [];
+
+  for (const o of sorted) {
+    const total = Math.max(0, roundFigure(Number(o.total_amount) || 0));
+    const paidNow = Math.min(total, remaining);
+    remaining -= paidNow;
+    const status = paidNow >= total ? 'paid_full' : (paidNow > 0 ? 'advance' : 'not_paid');
+    allocations.push({
+      id: o.id,
+      paid_amount: paidNow,
+      payment_status: status
+    });
+  }
+
+  return allocations;
+}
 
 // All order routes require new_order or order_processing (admin bypasses); collect route adds collection
 router.use(authenticate, requireBranchFeatureAny('new_order', 'order_processing'));
@@ -819,9 +840,9 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
 
     // Cannot mark as collected without payment
     if (status === 'collected') {
-      const total = roundMoney(parseFloat(order.total_amount) || 0);
-      const paid = roundMoney(parseFloat(order.paid_amount) || 0);
-      const balanceDue = roundMoney(total - paid);
+      const total = roundFigure(parseFloat(order.total_amount) || 0);
+      const paid = roundFigure(parseFloat(order.paid_amount) || 0);
+      const balanceDue = roundFigure(total - paid);
       if (balanceDue > 0) {
         return res.status(400).json({
           error: 'Cannot mark as collected without payment. Receive payment first (Pay button) or use the Collection page to collect with payment.'
@@ -1016,9 +1037,9 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
     }
 
     // Calculate totals across ALL items on the receipt (rounded to 2 decimals)
-    const receiptTotal = roundMoney(allOrders.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0));
-    const receiptPaid = roundMoney(allOrders.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0));
-    const balanceDue = roundMoney(receiptTotal - receiptPaid);
+    const receiptTotal = roundFigure(allOrders.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0));
+    const receiptPaid = roundFigure(allOrders.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0));
+    const balanceDue = roundFigure(receiptTotal - receiptPaid);
     
     // Use the first order for customer info (all orders have same customer)
     const firstOrder = allOrders[0];
@@ -1027,15 +1048,17 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
 
     // Function to update ALL orders after payment processing
     const updateAllOrders = async () => {
-      // Update ALL orders with the same receipt number (case-insensitive)
-      await db.run(
-        `UPDATE orders 
-         SET status = ?, collected_date = CURRENT_TIMESTAMP, 
-             paid_amount = ?, payment_status = ?, payment_method = ?
-         WHERE UPPER(receipt_number) = UPPER(?)
-         ${updateBranchFilter.clause}`,
-        ['collected', finalPaidAmount, finalPaymentStatus, payment_method, receiptNumber, ...updateBranchFilter.params]
-      );
+      // Apply receipt paid allocation per item to avoid duplicate paid totals across rows.
+      const allocations = buildPerOrderPaidAllocations(allOrders, finalPaidAmount);
+      for (const alloc of allocations) {
+        await db.run(
+          `UPDATE orders
+           SET status = ?, collected_date = CURRENT_TIMESTAMP,
+               paid_amount = ?, payment_status = ?, payment_method = ?
+           WHERE id = ?`,
+          ['collected', alloc.paid_amount, alloc.payment_status, payment_method, alloc.id]
+        );
+      }
       
       // Award loyalty points on collection (only if fully paid) - use receipt total
       if (finalPaymentStatus === 'paid_full' && receiptTotal > 0) {
@@ -1088,7 +1111,7 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
 
     // Handle payment if provided (collect balance due, not full receipt total)
     if (payment_amount !== undefined && payment_amount > 0) {
-      const paymentAmount = roundMoney(parseFloat(payment_amount));
+      const paymentAmount = roundFigure(parseFloat(payment_amount));
       
       try {
         const tol = 0.01;
@@ -1112,7 +1135,7 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
         }
         
         // Add payment to existing paid amount (collect balance due, not receipt total)
-        finalPaidAmount = roundMoney(receiptPaid + paymentAmount);
+        finalPaidAmount = roundFigure(receiptPaid + paymentAmount);
         finalPaymentStatus = (finalPaidAmount >= receiptTotal - tol) ? 'paid_full' : 'advance';
 
         // Record payment transaction using utility function
@@ -1192,19 +1215,14 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
       [order.receipt_number, ...branchFilter.params]
     );
 
-    const receiptTotal = roundMoney(allOrders.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0));
-    const receiptPaid = roundMoney(allOrders.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0));
-    const balanceDue = roundMoney(receiptTotal - receiptPaid);
-    const paymentAmount = roundMoney(parseFloat(payment_amount));
+    const receiptTotal = roundFigure(allOrders.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0));
+    const receiptPaid = roundFigure(allOrders.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0));
+    const balanceDue = roundFigure(receiptTotal - receiptPaid);
+    const paymentAmount = roundFigure(parseFloat(payment_amount));
     
     const tol = 0.01;
     if (balanceDue <= 0) {
       return res.status(400).json({ error: 'Receipt is already fully paid.' });
-    }
-    if (paymentAmount < balanceDue - tol) {
-      return res.status(400).json({
-        error: `Payment must equal the balance due of TSh ${balanceDue.toLocaleString()}. Partial payments are not allowed.`
-      });
     }
     if (paymentAmount > balanceDue + tol) {
       return res.status(400).json({
@@ -1229,35 +1247,37 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
     const transactionId = await recordPaymentTransaction(orderObj, paymentAmount, payment_method, 'Cashier');
     console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${order.receipt_number} (${allOrders.length} items)`);
     
-    // Apply full payment across ALL orders on the receipt (each line gets its total as paid)
-    for (const o of allOrders) {
-      const oTotal = roundMoney(parseFloat(o.total_amount) || 0);
+    // Apply payment across ALL orders on the receipt (supports partial payments).
+    const newReceiptPaid = roundFigure(receiptPaid + paymentAmount);
+    const allocations = buildPerOrderPaidAllocations(allOrders, newReceiptPaid);
+    for (const alloc of allocations) {
+      const oldOrder = allOrders.find((o) => Number(o.id) === Number(alloc.id));
       await db.run(
         `UPDATE orders SET paid_amount = ?, payment_status = ?, payment_method = ? WHERE id = ?`,
-        [oTotal, 'paid_full', payment_method, o.id]
+        [alloc.paid_amount, alloc.payment_status, payment_method, alloc.id]
       );
       logPaymentChange({
-        order_id: o.id,
+        order_id: alloc.id,
         action: 'payment_received',
-        old_payment_status: o.payment_status,
-        new_payment_status: 'paid_full',
-        old_paid_amount: parseFloat(o.paid_amount) || 0,
-        new_paid_amount: oTotal,
-        old_payment_method: o.payment_method,
+        old_payment_status: oldOrder?.payment_status,
+        new_payment_status: alloc.payment_status,
+        old_paid_amount: parseFloat(oldOrder?.paid_amount) || 0,
+        new_paid_amount: alloc.paid_amount,
+        old_payment_method: oldOrder?.payment_method,
         new_payment_method: payment_method,
         changed_by: 'Cashier',
         notes: notes || `Payment for receipt ${order.receipt_number} (${allOrders.length} items)`
       }).catch((err) => console.error('Error logging payment change:', err));
     }
-    
-    const newReceiptPaid = roundMoney(receiptPaid + paymentAmount);
+
+    const remainingBalance = roundFigure(Math.max(0, receiptTotal - newReceiptPaid));
     
     res.json({ 
       message: 'Payment received successfully', 
       order: { ...order, total_amount: receiptTotal, paid_amount: newReceiptPaid, receipt_item_count: allOrders.length },
       payment_received: paymentAmount,
       total_paid: newReceiptPaid,
-      balance_remaining: 0,
+      balance_remaining: remainingBalance,
       receipt_total: receiptTotal,
       receipt_item_count: allOrders.length
     });

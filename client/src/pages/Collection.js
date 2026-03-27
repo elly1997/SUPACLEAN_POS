@@ -12,6 +12,7 @@ import { playSuccessSound } from '../utils/sound';
 import './Collection.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
+const roundFigure = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x));
 
 function getReceiptTotals(order, allReceiptOrders) {
   const items = (allReceiptOrders && allReceiptOrders.length > 0) ? allReceiptOrders : (order ? [order] : []);
@@ -490,7 +491,7 @@ const Collection = () => {
     if (!order) return;
     
     const { balanceDue } = getReceiptTotals(order, allReceiptOrders);
-    const payment = roundMoney(parseFloat(paymentAmount) || 0);
+    const payment = roundFigure(parseFloat(paymentAmount) || 0);
     const tol = 0.01;
     
     if (payment <= 0) {
@@ -520,7 +521,7 @@ const Collection = () => {
       showToast('Receipt is already fully paid', 'info');
       return;
     }
-    // Cashier must record exact amount due (no partials). Pre-fill with balance due.
+    // Pre-fill with balance due. Cashier may receive full or partial amount.
     setPaymentAmount(String(balanceDue));
     setShowReceivePaymentModal(true);
   };
@@ -530,16 +531,11 @@ const Collection = () => {
     if (!order) return;
 
     const { balanceDue } = getReceiptTotals(order, allReceiptOrders);
-    const payment = roundMoney(parseFloat(paymentAmount) || 0);
+    const payment = roundFigure(parseFloat(paymentAmount) || 0);
     const tol = 0.01;
     
     if (payment <= 0) {
       showToast('Payment amount must be greater than 0', 'error');
-      return;
-    }
-    // Cashier may only record the exact amount due. Partial payments are not allowed.
-    if (payment < balanceDue - tol) {
-      showToast(`Payment must equal the balance due of TSh ${balanceDue.toLocaleString()}. Partial payments are not allowed.`, 'error');
       return;
     }
     if (payment > balanceDue + tol) {
@@ -1520,7 +1516,7 @@ Thank you for choosing SUPACLEAN!
                     onChange={(e) => setPaymentAmount(e.target.value)}
                     placeholder={`Balance due: TSh ${balanceDue.toLocaleString()}`}
                     min="0"
-                    step="0.01"
+                    step="1"
                     required
                     autoFocus
                   />
@@ -1581,14 +1577,14 @@ Thank you for choosing SUPACLEAN!
                   </div>
                 </div>
                 <div className="form-group">
-                  <label>Payment Amount * (must equal balance due; no partial payments)</label>
+                  <label>Payment Amount * (full or partial, up to balance due)</label>
                   <input
                     type="number"
                     value={paymentAmount}
                     onChange={(e) => setPaymentAmount(e.target.value)}
-                    placeholder={`Enter exactly TSh ${balanceDue.toLocaleString()}`}
+                    placeholder={`Enter up to TSh ${balanceDue.toLocaleString()}`}
                     min="0"
-                    step="0.01"
+                    step="1"
                     required
                     autoFocus
                   />

@@ -342,7 +342,7 @@
 .orders-table {
   background: var(--bg-secondary);
   border-radius: 12px;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: var(--shadow-md);
   border: 0.5px solid var(--border-color);
 }
@@ -486,6 +486,10 @@
   max-height: min(65vh, 560px);
   border-radius: 8px;
   border: 1px solid var(--border-color);
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
 }
 
 .empty-state,
