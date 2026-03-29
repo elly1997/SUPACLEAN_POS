@@ -101,7 +101,128 @@ async function removeLinkedSalaryAdvance(expenseId) {
   await db.run('DELETE FROM salary_advances WHERE source_expense_id = $1', [expenseId]);
 }
 
+/** Built-in categories (special handling for Bank Deposit / Salary Advance). Custom names stored per branch. */
+const BUILTIN_EXPENSE_CATEGORIES = [
+  'Bank Deposit',
+  'Lunch',
+  'Breakfast',
+  'Car Fuel',
+  'Rent',
+  'Salaries',
+  'Salary Advance',
+  'Maintenance & Repairs',
+  'Water Bill',
+  'Electricity',
+  'Office Supplies',
+  'Transport',
+  'Other'
+];
+
+function normalizeCustomCategoryName(name) {
+  return String(name || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 120);
+}
+
 router.use(authenticate, requireBranchFeature('expenses'));
+
+// Custom + built-in category list for the expense form (register before /:id)
+router.get('/categories', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
+  const branchId = getEffectiveBranchId(req) ?? req.user?.branchId ?? null;
+  if (!branchId) {
+    return res.status(400).json({
+      error:
+        req.user?.role === 'admin'
+          ? 'Select a branch in the header to load categories.'
+          : 'Your account has no branch assigned; contact an administrator.'
+    });
+  }
+  try {
+    const rows = await db.all(
+      'SELECT id, name FROM expense_categories WHERE branch_id = $1 ORDER BY lower(name)',
+      [branchId]
+    );
+    res.json({ built_in: BUILTIN_EXPENSE_CATEGORIES, custom: rows || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/categories', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
+  const name = normalizeCustomCategoryName(req.body?.name);
+  if (!name) {
+    return res.status(400).json({ error: 'Category name is required.' });
+  }
+  const branchId = getEffectiveBranchId(req) ?? req.user?.branchId ?? null;
+  if (!branchId) {
+    return res.status(400).json({
+      error:
+        req.user?.role === 'admin'
+          ? 'Select a branch in the header to add a category.'
+          : 'Your account has no branch assigned; contact an administrator.'
+    });
+  }
+  if (BUILTIN_EXPENSE_CATEGORIES.some((c) => c.toLowerCase() === name.toLowerCase())) {
+    return res.status(400).json({ error: 'This name matches a built-in category. Use the list as-is.' });
+  }
+  try {
+    const result = await db.run(
+      'INSERT INTO expense_categories (name, branch_id) VALUES ($1, $2) RETURNING id, name',
+      [name, branchId]
+    );
+    res.status(201).json({ id: result.lastID, name: result.row?.name || name });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'A category with this name already exists for this branch.' });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get expense summary by category (register before /:id so "summary" is not captured as id)
+router.get('/summary/by-category', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
+  const { start_date, end_date } = req.query;
+  const branchFilter = getBranchFilter(req, 'e');
+
+  let query = `
+    SELECT 
+      e.category,
+      e.payment_source,
+      SUM(e.amount) as total_amount,
+      COUNT(*) as count
+    FROM expenses e
+    WHERE 1=1
+      AND COALESCE(e.is_voided, FALSE) = FALSE
+  `;
+  const params = [];
+  let paramIndex = 1;
+
+  if (branchFilter.clause) {
+    query += ` ${branchFilter.clause}`;
+    params.push(...branchFilter.params);
+    paramIndex += branchFilter.params.length;
+  }
+
+  if (start_date) {
+    query += ` AND e.date >= $${paramIndex++}`;
+    params.push(start_date);
+  }
+
+  if (end_date) {
+    query += ` AND e.date <= $${paramIndex++}`;
+    params.push(end_date);
+  }
+
+  query += ' GROUP BY e.category, e.payment_source ORDER BY total_amount DESC';
+
+  try {
+    const rows = await db.all(query, params);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Get all expenses (managers and admins can view), with bank account name for Bank Deposit category
 router.get('/', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
@@ -438,51 +559,6 @@ router.delete('/:id', requireBranchAccess(), requirePermission('canManageExpense
     await writeExpenseAudit('void', Number(id), existing, null, req.body?.void_reason || null, req);
     await refreshDailyClosingForExpenseDates(branchId, delDate);
     res.json({ message: 'Expense voided successfully' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get expense summary by category (managers and admins can view)
-router.get('/summary/by-category', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
-  const { start_date, end_date } = req.query;
-  const branchFilter = getBranchFilter(req, 'e');
-  
-  let query = `
-    SELECT 
-      e.category,
-      e.payment_source,
-      SUM(e.amount) as total_amount,
-      COUNT(*) as count
-    FROM expenses e
-    WHERE 1=1
-      AND COALESCE(e.is_voided, FALSE) = FALSE
-  `;
-  const params = [];
-  let paramIndex = 1;
-  
-  // Add branch filter
-  if (branchFilter.clause) {
-    query += ` ${branchFilter.clause}`;
-    params.push(...branchFilter.params);
-    paramIndex += branchFilter.params.length;
-  }
-  
-  if (start_date) {
-    query += ` AND e.date >= $${paramIndex++}`;
-    params.push(start_date);
-  }
-  
-  if (end_date) {
-    query += ` AND e.date <= $${paramIndex++}`;
-    params.push(end_date);
-  }
-  
-  query += ' GROUP BY e.category, e.payment_source ORDER BY total_amount DESC';
-  
-  try {
-    const rows = await db.all(query, params);
-    res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

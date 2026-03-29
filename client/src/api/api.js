@@ -64,7 +64,16 @@ api.interceptors.response.use(
       error.message = 'Database unreachable. Check your internet connection, DATABASE_URL in .env, and that Supabase is up. See SETUP_GUIDE.md → Troubleshooting.';
       error.isDatabaseUnreachable = true;
     } else if (error.response) {
-      error.message = raw || error.message;
+      const rawStr = String(raw);
+      if (/too many clients|maxclients|max.?client|connection limit|remaining connection slots|pool.*exhausted/i.test(rawStr)) {
+        error.message =
+          'The database hit a temporary connection limit. Wait a few seconds and try again, or ask your host to raise the pool size.';
+      } else if (/quota|exceeded|storage.*full|QuotaExceeded/i.test(rawStr)) {
+        error.message =
+          'Browser storage is full. Clear site data for this app or use another browser tab, then try again.';
+      } else {
+        error.message = raw || error.message;
+      }
     } else if (error.request) {
       error.message = 'No response from server. Ensure the backend is running (npm run dev) and the API URL is correct.';
     }
@@ -676,6 +685,8 @@ export const getExpense = (id) => api.get(`/expenses/${id}`);
 export const createExpense = (data) => api.post('/expenses', data);
 export const updateExpense = (id, data) => api.put(`/expenses/${id}`, data);
 export const deleteExpense = (id) => api.delete(`/expenses/${id}`);
+export const getExpenseCategories = () => api.get('/expenses/categories');
+export const createExpenseCategory = (data) => api.post('/expenses/categories', data);
 export async function getExpenseSummary(params = {}) {
   if (isOffline()) {
     try {

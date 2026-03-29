@@ -7,6 +7,13 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
+// Pool size: Supabase/Neon free tiers often cap concurrent connections; keep default modest (override with DATABASE_POOL_MAX).
+const poolMax = (() => {
+  const n = parseInt(process.env.DATABASE_POOL_MAX || '', 10);
+  if (Number.isFinite(n) && n >= 1 && n <= 50) return n;
+  return 12;
+})();
+
 // Create PostgreSQL connection pool
 const dbPool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -14,7 +21,7 @@ const dbPool = new Pool({
   ssl: process.env.DATABASE_URL?.includes('supabase') || process.env.NODE_ENV === 'production'
     ? { rejectUnauthorized: false } 
     : false,
-  max: 20, // Maximum number of clients in the pool
+  max: poolMax,
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
   connectionTimeoutMillis: 10000, // Increased to 10 seconds for Supabase pooler
 });

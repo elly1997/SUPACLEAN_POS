@@ -142,10 +142,11 @@ router.get('/verify', async (req, res) => {
 
   try {
     const session = await db.get(
-      `SELECT us.*, u.username, u.full_name, u.role, u.branch_id, b.id as branch_table_id, b.name, b.code, b.branch_type
+      `SELECT us.*, u.username, u.full_name, u.role, u.branch_id AS user_branch_id,
+              b.id AS branch_table_id, b.name AS branch_name, b.code AS branch_code, b.branch_type AS branch_branch_type
        FROM user_sessions us
        JOIN users u ON us.user_id = u.id
-       LEFT JOIN branches b ON us.branch_id = b.id
+       LEFT JOIN branches b ON b.id = COALESCE(us.branch_id, u.branch_id)
        WHERE us.session_token = $1 AND us.expires_at > CURRENT_TIMESTAMP AND COALESCE(u.is_active::int, 0) != 0`,
       [sessionToken]
     );
@@ -154,6 +155,9 @@ router.get('/verify', async (req, res) => {
       return res.status(401).json({ error: 'Invalid or expired session' });
     }
 
+    const resolvedBranchId =
+      session.user_branch_id != null ? session.user_branch_id : session.branch_id;
+
     res.json({
       valid: true,
       user: {
@@ -161,12 +165,12 @@ router.get('/verify', async (req, res) => {
         username: session.username,
         fullName: session.full_name,
         role: session.role,
-        branchId: session.branch_id,
-        branch: session.branch_id ? {
-          id: session.branch_table_id ?? session.branch_id,
-          name: session.name,
-          code: session.code,
-          branchType: session.branch_type
+        branchId: resolvedBranchId != null ? resolvedBranchId : null,
+        branch: resolvedBranchId != null ? {
+          id: session.branch_table_id ?? resolvedBranchId,
+          name: session.branch_name,
+          code: session.branch_code,
+          branchType: session.branch_branch_type
         } : null
       }
     });

@@ -39,15 +39,32 @@ export async function getSyncCache(key) {
 /**
  * @param {string} key
  * @param {any} data
+ * @returns {Promise<boolean>} true if stored; false if skipped (quota, private mode, etc.)
  */
 export async function setSyncCache(key, data) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).put({ key, data, syncedAt: new Date().toISOString() });
-    tx.oncomplete = () => { db.close(); resolve(); };
-    tx.onerror = () => reject(tx.error);
-  });
+  try {
+    const db = await openDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put({ key, data, syncedAt: new Date().toISOString() });
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    return true;
+  } catch (err) {
+    const name = err?.name || '';
+    const msg = String(err?.message || err || '');
+    if (name === 'QuotaExceededError' || /quota|exceeded|limit|storage/i.test(msg)) {
+      console.warn('[sync-cache] Browser storage full or blocked; skipping cache for', key);
+    } else {
+      console.warn('[sync-cache] Could not save', key, err);
+    }
+    return false;
+  }
 }
 
 export function isNetworkError(error) {

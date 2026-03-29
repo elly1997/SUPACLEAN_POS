@@ -13,10 +13,11 @@ function authenticate(req, res, next) {
   (async () => {
     try {
       const session = await db.get(
-        `SELECT us.*, u.username, u.full_name, u.role, u.branch_id, u.is_active, b.* 
+        `SELECT us.*, u.username, u.full_name, u.role, u.branch_id AS user_branch_id, u.is_active,
+                b.id AS branch_table_id, b.name AS branch_name, b.code AS branch_code, b.branch_type AS branch_branch_type
          FROM user_sessions us
          JOIN users u ON us.user_id = u.id
-         LEFT JOIN branches b ON us.branch_id = b.id
+         LEFT JOIN branches b ON b.id = COALESCE(us.branch_id, u.branch_id)
          WHERE us.session_token = ? AND us.expires_at > CURRENT_TIMESTAMP AND COALESCE(u.is_active::int, 0) != 0`,
         [sessionToken]
       );
@@ -28,21 +29,25 @@ function authenticate(req, res, next) {
       
       console.log('Auth middleware: Session valid for user:', session.username);
 
+      // Prefer users.branch_id so branch managers keep their branch even if session.branch_id is unset
+      const resolvedBranchId =
+        session.user_branch_id != null ? session.user_branch_id : session.branch_id;
+
       // Attach user and branch info to request
       req.user = {
         id: session.user_id,
         username: session.username,
         fullName: session.full_name,
         role: session.role,
-        branchId: session.branch_id
+        branchId: resolvedBranchId != null ? resolvedBranchId : null
       };
 
-      if (session.branch_id) {
+      if (resolvedBranchId != null) {
         req.branch = {
-          id: session.branch_id,
-          name: session.name,
-          code: session.code,
-          branchType: session.branch_type
+          id: session.branch_table_id ?? resolvedBranchId,
+          name: session.branch_name,
+          code: session.branch_code,
+          branchType: session.branch_branch_type
         };
       }
 

@@ -22,22 +22,33 @@ function openDB() {
 }
 
 export async function addToQueue(method, url, body = null) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const entry = {
-      method: method.toUpperCase(),
-      url,
-      body,
-      headers: null, // Set when replaying from current localStorage token
-      createdAt: new Date().toISOString()
-    };
-    const req = store.add(entry);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-    tx.oncomplete = () => db.close();
-  });
+  try {
+    const db = await openDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const entry = {
+        method: method.toUpperCase(),
+        url,
+        body,
+        headers: null, // Set when replaying from current localStorage token
+        createdAt: new Date().toISOString()
+      };
+      const req = store.add(entry);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+      tx.oncomplete = () => db.close();
+    });
+  } catch (err) {
+    const name = err?.name || '';
+    const msg = String(err?.message || err || '');
+    if (name === 'QuotaExceededError' || /quota|exceeded|limit|storage/i.test(msg)) {
+      console.warn('[offline-queue] Storage full; could not queue action');
+    } else {
+      console.warn('[offline-queue] add failed', err);
+    }
+    return null;
+  }
 }
 
 export async function getQueueLength() {

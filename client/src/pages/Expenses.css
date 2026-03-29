@@ -369,6 +369,49 @@
   color: var(--text-secondary);
 }
 
+.expense-add-category {
+  margin-top: 8px;
+}
+
+.expense-add-category-hint {
+  margin: 0 0 6px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.expense-add-category-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--primary-color);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.expense-add-category-toggle:hover {
+  opacity: 0.85;
+}
+
+.expense-add-category-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.expense-add-category-input {
+  flex: 1;
+  min-width: 160px;
+  padding: 8px 10px;
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+
 @media (max-width: 768px) {
   .summary-cards {
     grid-template-columns: 1fr;

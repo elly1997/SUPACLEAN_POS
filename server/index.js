@@ -66,6 +66,7 @@ require('./database/db');
 require('./database/ensureBankingSchema');
 // Ensure payroll and accounting control tables exist in PostgreSQL
 require('./database/ensurePayrollSchema');
+require('./database/ensureExpenseCategoriesSchema');
 
 // Routes - with error handling
 try {

@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts, getPayrollEmployeesForAdvances, recalculateDailyCashForDate } from '../api/api';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts, getPayrollEmployeesForAdvances, recalculateDailyCashForDate, getExpenseCategories, createExpenseCategory } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
 import './Expenses.css';
 
-const EXPENSE_CATEGORIES = [
+const DEFAULT_EXPENSE_CATEGORIES = [
   'Bank Deposit',
   'Lunch',
   'Breakfast',
@@ -30,7 +30,7 @@ const PAYMENT_SOURCES = [
 
 const Expenses = () => {
   const { showToast, ToastContainer } = useToast();
-  const { hasPermission } = useAuth();
+  const { hasPermission, selectedBranchId } = useAuth();
   const canManageCash = hasPermission?.('canManageCash') ?? false;
   const [expenses, setExpenses] = useState([]);
   const [summary, setSummary] = useState([]);
@@ -54,7 +54,28 @@ const Expenses = () => {
   const [bankAccounts, setBankAccounts] = useState([]);
   const [payrollEmployees, setPayrollEmployees] = useState([]);
   const [savingClosing, setSavingClosing] = useState(false);
+  const [customCategoryRows, setCustomCategoryRows] = useState([]);
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [savingCategory, setSavingCategory] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
+
+  const loadCategories = useCallback(async () => {
+    try {
+      const res = await getExpenseCategories();
+      setCustomCategoryRows(Array.isArray(res.data?.custom) ? res.data.custom : []);
+    } catch {
+      setCustomCategoryRows([]);
+    }
+  }, []);
+
+  const expenseCategoriesForSelect = useMemo(() => {
+    const customNames = (customCategoryRows || []).map((r) => r.name).filter(Boolean);
+    const builtSet = new Set(DEFAULT_EXPENSE_CATEGORIES.map((c) => c.toLowerCase()));
+    const extra = customNames.filter((n) => !builtSet.has(String(n).toLowerCase()));
+    extra.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    return [...DEFAULT_EXPENSE_CATEGORIES, ...extra];
+  }, [customCategoryRows]);
 
   useEffect(() => {
     loadExpenses();
@@ -64,6 +85,32 @@ const Expenses = () => {
     getActiveBankAccounts().then((res) => setBankAccounts(res.data || [])).catch(() => setBankAccounts([]));
     getPayrollEmployeesForAdvances().then((res) => setPayrollEmployees(res.data || [])).catch(() => setPayrollEmployees([]));
   }, []);
+
+  useEffect(() => {
+    loadCategories();
+  }, [selectedBranchId, loadCategories]);
+
+  const handleAddCategory = async () => {
+    const raw = newCategoryName.trim();
+    if (!raw) {
+      showToast('Enter a category name', 'warning');
+      return;
+    }
+    setSavingCategory(true);
+    try {
+      const res = await createExpenseCategory({ name: raw });
+      const name = res.data?.name || raw;
+      await loadCategories();
+      setFormData((f) => ({ ...f, category: name }));
+      setNewCategoryName('');
+      setShowAddCategory(false);
+      showToast('Category added', 'success');
+    } catch (error) {
+      showToast(error.response?.data?.error || error.message || 'Could not add category', 'error');
+    } finally {
+      setSavingCategory(false);
+    }
+  };
 
   const loadExpenses = async () => {
     try {
@@ -208,7 +255,7 @@ const Expenses = () => {
       <div className="page-header">
         <div>
           <h1>📝 Expenses</h1>
-          <p className="subtitle">Track daily business expenses</p>
+          <p className="subtitle">Track daily business expenses. Branch managers can add custom categories for their branch below the category field.</p>
         </div>
         <button 
           onClick={() => setShowForm(!showForm)} 
@@ -298,10 +345,53 @@ const Expenses = () => {
                   required
                 >
                   <option value="">Select category...</option>
-                  {EXPENSE_CATEGORIES.map(cat => (
+                  {expenseCategoriesForSelect.map((cat) => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
                 </select>
+                <div className="expense-add-category">
+                  <p className="expense-add-category-hint">Saves under your branch (no admin required).</p>
+                  {!showAddCategory ? (
+                    <button
+                      type="button"
+                      className="expense-add-category-toggle"
+                      onClick={() => setShowAddCategory(true)}
+                    >
+                      + Add category
+                    </button>
+                  ) : (
+                    <div className="expense-add-category-row">
+                      <input
+                        type="text"
+                        value={newCategoryName}
+                        onChange={(e) => setNewCategoryName(e.target.value)}
+                        placeholder="New category name"
+                        maxLength={120}
+                        className="expense-add-category-input"
+                        aria-label="New expense category name"
+                      />
+                      <button
+                        type="button"
+                        className="btn-secondary btn-small"
+                        disabled={savingCategory}
+                        onClick={handleAddCategory}
+                      >
+                        {savingCategory ? 'Saving…' : 'Save'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-small"
+                        disabled={savingCategory}
+                        onClick={() => {
+                          setShowAddCategory(false);
+                          setNewCategoryName('');
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="form-group">
                 <label>Amount *</label>
