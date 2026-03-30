@@ -56,25 +56,25 @@ function isSalaryAdvanceCategory(category) {
   return String(category || '').trim().toLowerCase() === 'salary advance';
 }
 
-async function upsertLinkedSalaryAdvance({ expenseId, employeeId, date, amount, notes, branchId, req }) {
+async function upsertLinkedSalaryAdvance({ expenseId, employeeId, date, amount, notes, req }) {
   if (!expenseId) return;
   const existing = await db.get('SELECT id FROM salary_advances WHERE source_expense_id = $1', [expenseId]);
   if (!employeeId) {
     throw new Error('employee_id is required for Salary Advance expense category');
   }
   const employee = await db.get(
-    'SELECT id FROM employees WHERE id = $1 AND is_active = TRUE AND ($2::int IS NULL OR branch_id = $2)',
-    [Number(employeeId), branchId]
+    'SELECT id FROM employees WHERE id = $1 AND is_active = TRUE',
+    [Number(employeeId)]
   );
   if (!employee) {
-    throw new Error('Selected employee is not active or not in selected branch');
+    throw new Error('Selected employee is not active');
   }
   if (existing) {
     await db.run(
       `UPDATE salary_advances
-       SET employee_id = $1, advance_date = $2, amount = $3, notes = $4, branch_id = $5
-       WHERE source_expense_id = $6`,
-      [Number(employeeId), date, amount, notes || null, branchId, expenseId]
+       SET employee_id = $1, advance_date = $2, amount = $3, notes = $4, branch_id = NULL
+       WHERE source_expense_id = $5`,
+      [Number(employeeId), date, amount, notes || null, expenseId]
     );
     return;
   }
@@ -86,7 +86,7 @@ async function upsertLinkedSalaryAdvance({ expenseId, employeeId, date, amount, 
       date,
       amount,
       notes || null,
-      branchId,
+      null,
       req.user?.fullName || req.user?.username || 'User',
       expenseId
     ]
@@ -391,7 +391,6 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
         date: expenseDate,
         amount,
         notes: description,
-        branchId,
         req
       });
     }
@@ -494,7 +493,6 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
         date: newDate,
         amount,
         notes: description,
-        branchId,
         req
       });
     } else if (isSalaryAdvanceCategory(existing.category)) {

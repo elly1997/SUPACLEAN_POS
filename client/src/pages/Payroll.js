@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   createPayrollEmployee,
-  getBranches,
   getMonthlyPayroll,
   getPayrollEmployees,
   getPayrollHistory,
@@ -55,7 +54,6 @@ const Payroll = () => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingStaff, setSavingStaff] = useState(false);
-  const [branches, setBranches] = useState([]);
   const tableScrollHandlers = useHorizontalScrollRegion();
   const verificationWrapRef = useRef(null);
 
@@ -64,7 +62,6 @@ const Payroll = () => {
     employee_code: '',
     tin_number: '',
     phone: '',
-    branch_id: '',
     gross_salary: '',
     default_allowances: '',
     default_bonuses: '',
@@ -110,7 +107,6 @@ const Payroll = () => {
     try {
       const calls = [];
       if (canManagePayroll) calls.push(getPayrollEmployees(), getMonthlyPayroll(monthKey), getPayrollHistory({ limit: 24 }));
-      if (canManagePayroll) calls.push(getBranches());
       if (canRecordAdvances) calls.push(getSalaryAdvances({ month: monthKey }));
       const results = await Promise.all(calls);
       let idx = 0;
@@ -120,7 +116,6 @@ const Payroll = () => {
         const h = results[idx++].data || [];
         setPayrollHistory(h);
         if (h.length > 0) setSelectedHistoryMonth((prev) => prev || h[0].month_key);
-        setBranches(results[idx++].data || []);
       }
       if (canRecordAdvances) {
         setAdvances(results[idx++].data || []);
@@ -171,7 +166,6 @@ const Payroll = () => {
         employee_code: '',
         tin_number: '',
         phone: '',
-        branch_id: '',
         gross_salary: '',
         default_allowances: '',
         default_bonuses: '',
@@ -197,8 +191,7 @@ const Payroll = () => {
       gross_salary: Number(emp.gross_salary || 0),
       nssf_enabled: !!emp.nssf_enabled,
       paye_enabled: !!emp.paye_enabled,
-      is_active: !!emp.is_active,
-      branch_id: emp.branch_id != null ? String(emp.branch_id) : ''
+      is_active: !!emp.is_active
     });
   };
 
@@ -388,13 +381,12 @@ const Payroll = () => {
       return;
     }
     const csv = [
-      'Full Name,Employee Code,TIN Number,Phone,Branch,Gross Salary,NSSF,PAYE,Status',
+      'Full Name,Employee Code,TIN Number,Phone,Gross Salary,NSSF,PAYE,Status',
       ...employees.map((e) => [
         `"${String(e.full_name || '').replace(/"/g, '""')}"`,
         `"${String(e.employee_code || '').replace(/"/g, '""')}"`,
         `"${String(e.tin_number || '').replace(/"/g, '""')}"`,
         `"${String(e.phone || '').replace(/"/g, '""')}"`,
-        `"${String(e.branch_name || '').replace(/"/g, '""')}"`,
         Number(e.gross_salary || 0).toFixed(2),
         e.nssf_enabled ? 'Enabled' : 'Disabled',
         e.paye_enabled ? 'Enabled' : 'Disabled',
@@ -485,15 +477,6 @@ const Payroll = () => {
             <input placeholder="Employee code" value={employeeForm.employee_code} onChange={(e) => setEmployeeForm({ ...employeeForm, employee_code: e.target.value })} />
             <input placeholder="TIN number" value={employeeForm.tin_number} onChange={(e) => setEmployeeForm({ ...employeeForm, tin_number: e.target.value })} />
             <input placeholder="Phone" value={employeeForm.phone} onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })} />
-            <select
-              value={employeeForm.branch_id}
-              onChange={(e) => setEmployeeForm({ ...employeeForm, branch_id: e.target.value })}
-            >
-              <option value="">Select branch...</option>
-              {(branches || []).map((b) => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </select>
             <input type="number" required placeholder="Gross salary" value={employeeForm.gross_salary} onChange={(e) => setEmployeeForm({ ...employeeForm, gross_salary: e.target.value })} />
             <input type="number" placeholder="Allowances" value={employeeForm.default_allowances} onChange={(e) => setEmployeeForm({ ...employeeForm, default_allowances: e.target.value })} />
             <input type="number" placeholder="Bonuses" value={employeeForm.default_bonuses} onChange={(e) => setEmployeeForm({ ...employeeForm, default_bonuses: e.target.value })} />
@@ -542,7 +525,6 @@ const Payroll = () => {
                   <th>Employee Code</th>
                   <th>TIN Number</th>
                   <th>Phone</th>
-                  <th>Branch</th>
                   <th className="num">Gross Salary</th>
                   <th>NSSF</th>
                   <th>PAYE</th>
@@ -588,19 +570,6 @@ const Payroll = () => {
                           onChange={(e) => setStaffDraft((p) => ({ ...p, phone: e.target.value }))}
                         />
                       ) : (emp.phone || '-')}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <select
-                          value={staffDraft.branch_id ?? ''}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, branch_id: e.target.value }))}
-                        >
-                          <option value="">Select branch...</option>
-                          {(branches || []).map((b) => (
-                            <option key={b.id} value={b.id}>{b.name}</option>
-                          ))}
-                        </select>
-                      ) : (emp.branch_name || '-')}
                     </td>
                     <td className="num">
                       {editingStaffId === emp.id ? (
@@ -656,12 +625,12 @@ const Payroll = () => {
                 ))}
                 {employees.length === 0 && (
                   <tr>
-                    <td colSpan={10}>{loading ? 'Loading staff...' : 'No staff recorded yet'}</td>
+                    <td colSpan={9}>{loading ? 'Loading staff...' : 'No staff recorded yet'}</td>
                   </tr>
                 )}
                 {employees.length > 0 && filteredEmployees.length === 0 && (
                   <tr>
-                    <td colSpan={10}>No staff matched your search.</td>
+                    <td colSpan={9}>No staff matched your search.</td>
                   </tr>
                 )}
               </tbody>
