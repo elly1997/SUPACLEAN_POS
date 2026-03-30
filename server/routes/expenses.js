@@ -15,16 +15,13 @@ function normalizeExpenseDate(d) {
 
 async function refreshDailyClosingForExpenseDates(branchId, ...dates) {
   if (branchId == null) return;
-  const seen = new Set();
-  for (const d of dates) {
-    const day = normalizeExpenseDate(d);
-    if (!day || seen.has(day)) continue;
-    seen.add(day);
-    try {
-      await cashManagement.refreshUnreconciledDailySummary(day, branchId);
-    } catch (err) {
-      console.error('refreshUnreconciledDailySummary failed:', day, err.message);
-    }
+  const normalized = [...new Set(dates.map(normalizeExpenseDate).filter(Boolean))].sort();
+  if (!normalized.length) return;
+  const anchor = normalized[0];
+  try {
+    await cashManagement.refreshUnreconciledSummariesFromDate(branchId, anchor);
+  } catch (err) {
+    console.error('refreshUnreconciledSummariesFromDate failed:', anchor, err.message);
   }
 }
 
@@ -412,7 +409,7 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
     );
 
     await writeExpenseAudit('create', result.lastID, null, expense, req.body?.update_reason || null, req);
-    const refresh = await cashManagement.refreshUnreconciledDailySummary(expenseDate, branchId);
+    const { expenseDayRefresh: refresh } = await cashManagement.refreshUnreconciledSummariesFromDate(branchId, expenseDate);
     res.status(201).json({
       ...expense,
       daily_closing_updated: !refresh.skipped,

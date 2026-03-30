@@ -454,10 +454,24 @@ router.get('/:id/orders', async (req, res) => {
   const { id } = req.params;
   try {
     const rows = await db.all(
-      `SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone
+      `SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
+              COALESCE(tx.total_received, 0) as receipt_total_received,
+              COALESCE(tx.payments_count, 0) as receipt_payments_count,
+              tx.last_payment_at as receipt_last_payment_at
        FROM orders o
        JOIN services s ON o.service_id = s.id
        JOIN customers c ON o.customer_id = c.id
+       LEFT JOIN (
+         SELECT ro.receipt_number,
+                ro.customer_id,
+                SUM(t.amount) as total_received,
+                COUNT(t.id) as payments_count,
+                MAX(t.transaction_date) as last_payment_at
+         FROM orders ro
+         JOIN transactions t ON t.order_id = ro.id
+         WHERE t.transaction_type = 'payment_received'
+         GROUP BY ro.receipt_number, ro.customer_id
+       ) tx ON tx.receipt_number = o.receipt_number AND tx.customer_id = o.customer_id
        WHERE o.customer_id = ?
        ORDER BY o.order_date DESC`,
       [id]

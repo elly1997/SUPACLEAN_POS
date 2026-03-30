@@ -202,16 +202,25 @@ const Orders = () => {
     e.preventDefault();
     if (!selectedOrderForPayment) return;
 
-    const balanceDue = roundMoney(selectedOrderForPayment.total_amount - (selectedOrderForPayment.paid_amount || 0));
+    const receiptOrders = orders.filter((o) => o.receipt_number === selectedOrderForPayment.receipt_number);
+    const receiptTotal = roundMoney(
+      (receiptOrders.length > 0 ? receiptOrders : [selectedOrderForPayment]).reduce(
+        (sum, item) => sum + (parseFloat(item.total_amount) || 0),
+        0
+      )
+    );
+    const receiptPaid = roundMoney(
+      (receiptOrders.length > 0 ? receiptOrders : [selectedOrderForPayment]).reduce(
+        (sum, item) => sum + (parseFloat(item.paid_amount) || 0),
+        0
+      )
+    );
+    const balanceDue = roundMoney(receiptTotal - receiptPaid);
     const payment = roundMoney(parseFloat(paymentAmount) || 0);
     const tol = 0.01;
     
     if (payment <= 0) {
       showToast('Payment amount must be greater than 0', 'error');
-      return;
-    }
-    if (payment < balanceDue - tol) {
-      showToast(`Payment must equal the balance due of TSh ${balanceDue.toLocaleString()}. Partial payments are not allowed.`, 'error');
       return;
     }
     if (payment > balanceDue + tol) {
@@ -221,29 +230,12 @@ const Orders = () => {
 
     try {
       setReceivingPayment(true);
-      // Find all orders with the same receipt number
-      const receiptOrders = orders.filter(o => o.receipt_number === selectedOrderForPayment.receipt_number);
-      
-      if (receiptOrders.length > 1) {
-        // Distribute payment proportionally across all items
-        const totalAmount = receiptOrders.reduce((sum, item) => sum + (parseFloat(item.total_amount) || 0), 0);
-        const paymentPromises = receiptOrders.map(item => {
-          const itemPayment = (payment * (item.total_amount / totalAmount));
-          return receivePayment(item.id, {
-            payment_amount: itemPayment,
-            payment_method: paymentMethod,
-            notes: `Payment received for receipt ${selectedOrderForPayment.receipt_number}`
-          });
-        });
-        await Promise.all(paymentPromises);
-      } else {
-        // Single item payment
-        await receivePayment(selectedOrderForPayment.id, {
-          payment_amount: payment,
-          payment_method: paymentMethod,
-          notes: `Payment received for order ${selectedOrderForPayment.receipt_number}`
-        });
-      }
+      // Backend applies payment at receipt level; send a single request.
+      await receivePayment(selectedOrderForPayment.id, {
+        payment_amount: payment,
+        payment_method: paymentMethod,
+        notes: `Payment received for receipt ${selectedOrderForPayment.receipt_number}`
+      });
       
       showToast(`Payment of TSh ${payment.toLocaleString()} received successfully!`, 'success');
       setShowReceivePaymentModal(false);
@@ -1290,7 +1282,13 @@ Phone: ${receiptGroup.customer_phone}
       )}
 
       {/* Receive Payment Modal */}
-      {showReceivePaymentModal && selectedOrderForPayment && (
+      {showReceivePaymentModal && selectedOrderForPayment && (() => {
+        const receiptOrders = orders.filter((o) => o.receipt_number === selectedOrderForPayment.receipt_number);
+        const source = receiptOrders.length > 0 ? receiptOrders : [selectedOrderForPayment];
+        const receiptTotal = roundMoney(source.reduce((sum, item) => sum + (parseFloat(item.total_amount) || 0), 0));
+        const receiptPaid = roundMoney(source.reduce((sum, item) => sum + (parseFloat(item.paid_amount) || 0), 0));
+        const balanceDue = roundMoney(receiptTotal - receiptPaid);
+        return (
         <div className="modal-overlay" onClick={() => setShowReceivePaymentModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -1310,24 +1308,24 @@ Phone: ${receiptGroup.customer_phone}
                   </div>
                   <div className="payment-item">
                     <span>Total Amount:</span>
-                    <strong>TSh {selectedOrderForPayment.total_amount.toLocaleString()}</strong>
+                    <strong>TSh {receiptTotal.toLocaleString()}</strong>
                   </div>
                   <div className="payment-item">
                     <span>Amount Paid:</span>
-                    <strong>TSh {(selectedOrderForPayment.paid_amount || 0).toLocaleString()}</strong>
+                    <strong>TSh {receiptPaid.toLocaleString()}</strong>
                   </div>
                   <div className="payment-item balance-due">
                     <span>Balance Due:</span>
-                    <strong>TSh {(selectedOrderForPayment.total_amount - (selectedOrderForPayment.paid_amount || 0)).toLocaleString()}</strong>
+                    <strong>TSh {balanceDue.toLocaleString()}</strong>
                   </div>
                 </div>
                 <div className="form-group">
-                  <label>Payment Amount * (must equal balance due)</label>
+                  <label>Payment Amount * (full or partial, up to balance due)</label>
                   <input
                     type="number"
                     value={paymentAmount}
                     onChange={(e) => setPaymentAmount(e.target.value)}
-                    placeholder={`Enter exactly TSh ${(selectedOrderForPayment.total_amount - (selectedOrderForPayment.paid_amount || 0)).toLocaleString()}`}
+                    placeholder={`Enter up to TSh ${balanceDue.toLocaleString()}`}
                     min="0"
                     step="0.01"
                     required
@@ -1366,7 +1364,8 @@ Phone: ${receiptGroup.customer_phone}
             </form>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

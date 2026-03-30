@@ -189,6 +189,34 @@ async function refreshUnreconciledDailySummary(date, branchId) {
   return { skipped: false, row: persisted };
 }
 
+/**
+ * After a backdated expense (or any change to an earlier day), recompute this day and every
+ * later unreconciled day so opening/closing chains stay correct on Pending reconciliations.
+ */
+async function refreshUnreconciledSummariesFromDate(branchId, startDate) {
+  const day = String(startDate || '').trim().slice(0, 10);
+  if (branchId == null || !day || day.length < 10) {
+    return { expenseDayRefresh: { skipped: true, reason: 'invalid' }, daysRefreshed: 0 };
+  }
+  const rowDates = await db.all(
+    `SELECT date::text AS d FROM daily_cash_summaries
+     WHERE branch_id = ? AND date >= ?::date AND COALESCE(is_reconciled, FALSE) = FALSE
+     ORDER BY date ASC`,
+    [branchId, day]
+  );
+  const unique = new Set([day]);
+  for (const r of rowDates || []) {
+    if (r?.d) unique.add(String(r.d).slice(0, 10));
+  }
+  const sorted = [...unique].sort();
+  let expenseDayRefresh = null;
+  for (const d of sorted) {
+    const res = await refreshUnreconciledDailySummary(d, branchId);
+    if (d === day) expenseDayRefresh = res;
+  }
+  return { expenseDayRefresh: expenseDayRefresh || { skipped: false }, daysRefreshed: sorted.length };
+}
+
 // Get daily cash summary by date (cashiers, managers, admins can view)
 router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { date } = req.params;
@@ -887,3 +915,4 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
 
 module.exports = router;
 module.exports.refreshUnreconciledDailySummary = refreshUnreconciledDailySummary;
+module.exports.refreshUnreconciledSummariesFromDate = refreshUnreconciledSummariesFromDate;

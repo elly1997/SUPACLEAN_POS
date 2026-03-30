@@ -28,6 +28,15 @@ const PAYMENT_SOURCES = [
   { value: 'mpesa', label: '📱 M-Pesa' }
 ];
 
+/** Local calendar YYYY-MM-DD (avoid UTC drift from toISOString() for Tanzania / cash dates). */
+function localCalendarDateYMD() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 const Expenses = () => {
   const { showToast, ToastContainer } = useToast();
   const { hasPermission, selectedBranchId } = useAuth();
@@ -38,7 +47,7 @@ const Expenses = () => {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({
-    date: new Date().toISOString().split('T')[0],
+    date: localCalendarDateYMD(),
     category: '',
     amount: '',
     payment_source: 'cash',
@@ -49,7 +58,7 @@ const Expenses = () => {
     bank_name: '',
     employee_id: ''
   });
-  const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
+  const [filterDate, setFilterDate] = useState(() => localCalendarDateYMD());
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [payrollEmployees, setPayrollEmployees] = useState([]);
@@ -191,9 +200,10 @@ const Expenses = () => {
 
   const handleEdit = (expense) => {
     const hasOtherBank = expense.category === 'Bank Deposit' && !expense.bank_account_id && (expense.deposit_bank_name || expense.bank_name);
+    const expenseDateStr = expense.date != null ? String(expense.date).slice(0, 10) : filterDate;
     setEditingId(expense.id);
     setFormData({
-      date: expense.date,
+      date: expenseDateStr,
       category: expense.category,
       amount: expense.amount,
       payment_source: expense.payment_source,
@@ -222,7 +232,7 @@ const Expenses = () => {
 
   const resetForm = () => {
     setFormData({
-      date: new Date().toISOString().split('T')[0],
+      date: filterDate,
       category: '',
       amount: '',
       payment_source: 'cash',
@@ -235,6 +245,27 @@ const Expenses = () => {
     });
     setEditingId(null);
     setShowForm(false);
+  };
+
+  const handleToggleAddForm = () => {
+    if (showForm) {
+      resetForm();
+      return;
+    }
+    setEditingId(null);
+    setFormData({
+      date: filterDate,
+      category: '',
+      amount: '',
+      payment_source: 'cash',
+      description: '',
+      receipt_number: '',
+      bank_account_id: '',
+      deposit_reference_number: '',
+      bank_name: '',
+      employee_id: ''
+    });
+    setShowForm(true);
   };
 
   const totalBySource = {
@@ -258,7 +289,7 @@ const Expenses = () => {
           <p className="subtitle">Track daily business expenses. Branch managers can add custom categories for their branch below the category field.</p>
         </div>
         <button 
-          onClick={() => setShowForm(!showForm)} 
+          onClick={handleToggleAddForm} 
           className="btn-primary"
           type="button"
         >
@@ -274,13 +305,17 @@ const Expenses = () => {
 
       {/* Date Filter */}
       <div className="filter-section" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px' }}>
-        <label>View Expenses for:</label>
-        <input
-          type="date"
-          value={filterDate}
-          onChange={(e) => setFilterDate(e.target.value)}
-          className="date-filter"
-        />
+        <div className="filter-date-block">
+          <label htmlFor="expenses-filter-date">View / post expenses for:</label>
+          <input
+            id="expenses-filter-date"
+            type="date"
+            value={filterDate}
+            onChange={(e) => setFilterDate(e.target.value)}
+            className="date-filter"
+          />
+          <p className="filter-date-hint">Choosing a date here loads that day’s list and sets the default <strong>Expense date</strong> when you add a new row. Daily closing uses the date in the form.</p>
+        </div>
         {canManageCash && (
           <button
             type="button"
@@ -322,13 +357,14 @@ const Expenses = () => {
           <form onSubmit={handleSubmit}>
             <div className="form-grid">
               <div className="form-group">
-                <label>Date *</label>
+                <label>Expense date * (cash & reports)</label>
                 <input
                   type="date"
                   value={formData.date}
                   onChange={(e) => setFormData({ ...formData, date: e.target.value })}
                   required
                 />
+                <small className="form-hint-muted">This calendar day receives the amount in Cash Management and pending reconciliations.</small>
               </div>
               <div className="form-group">
                 <label>Category *</label>
