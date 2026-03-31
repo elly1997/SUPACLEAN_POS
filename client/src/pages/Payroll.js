@@ -60,7 +60,6 @@ const Payroll = () => {
   const [employeeForm, setEmployeeForm] = useState({
     full_name: '',
     employee_code: '',
-    tin_number: '',
     phone: '',
     gross_salary: '',
     default_allowances: '',
@@ -138,9 +137,8 @@ const Payroll = () => {
     return employees.filter((e) => {
       const fullName = String(e.full_name || '').toLowerCase();
       const code = String(e.employee_code || '').toLowerCase();
-      const tin = String(e.tin_number || '').toLowerCase();
       const phone = String(e.phone || '').toLowerCase();
-      return fullName.includes(q) || code.includes(q) || tin.includes(q) || phone.includes(q);
+      return fullName.includes(q) || code.includes(q) || phone.includes(q);
     });
   }, [employees, staffSearch]);
   const totalEmployees = employees.length;
@@ -153,6 +151,7 @@ const Payroll = () => {
     try {
       await createPayrollEmployee({
         ...employeeForm,
+        tin_number: employeeForm.employee_code || null,
         gross_salary: Number(employeeForm.gross_salary || 0),
         default_allowances: Number(employeeForm.default_allowances || 0),
         default_bonuses: Number(employeeForm.default_bonuses || 0),
@@ -164,7 +163,6 @@ const Payroll = () => {
       setEmployeeForm({
         full_name: '',
         employee_code: '',
-        tin_number: '',
         phone: '',
         gross_salary: '',
         default_allowances: '',
@@ -186,7 +184,6 @@ const Payroll = () => {
     setStaffDraft({
       full_name: emp.full_name || '',
       employee_code: emp.employee_code || '',
-      tin_number: emp.tin_number || '',
       phone: emp.phone || '',
       gross_salary: Number(emp.gross_salary || 0),
       nssf_enabled: !!emp.nssf_enabled,
@@ -204,7 +201,10 @@ const Payroll = () => {
     if (!editingStaffId) return;
     setSavingStaff(true);
     try {
-      await updatePayrollEmployee(editingStaffId, staffDraft);
+      await updatePayrollEmployee(editingStaffId, {
+        ...staffDraft,
+        tin_number: staffDraft.employee_code || null
+      });
       showToast('Staff details updated', 'success');
       cancelEditStaff();
       load();
@@ -381,11 +381,10 @@ const Payroll = () => {
       return;
     }
     const csv = [
-      'Full Name,Employee Code,TIN Number,Phone,Gross Salary,NSSF,PAYE,Status',
+      'Full Name,Employee Code,Phone,Gross Salary,NSSF,PAYE,Status',
       ...employees.map((e) => [
         `"${String(e.full_name || '').replace(/"/g, '""')}"`,
         `"${String(e.employee_code || '').replace(/"/g, '""')}"`,
-        `"${String(e.tin_number || '').replace(/"/g, '""')}"`,
         `"${String(e.phone || '').replace(/"/g, '""')}"`,
         Number(e.gross_salary || 0).toFixed(2),
         e.nssf_enabled ? 'Enabled' : 'Disabled',
@@ -406,6 +405,8 @@ const Payroll = () => {
       })
     );
   };
+
+  const stopDragBubbling = (e) => e.stopPropagation();
 
   const scrollVerificationX = (delta) => {
     const el = verificationWrapRef.current;
@@ -475,17 +476,16 @@ const Payroll = () => {
           <form onSubmit={submitEmployee} className="payroll-form-grid">
             <input required placeholder="Full name" value={employeeForm.full_name} onChange={(e) => setEmployeeForm({ ...employeeForm, full_name: e.target.value })} />
             <input placeholder="Employee code" value={employeeForm.employee_code} onChange={(e) => setEmployeeForm({ ...employeeForm, employee_code: e.target.value })} />
-            <input placeholder="TIN number" value={employeeForm.tin_number} onChange={(e) => setEmployeeForm({ ...employeeForm, tin_number: e.target.value })} />
             <input placeholder="Phone" value={employeeForm.phone} onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })} />
             <input type="number" required placeholder="Gross salary" value={employeeForm.gross_salary} onChange={(e) => setEmployeeForm({ ...employeeForm, gross_salary: e.target.value })} />
             <input type="number" placeholder="Allowances" value={employeeForm.default_allowances} onChange={(e) => setEmployeeForm({ ...employeeForm, default_allowances: e.target.value })} />
             <input type="number" placeholder="Bonuses" value={employeeForm.default_bonuses} onChange={(e) => setEmployeeForm({ ...employeeForm, default_bonuses: e.target.value })} />
             <input type="number" placeholder="Other deductions" value={employeeForm.default_other_deductions} onChange={(e) => setEmployeeForm({ ...employeeForm, default_other_deductions: e.target.value })} />
             <div className="payroll-toggle-wrap">
-              <label><input type="checkbox" checked={employeeForm.nssf_enabled} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_enabled: e.target.checked })} /> NSSF</label>
+              <label><input type="checkbox" checked={employeeForm.nssf_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_enabled: e.target.checked })} /> NSSF</label>
               <input type="number" min="0" max="100" step="0.01" placeholder="NSSF employee %" value={employeeForm.nssf_employee_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employee_rate: e.target.value })} />
               <input type="number" min="0" max="100" step="0.01" placeholder="NSSF employer %" value={employeeForm.nssf_employer_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employer_rate: e.target.value })} />
-              <label><input type="checkbox" checked={employeeForm.paye_enabled} onChange={(e) => setEmployeeForm({ ...employeeForm, paye_enabled: e.target.checked })} /> PAYE</label>
+              <label><input type="checkbox" checked={employeeForm.paye_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, paye_enabled: e.target.checked })} /> PAYE</label>
             </div>
             <button className="btn-primary payroll-submit-btn" type="submit">Add employee</button>
           </form>
@@ -523,7 +523,6 @@ const Payroll = () => {
                 <tr>
                   <th>Full Name</th>
                   <th>Employee Code</th>
-                  <th>TIN Number</th>
                   <th>Phone</th>
                   <th className="num">Gross Salary</th>
                   <th>NSSF</th>
@@ -557,15 +556,6 @@ const Payroll = () => {
                       {editingStaffId === emp.id ? (
                         <input
                           type="text"
-                          value={staffDraft.tin_number || ''}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, tin_number: e.target.value }))}
-                        />
-                      ) : (emp.tin_number || '-')}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="text"
                           value={staffDraft.phone || ''}
                           onChange={(e) => setStaffDraft((p) => ({ ...p, phone: e.target.value }))}
                         />
@@ -585,6 +575,8 @@ const Payroll = () => {
                         <input
                           type="checkbox"
                           checked={!!staffDraft.nssf_enabled}
+                          onMouseDown={stopDragBubbling}
+                          onClick={stopDragBubbling}
                           onChange={(e) => setStaffDraft((p) => ({ ...p, nssf_enabled: e.target.checked }))}
                         />
                       ) : (emp.nssf_enabled ? 'Enabled' : 'Disabled')}
@@ -594,6 +586,8 @@ const Payroll = () => {
                         <input
                           type="checkbox"
                           checked={!!staffDraft.paye_enabled}
+                          onMouseDown={stopDragBubbling}
+                          onClick={stopDragBubbling}
                           onChange={(e) => setStaffDraft((p) => ({ ...p, paye_enabled: e.target.checked }))}
                         />
                       ) : (emp.paye_enabled ? 'Enabled' : 'Disabled')}
@@ -705,13 +699,13 @@ const Payroll = () => {
                     <td className="num"><input type="number" value={r.gross_salary || 0} onChange={(e) => updateLineField(r.employee_id, 'gross_salary', e.target.value)} /></td>
                     <td className="num"><input type="number" value={r.allowances || 0} onChange={(e) => updateLineField(r.employee_id, 'allowances', e.target.value)} /></td>
                     <td className="num"><input type="number" value={r.bonuses || 0} onChange={(e) => updateLineField(r.employee_id, 'bonuses', e.target.value)} /></td>
-                    <td><input type="checkbox" checked={r.nssf_enabled !== false} onChange={(e) => updateLineField(r.employee_id, 'nssf_enabled', e.target.checked, false)} /></td>
+                    <td><input type="checkbox" checked={r.nssf_enabled !== false} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => updateLineField(r.employee_id, 'nssf_enabled', e.target.checked, false)} /></td>
                     <td className="num"><input type="number" min="0" max="100" step="0.01" value={r.nssf_employee_rate ?? 10} onChange={(e) => updateLineField(r.employee_id, 'nssf_employee_rate', e.target.value)} /></td>
                     <td className="num"><input type="number" min="0" max="100" step="0.01" value={r.nssf_employer_rate ?? 10} onChange={(e) => updateLineField(r.employee_id, 'nssf_employer_rate', e.target.value)} /></td>
                     <td className="num">{Number(r.nssf_amount || 0).toLocaleString()}</td>
                     <td className="num">{Number(r.employer_nssf_amount || 0).toLocaleString()}</td>
                     <td className="num">{Number(r.taxable_income || 0).toLocaleString()}</td>
-                    <td><input type="checkbox" checked={r.paye_enabled !== false} onChange={(e) => updateLineField(r.employee_id, 'paye_enabled', e.target.checked, false)} /></td>
+                    <td><input type="checkbox" checked={r.paye_enabled !== false} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => updateLineField(r.employee_id, 'paye_enabled', e.target.checked, false)} /></td>
                     <td className="num">{Number(r.paye_estimate || 0).toLocaleString()}</td>
                     <td className="num">{Number(r.salary_advances || 0).toLocaleString()}</td>
                     <td className="num"><input type="number" value={r.other_deductions || 0} onChange={(e) => updateLineField(r.employee_id, 'other_deductions', e.target.value)} /></td>

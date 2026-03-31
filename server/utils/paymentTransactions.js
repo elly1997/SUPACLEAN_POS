@@ -12,19 +12,21 @@ const db = require('../database/query');
  * @param {number} paymentAmount - Payment amount
  * @param {string} paymentMethod - Payment method
  * @param {string} createdBy - User who created the transaction
+ * @param {string|null} paymentTimestampIso - Optional ISO timestamp for transaction_date
  * @returns {Promise<number>} Transaction ID
  */
-async function recordPaymentTransaction(order, paymentAmount, paymentMethod, createdBy = 'System') {
+async function recordPaymentTransaction(order, paymentAmount, paymentMethod, createdBy = 'System', paymentTimestampIso = null) {
   const result = await db.run(
     `INSERT INTO transactions 
-     (order_id, transaction_type, amount, payment_method, description, created_by, branch_id)
-     VALUES ($1, 'payment_received', $2, $3, $4, $5, $6)
+     (order_id, transaction_type, amount, payment_method, description, transaction_date, created_by, branch_id)
+     VALUES ($1, 'payment_received', $2, $3, $4, COALESCE($5::timestamp, CURRENT_TIMESTAMP), $6, $7)
      RETURNING id`,
     [
       order.id,
       paymentAmount,
       paymentMethod || 'cash',
       `Payment for order ${order.receipt_number || order.id}`,
+      paymentTimestampIso,
       createdBy,
       order.branch_id != null ? order.branch_id : null
     ]

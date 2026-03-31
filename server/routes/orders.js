@@ -16,6 +16,7 @@ const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter
 const { validatePayment } = require('../utils/paymentValidation');
 const { recordPaymentTransaction, logPaymentChange } = require('../utils/paymentTransactions');
 const { checkDuplicatePayment } = require('../utils/paymentTransactions');
+const cashManagement = require('./cashManagement');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 const fs = require('fs');
@@ -31,6 +32,14 @@ const upload = multer({ dest: uploadsDir });
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
 const roundFigure = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x));
+
+function buildPaymentTimestampIso(paymentDate) {
+  const todayIso = new Date().toISOString();
+  const datePart = typeof paymentDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(paymentDate.trim())
+    ? paymentDate.trim()
+    : todayIso.slice(0, 10);
+  return `${datePart}T${todayIso.slice(11, 19)}.000Z`;
+}
 
 function buildPerOrderPaidAllocations(orders, receiptPaidAmount) {
   const sorted = [...orders].sort((a, b) => Number(a.id) - Number(b.id));
@@ -1006,7 +1015,7 @@ router.put('/:id/estimated-collection-date', requireBranchAccess(), requirePermi
 // This endpoint handles ALL items on a receipt together - collects the entire receipt, not individual items
 router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { receiptNumber } = req.params;
-  const { payment_amount, payment_method = 'cash', notes } = req.body;
+  const { payment_amount, payment_method = 'cash', payment_date, notes } = req.body;
   
   try {
     // Get ALL orders for this receipt number (not just one) - case-insensitive
@@ -1127,7 +1136,8 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
         }
         
         // Check for duplicate payment using first order ID
-        const timestamp = new Date().toISOString();
+        const paymentTimestampIso = buildPaymentTimestampIso(payment_date);
+        const timestamp = paymentTimestampIso;
         const isDuplicate = await checkDuplicatePayment(firstOrder.id, paymentAmount, timestamp);
         
         if (isDuplicate) {
@@ -1145,8 +1155,12 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
           branch_id: firstOrder.branch_id || null
         };
         
-        const transactionId = await recordPaymentTransaction(orderObj, paymentAmount, payment_method, 'Cashier');
+        const transactionId = await recordPaymentTransaction(orderObj, paymentAmount, payment_method, 'Cashier', paymentTimestampIso);
         console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${receiptNumber}`);
+        const paidDate = paymentTimestampIso.slice(0, 10);
+        if (orderObj.branch_id != null) {
+          await cashManagement.refreshDailySummaryForce(paidDate, orderObj.branch_id);
+        }
         
         // Log payment change to audit log (for first order, but represents entire receipt)
         logPaymentChange({
@@ -1188,7 +1202,7 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
 // Receive payment for an order (without collecting) - uses RECEIPT-level totals for multi-item receipts
 router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { id } = req.params;
-  const { payment_amount, payment_method = 'cash', notes } = req.body;
+  const { payment_amount, payment_method = 'cash', payment_date, notes } = req.body;
 
   if (!payment_amount || payment_amount <= 0) {
     return res.status(400).json({ error: 'Payment amount must be greater than 0' });
@@ -1231,7 +1245,8 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
     }
 
     // Check for duplicate payment (use first order id)
-    const timestamp = new Date().toISOString();
+    const paymentTimestampIso = buildPaymentTimestampIso(payment_date);
+    const timestamp = paymentTimestampIso;
     const isDuplicate = await checkDuplicatePayment(allOrders[0].id, paymentAmount, timestamp);
     
     if (isDuplicate) {
@@ -1244,8 +1259,12 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
       receipt_number: order.receipt_number,
       branch_id: order.branch_id || null
     };
-    const transactionId = await recordPaymentTransaction(orderObj, paymentAmount, payment_method, 'Cashier');
+    const transactionId = await recordPaymentTransaction(orderObj, paymentAmount, payment_method, 'Cashier', paymentTimestampIso);
     console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${order.receipt_number} (${allOrders.length} items)`);
+    const paidDate = paymentTimestampIso.slice(0, 10);
+    if (orderObj.branch_id != null) {
+      await cashManagement.refreshDailySummaryForce(paidDate, orderObj.branch_id);
+    }
     
     // Apply payment across ALL orders on the receipt (supports partial payments).
     const newReceiptPaid = roundFigure(receiptPaid + paymentAmount);

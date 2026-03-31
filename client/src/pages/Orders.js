@@ -13,6 +13,7 @@ import { formatCustomerReceiptId } from '../utils/receiptId';
 import './Orders.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
+const todayYmd = () => new Date().toISOString().slice(0, 10);
 const ORDERS_PAGE_SIZE = 50;
 
 const ORDERS_EXPORT_COLUMNS = [
@@ -45,6 +46,7 @@ const Orders = () => {
   const [selectedOrderForPayment, setSelectedOrderForPayment] = useState(null);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [paymentDate, setPaymentDate] = useState(todayYmd());
   const [receivingPayment, setReceivingPayment] = useState(false);
   const [sendingReminder, setSendingReminder] = useState(null);
   const [expandedReceipts, setExpandedReceipts] = useState(new Set()); // Track which receipts are expanded
@@ -234,6 +236,7 @@ const Orders = () => {
       await receivePayment(selectedOrderForPayment.id, {
         payment_amount: payment,
         payment_method: paymentMethod,
+        payment_date: paymentDate,
         notes: `Payment received for receipt ${selectedOrderForPayment.receipt_number}`
       });
       
@@ -241,6 +244,7 @@ const Orders = () => {
       setShowReceivePaymentModal(false);
       setSelectedOrderForPayment(null);
       setPaymentAmount('');
+      setPaymentDate(todayYmd());
       loadOrders(false); // Reload orders to show updated payment info
     } catch (err) {
       showToast('Error receiving payment: ' + (err.response?.data?.error || err.message), 'error');
@@ -943,7 +947,7 @@ Phone: ${receiptGroup.customer_phone}
                     </>
                   ) : null}
                   {balance > 0 && (
-                    <button className="btn-small btn-primary" onClick={() => { setSelectedOrderForPayment({ ...receiptGroup.items[0], total_amount: receiptGroup.total_amount, paid_amount: receiptGroup.paid_amount }); setPaymentAmount(balance.toString()); setShowReceivePaymentModal(true); }}>💰 Pay</button>
+                    <button className="btn-small btn-primary" onClick={() => { setSelectedOrderForPayment({ ...receiptGroup.items[0], total_amount: receiptGroup.total_amount, paid_amount: receiptGroup.paid_amount }); setPaymentAmount(balance.toString()); setPaymentDate(todayYmd()); setShowReceivePaymentModal(true); }}>💰 Pay</button>
                   )}
                   <button className="btn-small btn-secondary" onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}>View</button>
                 </div>
@@ -1188,6 +1192,7 @@ Phone: ${receiptGroup.customer_phone}
                                   paid_amount: receiptGroup.paid_amount
                                 });
                                 setPaymentAmount(balance.toString());
+                                setPaymentDate(todayYmd());
                                 setShowReceivePaymentModal(true);
                               }}
                               style={{ marginTop: '4px' }}
@@ -1345,6 +1350,15 @@ Phone: ${receiptGroup.customer_phone}
                     <option value="bank_transfer">Bank Transfer</option>
                   </select>
                 </div>
+                <div className="form-group">
+                  <label>Payment Date *</label>
+                  <input
+                    type="date"
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    required
+                  />
+                </div>
                 <div className="info-notice" style={{ marginTop: '15px', padding: '10px', background: 'var(--primary-light)', borderRadius: '8px', fontSize: '14px' }}>
                   ℹ️ This will record the payment and update the order's payment status. The order status will remain unchanged.
                 </div>
@@ -1354,6 +1368,7 @@ Phone: ${receiptGroup.customer_phone}
                   setShowReceivePaymentModal(false);
                   setSelectedOrderForPayment(null);
                   setPaymentAmount('');
+                  setPaymentDate(todayYmd());
                 }}>
                   Cancel
                 </button>

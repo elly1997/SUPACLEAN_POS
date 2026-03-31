@@ -13,6 +13,7 @@ import './Collection.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
 const roundFigure = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x));
+const todayYmd = () => new Date().toISOString().slice(0, 10);
 
 function getReceiptTotals(order, allReceiptOrders) {
   const items = (allReceiptOrders && allReceiptOrders.length > 0) ? allReceiptOrders : (order ? [order] : []);
@@ -48,6 +49,7 @@ const Collection = () => {
   const [showReceivePaymentModal, setShowReceivePaymentModal] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [paymentDate, setPaymentDate] = useState(todayYmd());
   const [collecting, setCollecting] = useState(false);
   const [receivingPayment, setReceivingPayment] = useState(false);
   const [customerSearchResults, setCustomerSearchResults] = useState([]);
@@ -438,6 +440,7 @@ const Collection = () => {
     // If there's a balance due, show payment modal. Cashier records balance due (not full receipt total).
     if (balanceDue > 0) {
       setPaymentAmount(String(balanceDue));
+      setPaymentDate(todayYmd());
       setShowPaymentModal(true);
       return;
     }
@@ -475,6 +478,7 @@ const Collection = () => {
       setAllReceiptOrders([]);
       setShowPaymentModal(false);
       setPaymentAmount('');
+      setPaymentDate(todayYmd());
       loadQueue();
       if (searchInputRef.current) {
         searchInputRef.current.focus();
@@ -505,7 +509,8 @@ const Collection = () => {
 
     await confirmCollect({
       payment_amount: payment,
-      payment_method: paymentMethod
+      payment_method: paymentMethod,
+      payment_date: paymentDate
     });
   };
 
@@ -523,6 +528,7 @@ const Collection = () => {
     }
     // Pre-fill with balance due. Cashier may receive full or partial amount.
     setPaymentAmount(String(balanceDue));
+    setPaymentDate(todayYmd());
     setShowReceivePaymentModal(true);
   };
 
@@ -549,6 +555,7 @@ const Collection = () => {
       const res = await receivePayment(order.id, {
         payment_amount: payment,
         payment_method: paymentMethod,
+        payment_date: paymentDate,
         notes: `Payment received for receipt ${order.receipt_number} (${itemCount} ${itemCount === 1 ? 'item' : 'items'})`
       });
       
@@ -563,6 +570,7 @@ const Collection = () => {
       
       setShowReceivePaymentModal(false);
       setPaymentAmount('');
+      setPaymentDate(todayYmd());
       loadQueue(); // Refresh queue
     } catch (err) {
       showToast('Error receiving payment: ' + (err.response?.data?.error || err.message), 'error');
@@ -1534,6 +1542,15 @@ Thank you for choosing SUPACLEAN!
                     <option value="bank_transfer">Bank Transfer</option>
                   </select>
                 </div>
+                <div className="form-group">
+                  <label>Payment Date *</label>
+                  <input
+                    type="date"
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    required
+                  />
+                </div>
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn-secondary" onClick={() => setShowPaymentModal(false)}>
@@ -1601,6 +1618,15 @@ Thank you for choosing SUPACLEAN!
                     <option value="card">Card</option>
                     <option value="bank_transfer">Bank Transfer</option>
                   </select>
+                </div>
+                <div className="form-group">
+                  <label>Payment Date *</label>
+                  <input
+                    type="date"
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    required
+                  />
                 </div>
                 <div className="info-notice" style={{ marginTop: '15px', padding: '10px', background: 'var(--primary-light)', borderRadius: '8px', fontSize: '14px' }}>
                   ℹ️ This will record the payment but will not mark the order as collected. The order status will remain unchanged.

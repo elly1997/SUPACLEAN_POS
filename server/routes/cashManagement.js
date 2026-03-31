@@ -25,14 +25,14 @@ async function getExpectedOpeningBalance(date, branchId) {
   return row ? num(row.closing_balance) : 0;
 }
 
-async function upsertDailySummaryFromComputed(date, branchId, computed, notes = null) {
+async function upsertDailySummaryFromComputed(date, branchId, computed, notes = null, force = false) {
   const existing = await db.get(
     'SELECT id, is_reconciled, notes FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
     [date, branchId]
   );
 
-  // Never overwrite reconciled rows automatically (audit stability).
-  if (existing && existing.is_reconciled) {
+  // Never overwrite reconciled rows automatically unless force=true (payment backdate correction).
+  if (!force && existing && existing.is_reconciled) {
     return db.get('SELECT * FROM daily_cash_summaries WHERE id = ?', [existing.id]);
   }
 
@@ -138,7 +138,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
  * Build daily cash summary from source data (orders, transactions, expenses, deposits) and persist.
  * Used when the day has no row yet, or exists but is not reconciled (so expenses/backfills update totals).
  */
-async function computeAndPersistDailySummary(date, branchId) {
+async function computeAndPersistDailySummary(date, branchId, force = false) {
   const openingBalance = await getExpectedOpeningBalance(date, branchId);
   const existingRow = await db.get(
     'SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
@@ -172,7 +172,7 @@ async function computeAndPersistDailySummary(date, branchId) {
     branchId,
     existingRow?.opening_cash_declared
   );
-  return upsertDailySummaryFromComputed(date, branchId, calculated);
+  return upsertDailySummaryFromComputed(date, branchId, calculated, null, force);
 }
 
 /**
@@ -187,6 +187,15 @@ async function refreshUnreconciledDailySummary(date, branchId) {
   }
   const persisted = await computeAndPersistDailySummary(date, branchId);
   return { skipped: false, row: persisted };
+}
+
+/**
+ * Force-refresh a day even when reconciled (used for explicitly backdated payment booking).
+ * This keeps selected paid date totals/book-sales/closing in sync with transactions.
+ */
+async function refreshDailySummaryForce(date, branchId) {
+  const persisted = await computeAndPersistDailySummary(date, branchId, true);
+  return { forced: true, row: persisted };
 }
 
 /**
@@ -916,3 +925,4 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
 module.exports = router;
 module.exports.refreshUnreconciledDailySummary = refreshUnreconciledDailySummary;
 module.exports.refreshUnreconciledSummariesFromDate = refreshUnreconciledSummariesFromDate;
+module.exports.refreshDailySummaryForce = refreshDailySummaryForce;
