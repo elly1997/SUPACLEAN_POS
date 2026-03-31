@@ -721,6 +721,7 @@ export const getSalaryAdvances = (params = {}) => api.get('/payroll/advances', {
 export const createSalaryAdvance = (data) => api.post('/payroll/advances', data);
 export const getMonthlyPayroll = (month) => api.get('/payroll/monthly', { params: { month } });
 export const saveMonthlyPayroll = (payload) => api.post('/payroll/monthly/save', payload);
+export const reopenPayrollMonth = (monthKey) => api.post('/payroll/monthly/reopen', { month_key: monthKey });
 export const getSavedMonthlyPayroll = (month) => api.get('/payroll/monthly/saved', { params: { month } });
 export const getPayrollHistory = (params = {}) => api.get('/payroll/history', { params });
 

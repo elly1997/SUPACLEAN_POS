@@ -223,9 +223,66 @@ router.get('/advances', requirePermission('canRecordSalaryAdvances'), async (req
   }
 });
 
+function mapSavedPayrollRowToLine(r) {
+  const gross = parseMoney(r.gross_salary);
+  const allowances = parseMoney(r.allowances);
+  const bonuses = parseMoney(r.bonuses);
+  const nssfEmployeeAmount = parseMoney(r.nssf_amount);
+  const nssfEmployerAmount = parseMoney(r.employer_nssf_amount);
+  const taxable = parseMoney(r.taxable_income);
+  const paye = parseMoney(r.paye_amount);
+  const totalDeductions = parseMoney(r.total_deductions);
+  const net = parseMoney(r.net_salary);
+  return {
+    employee_id: r.employee_id,
+    full_name: r.full_name,
+    employee_code: r.employee_code,
+    gross_salary: gross,
+    allowances,
+    bonuses,
+    nssf_enabled: r.nssf_enabled !== false,
+    paye_enabled: r.paye_enabled !== false,
+    nssf_employee_rate: parseMoney(r.nssf_employee_rate, 10),
+    nssf_employer_rate: parseMoney(r.nssf_employer_rate, 10),
+    nssf_amount: nssfEmployeeAmount,
+    employer_nssf_amount: nssfEmployerAmount,
+    taxable_income: taxable,
+    paye_estimate: paye,
+    paye_amount: paye,
+    other_deductions: parseMoney(r.other_deductions),
+    salary_advances: parseMoney(r.salary_advances),
+    total_deductions: totalDeductions,
+    net_salary: net,
+    total_employer_cost: gross + allowances + bonuses + nssfEmployerAmount
+  };
+}
+
 router.get('/monthly', requirePermission('canManagePayroll'), async (req, res) => {
   const month = monthKeyOrNow(req.query.month);
   try {
+    const periodRow = await db.get('SELECT month_key, status, completed_on FROM payroll_periods WHERE month_key = ?', [month]);
+    const isClosed = periodRow && String(periodRow.status).toLowerCase() === 'closed';
+
+    if (isClosed) {
+      const rows = await db.all(
+        `SELECT pm.*, e.full_name, e.employee_code
+         FROM payroll_monthly pm
+         JOIN employees e ON e.id = pm.employee_id
+         WHERE pm.month_key = $1
+         ORDER BY e.full_name ASC`,
+        [month]
+      );
+      const lines = (rows || []).map(mapSavedPayrollRowToLine);
+      return res.json({
+        month_key: month,
+        lines,
+        period: {
+          status: 'closed',
+          completed_on: periodRow.completed_on ? String(periodRow.completed_on).slice(0, 10) : null
+        }
+      });
+    }
+
     const employees = await db.all(
       `SELECT * FROM employees
        WHERE is_active = TRUE
@@ -269,7 +326,14 @@ router.get('/monthly', requirePermission('canManagePayroll'), async (req, res) =
         total_employer_cost: gross + allowances + bonuses + nssfEmployerAmount
       };
     });
-    res.json({ month_key: month, lines });
+    res.json({
+      month_key: month,
+      lines,
+      period: {
+        status: 'open',
+        completed_on: null
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -305,19 +369,34 @@ router.get('/history', requirePermission('canManagePayroll'), async (req, res) =
          MAX(pm.computed_at) AS last_run_at,
          COALESCE(SUM(pm.net_salary), 0) AS total_net_salary,
          COALESCE(SUM(pm.paye_amount), 0) AS total_paye,
-         COALESCE(SUM(pm.nssf_amount), 0) AS total_nssf
+         COALESCE(SUM(pm.nssf_amount), 0) AS total_nssf,
+         MAX(pp.status) AS period_status,
+         MAX(pp.completed_on) AS completed_on
        FROM payroll_monthly pm
+       LEFT JOIN payroll_periods pp ON pp.month_key = pm.month_key
        GROUP BY pm.month_key
        ORDER BY pm.month_key DESC
        LIMIT ?`,
       [limit]
     );
-    const history = (rows || []).map((r) => ({
-      ...r,
-      payroll_status: r.month_key === currentMonth ? 'Open' : 'Closed',
-      salary_statement_status: 'Approved',
-      bank_transfer_status: 'Pending'
-    }));
+    const history = (rows || []).map((r) => {
+      const rawStatus = r.period_status ? String(r.period_status).toLowerCase() : null;
+      let payrollStatus = 'Open';
+      if (rawStatus === 'closed') payrollStatus = 'Closed';
+      else if (rawStatus === 'open') payrollStatus = 'Open';
+      else if (r.month_key < currentMonth) payrollStatus = 'Closed';
+      else payrollStatus = 'Open';
+      const completedOn = r.completed_on
+        ? String(r.completed_on).slice(0, 10)
+        : null;
+      return {
+        ...r,
+        payroll_status: payrollStatus,
+        completed_on: completedOn,
+        salary_statement_status: payrollStatus === 'Closed' ? 'Ready' : 'Draft',
+        bank_transfer_status: payrollStatus === 'Closed' ? 'Ready' : 'Pending'
+      };
+    });
     res.json(history);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -327,13 +406,23 @@ router.get('/history', requirePermission('canManagePayroll'), async (req, res) =
 router.post('/monthly/save', requirePermission('canManagePayroll'), async (req, res) => {
   const month = monthKeyOrNow(req.body.month_key);
   const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
+  const markClosed = !!req.body.mark_closed;
+  const completedOnRaw = req.body.completed_on != null ? String(req.body.completed_on).trim() : '';
   if (lines.length === 0) return res.status(400).json({ error: 'No payroll lines provided' });
+  if (markClosed && !/^\d{4}-\d{2}-\d{2}$/.test(completedOnRaw)) {
+    return res.status(400).json({ error: 'completed_on is required when closing payroll (YYYY-MM-DD)' });
+  }
   try {
+    const periodRow = await db.get('SELECT status FROM payroll_periods WHERE month_key = ?', [month]);
+    if (periodRow && String(periodRow.status).toLowerCase() === 'closed' && !markClosed) {
+      return res.status(400).json({ error: 'This payroll month is closed. Reopen it before saving changes.' });
+    }
+
     for (const line of lines) {
       await db.run(
         `INSERT INTO payroll_monthly
-          (month_key, employee_id, gross_salary, allowances, bonuses, nssf_amount, nssf_employee_rate, nssf_employer_rate, employer_nssf_amount, taxable_income, paye_amount, other_deductions, salary_advances, total_deductions, net_salary, branch_id, computed_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+          (month_key, employee_id, gross_salary, allowances, bonuses, nssf_amount, nssf_employee_rate, nssf_employer_rate, employer_nssf_amount, taxable_income, paye_amount, other_deductions, salary_advances, total_deductions, net_salary, branch_id, computed_by, nssf_enabled, paye_enabled)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
          ON CONFLICT (month_key, employee_id) DO UPDATE SET
           gross_salary = EXCLUDED.gross_salary,
           allowances = EXCLUDED.allowances,
@@ -350,6 +439,8 @@ router.post('/monthly/save', requirePermission('canManagePayroll'), async (req, 
           net_salary = EXCLUDED.net_salary,
           branch_id = EXCLUDED.branch_id,
           computed_by = EXCLUDED.computed_by,
+          nssf_enabled = EXCLUDED.nssf_enabled,
+          paye_enabled = EXCLUDED.paye_enabled,
           computed_at = CURRENT_TIMESTAMP`,
         [
           month,
@@ -368,11 +459,51 @@ router.post('/monthly/save', requirePermission('canManagePayroll'), async (req, 
           parseMoney(line.total_deductions),
           parseMoney(line.net_salary),
           null,
-          req.user?.fullName || req.user?.username || 'Admin'
+          req.user?.fullName || req.user?.username || 'Admin',
+          line.nssf_enabled !== false,
+          line.paye_enabled !== false
         ]
       );
     }
-    res.json({ success: true, message: `Payroll saved for ${month}`, count: lines.length });
+
+    if (markClosed) {
+      await db.run(
+        `INSERT INTO payroll_periods (month_key, status, completed_on, closed_at, closed_by)
+         VALUES ($1, 'closed', $2::date, CURRENT_TIMESTAMP, $3)
+         ON CONFLICT (month_key) DO UPDATE SET
+           status = 'closed',
+           completed_on = EXCLUDED.completed_on,
+           closed_at = CURRENT_TIMESTAMP,
+           closed_by = EXCLUDED.closed_by`,
+        [month, completedOnRaw, req.user?.fullName || req.user?.username || 'Admin']
+      );
+    }
+
+    res.json({
+      success: true,
+      message: markClosed ? `Payroll closed for ${month}` : `Payroll saved for ${month}`,
+      count: lines.length,
+      period: markClosed
+        ? { status: 'closed', completed_on: completedOnRaw }
+        : { status: 'open', completed_on: null }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/monthly/reopen', requirePermission('canManagePayroll'), async (req, res) => {
+  const month = monthKeyOrNow(req.body.month_key);
+  try {
+    const n = await db.run('DELETE FROM payroll_periods WHERE month_key = ?', [month]);
+    if (!n.changes) {
+      return res.json({
+        success: true,
+        message: `Payroll month ${month} is already open`,
+        period: { status: 'open', completed_on: null }
+      });
+    }
+    res.json({ success: true, message: `Payroll month ${month} reopened`, period: { status: 'open', completed_on: null } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

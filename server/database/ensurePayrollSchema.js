@@ -107,6 +107,34 @@ async function ensure() {
     await db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_salary_advances_source_expense_id ON salary_advances(source_expense_id) WHERE source_expense_id IS NOT NULL', []);
     await db.run('CREATE INDEX IF NOT EXISTS idx_payroll_monthly_month_employee ON payroll_monthly(month_key, employee_id)', []);
     await db.run('CREATE INDEX IF NOT EXISTS idx_expenses_voided ON expenses(is_voided)', []);
+    await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS nssf_enabled BOOLEAN NOT NULL DEFAULT TRUE', []);
+    await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS paye_enabled BOOLEAN NOT NULL DEFAULT TRUE', []);
+
+    await db.run(
+      `CREATE TABLE IF NOT EXISTS payroll_periods (
+        month_key TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+        completed_on DATE,
+        closed_at TIMESTAMP,
+        closed_by TEXT
+      )`,
+      []
+    );
+
+    try {
+      await db.run(
+        `INSERT INTO payroll_periods (month_key, status, completed_on, closed_at)
+         SELECT month_key, 'closed', NULL, MAX(computed_at)
+         FROM payroll_monthly
+         WHERE month_key < to_char(CURRENT_DATE, 'YYYY-MM')
+         GROUP BY month_key
+         ON CONFLICT (month_key) DO NOTHING`,
+        []
+      );
+    } catch (e) {
+      console.warn('payroll_periods backfill skipped:', e.message);
+    }
+
     console.log('✅ Payroll and accounting schema ready');
   } catch (err) {
     console.error('❌ Payroll schema migration error:', err.message);
