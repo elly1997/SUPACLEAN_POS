@@ -770,7 +770,7 @@ const Payroll = () => {
           )}
           <div className="payroll-note">
             Open months auto-generate from active staff and advances. Saving stores a snapshot; closing locks the month for exports.
-            PAYE follows Tanzania monthly bands on taxable income after employee NSSF. NSSF defaults to 10% + 10% unless edited per row.
+            PAYE follows Tanzania monthly bands on taxable income after employee NSSF. NSSF amounts use each employee&apos;s profile rates (shown as Emp NSSF / Er NSSF).
           </div>
           <div
             className="payroll-table-wrap verification-wrap interactive-scroll-region"
@@ -785,11 +785,8 @@ const Payroll = () => {
                 <tr>
                   <th>Employee</th>
                   <th className="num">Gross</th>
-                  <th className="num">Allow.</th>
                   <th className="num">Bonus</th>
                   <th>NSSF On</th>
-                  <th className="num">Emp %</th>
-                  <th className="num">Er %</th>
                   <th className="num">Emp NSSF</th>
                   <th className="num">Er NSSF</th>
                   <th className="num">Taxable</th>
@@ -806,11 +803,8 @@ const Payroll = () => {
                   <tr key={r.employee_id}>
                     <td>{r.full_name}</td>
                     <td className="num"><input type="number" disabled={periodStatus === 'closed'} value={r.gross_salary || 0} onChange={(e) => updateLineField(r.employee_id, 'gross_salary', e.target.value)} /></td>
-                    <td className="num"><input type="number" disabled={periodStatus === 'closed'} value={r.allowances || 0} onChange={(e) => updateLineField(r.employee_id, 'allowances', e.target.value)} /></td>
                     <td className="num"><input type="number" disabled={periodStatus === 'closed'} value={r.bonuses || 0} onChange={(e) => updateLineField(r.employee_id, 'bonuses', e.target.value)} /></td>
                     <td><input type="checkbox" disabled={periodStatus === 'closed'} checked={r.nssf_enabled !== false} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => updateLineField(r.employee_id, 'nssf_enabled', e.target.checked, false)} /></td>
-                    <td className="num"><input type="number" disabled={periodStatus === 'closed'} min="0" max="100" step="0.01" value={r.nssf_employee_rate ?? 10} onChange={(e) => updateLineField(r.employee_id, 'nssf_employee_rate', e.target.value)} /></td>
-                    <td className="num"><input type="number" disabled={periodStatus === 'closed'} min="0" max="100" step="0.01" value={r.nssf_employer_rate ?? 10} onChange={(e) => updateLineField(r.employee_id, 'nssf_employer_rate', e.target.value)} /></td>
                     <td className="num">{Number(r.nssf_amount || 0).toLocaleString()}</td>
                     <td className="num">{Number(r.employer_nssf_amount || 0).toLocaleString()}</td>
                     <td className="num">{Number(r.taxable_income || 0).toLocaleString()}</td>
@@ -822,7 +816,7 @@ const Payroll = () => {
                     <td className="num"><strong>{Number(r.total_employer_cost || 0).toLocaleString()}</strong></td>
                   </tr>
                 ))}
-                {payroll.length === 0 && <tr><td colSpan={16}>{loading ? 'Loading payroll rows...' : 'No payroll rows'}</td></tr>}
+                {payroll.length === 0 && <tr><td colSpan={13}>{loading ? 'Loading payroll rows...' : 'No payroll rows'}</td></tr>}
               </tbody>
             </table>
           </div>
