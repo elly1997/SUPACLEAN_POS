@@ -158,7 +158,7 @@ export async function getCustomers(search = '', options = {}) {
   try {
     const res = await api.get(`/customers?${params.toString()}`);
     const data = res.data || [];
-    if (data.length > 0 && !light) await setSyncCache('customers', data);
+    if (data.length > 0) await setSyncCache('customers', data);
     return { ...res, data, hasMore: data.length === limit };
   } catch (err) {
     if (isNetworkError(err)) {

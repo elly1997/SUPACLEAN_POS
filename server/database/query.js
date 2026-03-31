@@ -33,7 +33,8 @@ dbPool.on('connect', () => {
 
 dbPool.on('error', (err) => {
   console.error('❌ Unexpected error on idle PostgreSQL client', err);
-  process.exit(-1);
+  // Keep API process alive on transient pool/client faults.
+  // Individual queries will still fail fast and surface meaningful errors.
 });
 
 /**

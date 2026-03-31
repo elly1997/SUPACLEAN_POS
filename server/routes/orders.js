@@ -41,6 +41,17 @@ function buildPaymentTimestampIso(paymentDate) {
   return `${datePart}T${todayIso.slice(11, 19)}.000Z`;
 }
 
+function triggerDailySummaryRefreshAsync(paymentDate, branchId) {
+  if (branchId == null || !paymentDate) return;
+  setImmediate(async () => {
+    try {
+      await cashManagement.refreshDailySummaryForce(paymentDate, branchId);
+    } catch (err) {
+      console.error('Background daily summary refresh failed:', paymentDate, branchId, err.message);
+    }
+  });
+}
+
 function buildPerOrderPaidAllocations(orders, receiptPaidAmount) {
   const sorted = [...orders].sort((a, b) => Number(a.id) - Number(b.id));
   let remaining = Math.max(0, roundFigure(receiptPaidAmount));
@@ -1158,9 +1169,7 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
         const transactionId = await recordPaymentTransaction(orderObj, paymentAmount, payment_method, 'Cashier', paymentTimestampIso);
         console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${receiptNumber}`);
         const paidDate = paymentTimestampIso.slice(0, 10);
-        if (orderObj.branch_id != null) {
-          await cashManagement.refreshDailySummaryForce(paidDate, orderObj.branch_id);
-        }
+        triggerDailySummaryRefreshAsync(paidDate, orderObj.branch_id);
         
         // Log payment change to audit log (for first order, but represents entire receipt)
         logPaymentChange({
@@ -1262,9 +1271,7 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
     const transactionId = await recordPaymentTransaction(orderObj, paymentAmount, payment_method, 'Cashier', paymentTimestampIso);
     console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${order.receipt_number} (${allOrders.length} items)`);
     const paidDate = paymentTimestampIso.slice(0, 10);
-    if (orderObj.branch_id != null) {
-      await cashManagement.refreshDailySummaryForce(paidDate, orderObj.branch_id);
-    }
+    triggerDailySummaryRefreshAsync(paidDate, orderObj.branch_id);
     
     // Apply payment across ALL orders on the receipt (supports partial payments).
     const newReceiptPaid = roundFigure(receiptPaid + paymentAmount);
