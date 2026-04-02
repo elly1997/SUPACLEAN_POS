@@ -151,11 +151,36 @@ const Orders = () => {
     loadOrders(false, undefined, cleared, 'all');
   };
 
+  const applyStatusLocally = (orderIds, newStatus) => {
+    const idSet = new Set((orderIds || []).map((id) => String(id)));
+    setOrders((prev) =>
+      prev.map((order) =>
+        idSet.has(String(order.id))
+          ? { ...order, status: newStatus }
+          : order
+      )
+    );
+  };
+
   const handleStatusUpdate = async (orderId, newStatus) => {
     try {
       await updateOrderStatus(orderId, newStatus);
+      applyStatusLocally([orderId], newStatus);
       showToast(`Order status updated to ${newStatus}`, 'success');
-      loadOrders(false);
+    } catch (error) {
+      const msg = error.response?.data?.error || error.message;
+      showToast(msg, 'error');
+    }
+  };
+
+  const handleReceiptStatusUpdate = async (receiptItems, newStatus) => {
+    const items = Array.isArray(receiptItems) ? receiptItems : [];
+    const ids = items.map((i) => i?.id).filter(Boolean);
+    if (ids.length === 0) return;
+    try {
+      await Promise.all(ids.map((id) => updateOrderStatus(id, newStatus)));
+      applyStatusLocally(ids, newStatus);
+      showToast(`Updated ${ids.length} item(s) to ${newStatus}`, 'success');
     } catch (error) {
       const msg = error.response?.data?.error || error.message;
       showToast(msg, 'error');
@@ -939,10 +964,10 @@ Phone: ${receiptGroup.customer_phone}
                 </div>
                 <div className="orders-list-card-actions">
                   {receiptGroup.status === 'pending' || receiptGroup.status === 'processing' ? (
-                    <button className="btn-small btn-success" onClick={() => receiptGroup.items.forEach(item => handleStatusUpdate(item.id, 'ready'))}>Mark Ready</button>
+                    <button className="btn-small btn-success" onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}>Mark Ready</button>
                   ) : receiptGroup.status === 'ready' ? (
                     <>
-                      <button className="btn-small btn-warning" onClick={() => receiptGroup.items.forEach(item => handleStatusUpdate(item.id, 'collected'))} disabled={balance > 0} title={balance > 0 ? 'Pay first' : 'Collect'}>Collect</button>
+                      <button className="btn-small btn-warning" onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'collected')} disabled={balance > 0} title={balance > 0 ? 'Pay first' : 'Collect'}>Collect</button>
                       <button className="btn-small btn-secondary" onClick={() => receiptGroup.items.forEach(item => handleSendReminder(item.id))} disabled={sendingReminder !== null}>{sendingReminder ? '⏳' : '📱 Remind'}</button>
                     </>
                   ) : null}
@@ -1129,11 +1154,7 @@ Phone: ${receiptGroup.customer_phone}
                           {receiptGroup.status === 'pending' && (
                             <button
                               className="btn-small btn-success"
-                              onClick={() => {
-                                receiptGroup.items.forEach(item => {
-                                  handleStatusUpdate(item.id, 'ready');
-                                });
-                              }}
+                              onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}
                               title="Mark order as ready for collection"
                             >
                               ✓ Mark as Ready
@@ -1142,11 +1163,7 @@ Phone: ${receiptGroup.customer_phone}
                           {receiptGroup.status === 'processing' && (
                             <button
                               className="btn-small btn-success"
-                              onClick={() => {
-                                receiptGroup.items.forEach(item => {
-                                  handleStatusUpdate(item.id, 'ready');
-                                });
-                              }}
+                              onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}
                               title="Mark all ready"
                             >
                               Ready All
@@ -1156,11 +1173,7 @@ Phone: ${receiptGroup.customer_phone}
                             <>
                               <button
                                 className="btn-small btn-warning"
-                                onClick={() => {
-                                  receiptGroup.items.forEach(item => {
-                                    handleStatusUpdate(item.id, 'collected');
-                                  });
-                                }}
+                                onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'collected')}
                                 disabled={balance > 0}
                                 title={balance > 0 ? 'Payment required before collection. Use Pay first.' : 'Collect all items'}
                               >
