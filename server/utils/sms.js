@@ -278,6 +278,15 @@ function calendarDaysUtc(from, to) {
   return Math.max(0, Math.floor((b0 - a0) / 86400000));
 }
 
+/** Full calendar days past estimated collection (0 if none or not yet due). Same logic as collection reminders. */
+function daysOverdueFromEstimated(estimatedDate) {
+  if (!estimatedDate) return 0;
+  const now = new Date();
+  const due = new Date(estimatedDate);
+  if (Number.isNaN(due.getTime()) || due >= now) return 0;
+  return calendarDaysUtc(due, now);
+}
+
 /**
  * Collection reminder SMS (Swahili).
  *
@@ -333,6 +342,7 @@ module.exports = {
   generateCollectionReminder,
   MAX_STORAGE_DAYS,
   calendarDaysUtc,
+  daysOverdueFromEstimated,
   generateInvoiceReminder,
   generatePaymentNoticeShort,
   generateOrderReceiptSms,

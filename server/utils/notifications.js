@@ -1,4 +1,4 @@
-const { sendSMS, generateReadyNotification, generateOrderConfirmation, generateCollectionReminder, calendarDaysUtc, generateInvoiceReminder, generatePaymentNoticeShort } = require('./sms');
+const { sendSMS, generateOrderConfirmation, generateCollectionReminder, calendarDaysUtc, daysOverdueFromEstimated, generateInvoiceReminder, generatePaymentNoticeShort } = require('./sms');
 const { sendWhatsApp } = require('./whatsapp');
 const db = require('../database/db');
 
@@ -52,18 +52,16 @@ async function sendNotification(options) {
   // Generate message based on type
   let message = '';
   switch (notificationType) {
-    case 'ready':
-      message = generateReadyNotification(
+    case 'ready': {
+      const daysOverdue = daysOverdueFromEstimated(orderData.estimatedDate);
+      message = generateCollectionReminder(
         orderData.receiptNumber,
         customerName,
-        orderData.estimatedDate,
-        {
-          totalAmount: orderData.totalAmount,
-          paidAmount: orderData.paidAmount,
-          balanceDue: orderData.balanceDue
-        }
+        daysOverdue,
+        orderData.balanceDue ?? 0
       );
       break;
+    }
     case 'confirmation':
       message = generateOrderConfirmation(
         orderData.receiptNumber,

@@ -3,11 +3,9 @@ const router = express.Router();
 const db = require('../database/query');
 const { generateReceiptNumber, calculateTotal, formatReceipt, formatReceiptAsync, generateReceiptQRCode, formatCustomerReceiptId } = require('../utils/receipt');
 const {
-  sendSMS,
-  generateReadyNotification,
   generateOrderReceiptSms,
   generateCollectionReminder,
-  calendarDaysUtc
+  daysOverdueFromEstimated
 } = require('../utils/sms');
 const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny } = require('../middleware/auth');
@@ -944,11 +942,12 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
               const totalAmount = parseFloat(receiptSums?.receipt_total_amount || 0);
               const paidAmount = parseFloat(receiptSums?.receipt_paid_amount || 0);
               const balanceDue = Math.max(0, totalAmount - paidAmount);
-              const message = generateReadyNotification(
+              const daysOverdue = daysOverdueFromEstimated(orderWithCustomer.estimated_collection_date);
+              const message = generateCollectionReminder(
                 orderWithCustomer.receipt_number,
                 orderWithCustomer.customer_name,
-                orderWithCustomer.estimated_collection_date,
-                { totalAmount, paidAmount, balanceDue }
+                daysOverdue,
+                balanceDue
               );
               
               // Try SMS first; if SMS fails, send via WhatsApp (don't block the response)
@@ -1833,21 +1832,15 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
       const totalAmount = parseFloat(receiptSums?.receipt_total_amount || 0);
       const paidAmount = parseFloat(receiptSums?.receipt_paid_amount || 0);
       const balanceDue = Math.max(0, totalAmount - paidAmount);
-      message = generateReadyNotification(
+      const daysOverdueReady = daysOverdueFromEstimated(order.estimated_collection_date);
+      message = generateCollectionReminder(
         order.receipt_number,
         order.customer_name,
-        order.estimated_collection_date,
-        { totalAmount, paidAmount, balanceDue }
+        daysOverdueReady,
+        balanceDue
       );
     } else if (notification_type === 'reminder') {
-      const now = new Date();
-      let daysOverdue = 0;
-      if (order.estimated_collection_date) {
-        const due = new Date(order.estimated_collection_date);
-        if (due < now) {
-          daysOverdue = calendarDaysUtc(due, now);
-        }
-      }
+      const daysOverdue = daysOverdueFromEstimated(order.estimated_collection_date);
       const receiptSums = await db.get(
         `SELECT 
            COALESCE(SUM(total_amount), 0) as receipt_total_amount,
