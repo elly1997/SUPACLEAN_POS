@@ -184,9 +184,10 @@ async function getPaymentHistory(orderId) {
 async function listCashSalesOrdersForDate(date, branchId) {
   if (branchId == null) return [];
   const rows = await db.all(
-    `SELECT o.id AS order_id, o.receipt_number, o.customer_name, o.customer_phone,
+    `SELECT o.id AS order_id, o.receipt_number, c.name AS customer_name, c.phone AS customer_phone,
             o.paid_amount, o.total_amount, o.order_date, o.payment_status, o.payment_method
      FROM orders o
+     JOIN customers c ON c.id = o.customer_id
      WHERE DATE(o.order_date) = ?
        AND o.payment_status = 'paid_full'
        AND o.payment_method = 'cash'
@@ -212,9 +213,10 @@ async function listBookSalesCashTransactionsForDate(date, branchId) {
   const rows = await db.all(
     `SELECT t.id AS transaction_id, t.order_id, t.amount, t.payment_method, t.description,
             t.transaction_date, t.created_by, t.branch_id,
-            o.receipt_number, o.customer_name, o.customer_phone
+            o.receipt_number, c.name AS customer_name, c.phone AS customer_phone
      FROM transactions t
      LEFT JOIN orders o ON o.id = t.order_id
+     LEFT JOIN customers c ON c.id = o.customer_id
      WHERE DATE(t.transaction_date) = ?
        AND t.transaction_type = 'payment_received'
        AND t.payment_method = 'cash'` +
