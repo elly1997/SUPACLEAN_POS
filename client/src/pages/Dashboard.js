@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
+import { formatReceiptForDisplay } from '../utils/receiptId';
 import './Dashboard.css';
 
 const Dashboard = () => {
@@ -141,7 +142,7 @@ const Dashboard = () => {
       for (const id of receiptGroup.order_ids) {
         await updateOrderStatus(id, newStatus);
       }
-      showToast(`Receipt ${receiptGroup.receipt_number} marked as ${newStatus}`, 'success');
+      showToast(`Receipt ${formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)} marked as ${newStatus}`, 'success');
       loadDashboardData();
     } catch (error) {
       const msg = error.response?.data?.error || error.message || 'Error updating order';
@@ -297,7 +298,7 @@ const Dashboard = () => {
                     <div key={receipt.receipt_number} className={`dashboard-list-card ${isOverdue ? 'overdue' : ''}`}>
                       <div className="dashboard-list-card-header">
                         <Link to={`/collection?receipt=${encodeURIComponent(receipt.receipt_number)}`} className={`receipt-badge receipt-link ${isOverdue ? 'overdue-badge' : ''}`}>
-                          {receipt.receipt_number}
+                          {formatReceiptForDisplay(receipt.receipt_number, receipt.all_items || [])}
                         </Link>
                         {isOverdue && hoursOverdue > 0 && <span className="overdue-indicator">⚠️ {hoursOverdue}h overdue</span>}
                         {timeRemaining && <span className="time-remaining">⏰ {timeRemaining}</span>}
@@ -349,7 +350,7 @@ const Dashboard = () => {
                         <tr key={receipt.receipt_number} className={isOverdue ? 'row-overdue' : ''}>
                           <td>
                             <Link to={`/collection?receipt=${encodeURIComponent(receipt.receipt_number)}`} className={`receipt-badge receipt-link ${isOverdue ? 'overdue-badge' : ''}`} title="Open in Collection">
-                              {receipt.receipt_number}
+                              {formatReceiptForDisplay(receipt.receipt_number, receipt.all_items || [])}
                             </Link>
                           </td>
                           <td><strong>{receipt.customer_name}</strong></td>
@@ -410,12 +411,12 @@ const Dashboard = () => {
                 {groupedPending.map((receiptGroup) => (
                   <div key={receiptGroup.receipt_number} className="dashboard-list-card">
                     <div className="dashboard-list-card-header">
-                      <span className="receipt-badge">{receiptGroup.receipt_number}</span>
+                      <span className="receipt-badge">{formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}</span>
                     </div>
                     <div className="dashboard-list-card-body">
                       <p><strong>{receiptGroup.customer_name}</strong></p>
                       <p className="text-muted">{receiptGroup.customer_phone}</p>
-                      <p>{receiptGroup.items.length} item(s) · TSh {(receiptGroup.total_amount || 0).toLocaleString()}</p>
+                      <p>{receiptGroup.items.length} line(s) · TSh {(receiptGroup.total_amount || 0).toLocaleString()}</p>
                     </div>
                     <div className="dashboard-list-card-actions">
                       <button type="button" className="btn-small btn-secondary" onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}>View</button>
@@ -440,7 +441,7 @@ const Dashboard = () => {
                   <tbody>
                     {groupedPending.map((receiptGroup) => (
                       <tr key={receiptGroup.receipt_number}>
-                        <td><span className="receipt-badge">{receiptGroup.receipt_number}</span></td>
+                        <td><span className="receipt-badge">{formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}</span></td>
                         <td><strong>{receiptGroup.customer_name}</strong></td>
                         <td className="text-muted">{receiptGroup.customer_phone}</td>
                         <td>{receiptGroup.items.length}</td>

@@ -7,7 +7,7 @@ import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
-import { formatCustomerReceiptId } from '../utils/receiptId';
+import { formatCustomerReceiptId, formatReceiptForDisplay } from '../utils/receiptId';
 import { playSuccessSound } from '../utils/sound';
 import './Collection.css';
 
@@ -888,7 +888,7 @@ Phone: ${mainOrder.customer_phone}
         Arusha, Tanzania
 ═══════════════════════════════════
 
-Receipt No: ${order.receipt_number}
+Receipt No: ${formatReceiptForDisplay(order.receipt_number, allReceiptOrders.length > 0 ? allReceiptOrders : [order])}
 Date: ${dateStr}
 ${estimatedCollectionDate}
 Customer: ${order.customer_name}
@@ -1006,7 +1006,7 @@ Thank you for choosing SUPACLEAN!
                     }}
                   >
                     <div className="queue-list-card-header">
-                      <strong>{queueOrder.receipt_number}</strong>
+                      <strong>{formatReceiptForDisplay(queueOrder.receipt_number, queueOrder.all_items || [])}</strong>
                       {overdue && <span className="overdue-indicator">⚠️ Overdue</span>}
                     </div>
                     <div className="queue-list-card-body">
@@ -1066,7 +1066,7 @@ Thank you for choosing SUPACLEAN!
                           setShowQueue(false);
                         }}
                       >
-                        <td><strong>{queueOrder.receipt_number}</strong></td>
+                        <td><strong>{formatReceiptForDisplay(queueOrder.receipt_number, queueOrder.all_items || [])}</strong></td>
                         <td>{queueOrder.customer_name}</td>
                         <td className="text-muted">{queueOrder.customer_phone}</td>
                         <td>{itemCount > 1 ? `${itemCount} items` : '1'}</td>
@@ -1277,7 +1277,7 @@ Thank you for choosing SUPACLEAN!
               const { receiptTotal, receiptPaid, balanceDue } = getReceiptTotals(order, allReceiptOrders);
               return (
                 <div className="receipt-summary-one-line" role="status" aria-live="polite">
-                  Receipt #{order.receipt_number} · Total {formatReceiptMoney(receiptTotal)} · Due {formatReceiptMoney(balanceDue)}
+                  Receipt #{formatReceiptForDisplay(order.receipt_number, allReceiptOrders.length > 0 ? allReceiptOrders : (order ? [order] : []))} · Total {formatReceiptMoney(receiptTotal)} · Due {formatReceiptMoney(balanceDue)}
                   {receiptPaid > 0 && balanceDue > 0 && (
                     <span className="receipt-summary-paid"> · Paid {formatReceiptMoney(receiptPaid)}</span>
                   )}
@@ -1313,7 +1313,7 @@ Thank you for choosing SUPACLEAN!
                             className={isSelected ? 'selected-receipt-row' : ''}
                             onClick={() => handleSelectReceiptFromList(rg)}
                           >
-                            <td><strong>{rg.receipt_number}</strong></td>
+                            <td><strong>{formatReceiptForDisplay(rg.receipt_number, rg.items || [])}</strong></td>
                             <td>{rg.order_date ? new Date(rg.order_date).toLocaleString() : '—'}</td>
                             <td>{rg.item_count}</td>
                             <td>TSh {(rg.total_amount || 0).toLocaleString()}</td>
@@ -1333,7 +1333,7 @@ Thank you for choosing SUPACLEAN!
 
             <div className="order-header-modern">
               <div>
-                <h2>Receipt: {order.receipt_number}</h2>
+                <h2>Receipt: {formatReceiptForDisplay(order.receipt_number, allReceiptOrders.length > 0 ? allReceiptOrders : (order ? [order] : []))}</h2>
                 <p className="order-date">Order Date: {new Date(order.order_date).toLocaleString()}</p>
                 {order.estimated_collection_date && (
                   <p className="order-date">Est. Collection: {new Date(order.estimated_collection_date).toLocaleString()}</p>
@@ -1651,7 +1651,7 @@ Thank you for choosing SUPACLEAN!
           <div className="modal-content" style={{ maxWidth: '400px' }}>
             <h2 id="collect-confirm-title">Confirm collection</h2>
             <div className="modal-body">
-              <p>Collect receipt <strong>{order.receipt_number}</strong> ({order.receipt_item_count || allReceiptOrders.length || 1} {order.receipt_item_count === 1 || (allReceiptOrders.length || 1) === 1 ? 'item' : 'items'})?</p>
+              <p>Collect receipt <strong>{formatReceiptForDisplay(order.receipt_number, allReceiptOrders.length > 0 ? allReceiptOrders : (order ? [order] : []))}</strong> ({order.receipt_item_count || allReceiptOrders.length || 1} {order.receipt_item_count === 1 || (allReceiptOrders.length || 1) === 1 ? 'line' : 'lines'})?</p>
               {pendingCollectPaymentData?.payment_amount > 0 && (
                 <p>Payment of TSh {Number(pendingCollectPaymentData.payment_amount).toLocaleString()} will be recorded.</p>
               )}

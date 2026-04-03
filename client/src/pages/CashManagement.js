@@ -19,6 +19,7 @@ import { useAuth } from '../contexts/AuthContext';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
 import { receiptWidthCss } from '../utils/receiptPrintConfig';
+import { formatCustomerReceiptId } from '../utils/receiptId';
 import './CashManagement.css';
 
 const CashManagement = () => {
@@ -547,7 +548,9 @@ const CashManagement = () => {
                     ) : (
                       salesDetailLines.map((row) => (
                         <tr key={`cs-${row.receipt_number || ''}-${row.order_id}`}>
-                          <td>{row.receipt_number || '—'}</td>
+                          <td>
+                            {formatCustomerReceiptId(row.receipt_number, row.item_count) || '—'}
+                          </td>
                           <td>
                             <div>{row.customer_name || '—'}</div>
                             <div className="text-muted small">{row.customer_phone || ''}</div>
@@ -595,7 +598,7 @@ const CashManagement = () => {
                       salesDetailLines.map((row) => (
                         <tr key={`bs-${row.transaction_id}`}>
                           <td>{formatDetailWhen(row.transaction_date)}</td>
-                          <td>{row.receipt_number || '—'}</td>
+                          <td>{formatCustomerReceiptId(row.receipt_number) || '—'}</td>
                           <td>
                             <div>{row.customer_name || '—'}</div>
                             <div className="text-muted small">{row.customer_phone || ''}</div>

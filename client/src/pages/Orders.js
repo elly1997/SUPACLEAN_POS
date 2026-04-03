@@ -9,7 +9,7 @@ import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
-import { formatCustomerReceiptId } from '../utils/receiptId';
+import { formatCustomerReceiptId, formatReceiptForDisplay } from '../utils/receiptId';
 import './Orders.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
@@ -947,7 +947,7 @@ Phone: ${receiptGroup.customer_phone}
             return (
               <div key={receiptGroup.receipt_number} className="orders-list-card">
                 <div className="orders-list-card-header">
-                  <strong>{receiptGroup.receipt_number}</strong>
+                  <strong>{formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}</strong>
                   <span
                     className="status-badge"
                     style={{ backgroundColor: getStatusColor(receiptGroup.status === 'processing' ? 'pending' : receiptGroup.status), fontSize: '11px' }}
@@ -958,7 +958,7 @@ Phone: ${receiptGroup.customer_phone}
                 <div className="orders-list-card-body">
                   <p><strong>{receiptGroup.customer_name}</strong></p>
                   <p className="text-muted">{receiptGroup.customer_phone}</p>
-                  <p>{itemCount} item(s) · TSh {receiptGroup.total_amount.toLocaleString()}</p>
+                  <p>{itemCount} line(s) · TSh {receiptGroup.total_amount.toLocaleString()}</p>
                   <p>{balance > 0 ? <span style={{ color: 'var(--warning-color)', fontWeight: 'bold' }}>Balance TSh {balance.toLocaleString()}</span> : <span style={{ color: 'var(--success-color)' }}>Paid</span>}</p>
                   <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Est: {formatDateTime(receiptGroup.estimated_collection_date)}</p>
                 </div>
@@ -1039,7 +1039,7 @@ Phone: ${receiptGroup.customer_phone}
                           {isExpanded ? '▼' : '▶'}
                         </button>
                       </td>
-                      <td><strong>{receiptGroup.receipt_number}</strong></td>
+                      <td><strong>{formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}</strong></td>
                       <td>
                         <div>
                           <strong>{receiptGroup.customer_name}</strong>
@@ -1318,7 +1318,7 @@ Phone: ${receiptGroup.customer_phone}
                 <div className="payment-summary">
                   <div className="payment-item">
                     <span>Receipt No:</span>
-                    <strong>{selectedOrderForPayment.receipt_number}</strong>
+                    <strong>{formatReceiptForDisplay(selectedOrderForPayment.receipt_number, source)}</strong>
                   </div>
                   <div className="payment-item">
                     <span>Customer:</span>

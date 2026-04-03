@@ -2,9 +2,9 @@ const moment = require('moment');
 const QRCode = require('qrcode');
 const db = require('../database/query');
 
-// Generate unique receipt number in format: {sequence}-{DD}-{MM} ({YY})
-// Example: 1-01-01 (26) for first customer on January 1, 2026
-// Format: sequence-day-month (year)
+// Generate unique receipt number: {sequence}-{DD}-{MM} (no year suffix).
+// Legacy rows may still be {sequence}-{DD}-{MM} (YY) where (YY) was a 2-digit year — we match both for sequencing.
+// Customer-facing labels add item count in parentheses via formatCustomerReceiptId().
 // PostgreSQL-compatible async implementation
 async function generateReceiptNumberAsync(targetDate = new Date(), retryCount = 0) {
   const today = new Date(targetDate);
@@ -13,37 +13,31 @@ async function generateReceiptNumberAsync(targetDate = new Date(), retryCount = 
   }
   const day = String(today.getDate()).padStart(2, '0'); // Zero-padded day (01, 02, etc.)
   const month = String(today.getMonth() + 1).padStart(2, '0'); // Zero-padded month (01, 02, etc.)
-  const year = today.getFullYear().toString().slice(-2); // Last 2 digits of year
   const dateStr = moment(today).format('YYYY-MM-DD');
-  const receiptPattern = `%-${day}-${month} (${year})`; // Pattern without "HQ" prefix
-  
+  const receiptRegex = `^[0-9]+-${day}-${month}( \\([0-9]{2}\\))?$`;
+
   try {
-    // PostgreSQL: Extract sequence number from receipt_number format: {sequence}-{DD}-{MM} ({YY})
-    // Use SPLIT_PART to extract sequence (everything before the first hyphen)
     const row = await db.get(
       `SELECT MAX(CAST(SPLIT_PART(receipt_number, '-', 1) AS INTEGER)) as max_seq
        FROM orders 
-       WHERE DATE(order_date) = $1 
-       AND receipt_number LIKE $2`,
-      [dateStr, receiptPattern]
+       WHERE DATE(order_date) = ?
+       AND receipt_number ~ ?`,
+      [dateStr, receiptRegex]
     );
-    
+
     let sequence = 1;
     if (row && row.max_seq !== null) {
       sequence = row.max_seq + 1;
     }
-    
-    const receiptNumber = `${sequence}-${day}-${month} (${year})`;
-    return receiptNumber;
+
+    return `${sequence}-${day}-${month}`;
   } catch (err) {
     console.error('Error generating receipt number:', err);
-    // Fallback: use timestamp-based sequence if query fails
     if (retryCount < 3) {
       return generateReceiptNumberAsync(today, retryCount + 1);
     }
-    // Final fallback: use timestamp
     const timestampSeq = Date.now() % 100000;
-    return `${timestampSeq}-${day}-${month} (${year})`;
+    return `${timestampSeq}-${day}-${month}`;
   }
 }
 
@@ -61,26 +55,23 @@ async function generateReceiptNumberPromise() {
 
 // Fallback method (deprecated - kept for compatibility, but uses async version)
 function generateReceiptNumberFallback(callback, day, month, year, dateStr, receiptPattern, retryCount = 0) {
-  // Just use the async version
   generateReceiptNumberAsync()
     .then(receiptNumber => callback(null, receiptNumber))
     .catch(err => {
-      // After retries, use timestamp-based fallback
       const timestampSeq = Date.now() % 100000;
-      const receiptNumber = `${timestampSeq}-${day}-${month} (${year})`;
-      callback(null, receiptNumber);
+      const d = String(new Date().getDate()).padStart(2, '0');
+      const m = String(new Date().getMonth() + 1).padStart(2, '0');
+      callback(null, `${timestampSeq}-${d}-${m}`);
     });
 }
 
 // OLD SQLite fallback - no longer used but kept for reference
 function generateReceiptNumberFallback_OLD(callback, day, month, year, dateStr, receiptPattern, retryCount = 0) {
   if (retryCount > 5) {
-    // After 5 retries, use timestamp-based fallback
     const timestampSeq = Date.now() % 100000;
-    const receiptNumber = `${timestampSeq}-${day}-${month} (${year})`;
-    return callback(null, receiptNumber);
+    return callback(null, `${timestampSeq}-${day}-${month}`);
   }
-  
+
   db.get(
     `SELECT MAX(CAST(SUBSTR(receipt_number, 1, INSTR(receipt_number || '-', '-') - 1) AS INTEGER)) as max_seq
      FROM orders 
@@ -89,20 +80,18 @@ function generateReceiptNumberFallback_OLD(callback, day, month, year, dateStr, 
     [dateStr, receiptPattern],
     (err, row) => {
       if (err) {
-        // Retry with exponential backoff
         setTimeout(() => {
           generateReceiptNumberFallback(callback, day, month, year, dateStr, receiptPattern, retryCount + 1);
         }, 50 * (retryCount + 1));
         return;
       }
-      
+
       let sequence = 1;
       if (row && row.max_seq !== null) {
         sequence = row.max_seq + 1;
       }
-      
-      const receiptNumber = `${sequence}-${day}-${month} (${year})`;
-      callback(null, receiptNumber);
+
+      callback(null, `${sequence}-${day}-${month}`);
     }
   );
 }
@@ -110,18 +99,16 @@ function generateReceiptNumberFallback_OLD(callback, day, month, year, dateStr, 
 // Synchronous version (for backward compatibility, uses a fallback)
 function generateReceiptNumberSync() {
   const today = new Date();
-  const day = String(today.getDate()).padStart(2, '0'); // Zero-padded day
-  const month = String(today.getMonth() + 1).padStart(2, '0'); // Zero-padded month
-  const year = today.getFullYear().toString().slice(-2);
-  // Fallback: use timestamp-based sequence
+  const day = String(today.getDate()).padStart(2, '0');
+  const month = String(today.getMonth() + 1).padStart(2, '0');
   const sequence = Date.now() % 10000;
-  return `${sequence}-${day}-${month} (${year})`;
+  return `${sequence}-${day}-${month}`;
 }
 
 /**
- * Customer-facing receipt ID:
- * - remove trailing year suffix like " (26)" from canonical receipt number
- * - append total item count in brackets, e.g. "9-23-03 (26)"
+ * Customer-facing receipt label:
+ * - strip legacy trailing " (YY)" that was mistakenly read as year (2-digit suffix in parentheses)
+ * - if itemCount is set, append total pieces, e.g. "9-23-03 (4)" for four items
  */
 function formatCustomerReceiptId(receiptNumber, itemCount = null) {
   const base = String(receiptNumber || '').replace(/\s*\(\d{2}\)\s*$/, '').trim();

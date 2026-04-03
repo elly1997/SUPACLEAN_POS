@@ -189,6 +189,7 @@ async function listCashSalesOrdersForDate(date, branchId) {
     `SELECT MIN(o.id) AS order_id, o.receipt_number,
             MAX(c.name) AS customer_name, MAX(c.phone) AS customer_phone,
             SUM(o.paid_amount) AS paid_amount, SUM(o.total_amount) AS total_amount,
+            CAST(SUM(COALESCE(o.quantity, 1)) AS INTEGER) AS item_count,
             MAX(o.order_date) AS order_date, MAX(o.payment_status) AS payment_status,
             MAX(o.payment_method) AS payment_method
      FROM orders o
