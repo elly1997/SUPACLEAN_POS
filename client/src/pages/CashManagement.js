@@ -431,18 +431,28 @@ const CashManagement = () => {
       return;
     }
     setSalesDetailModal(kind);
+    if (summary?.is_reconciled) {
+      try {
+        await recalculateDailyCashForDate(today, { force: true });
+        const summaryRes = await getTodayCashSummary();
+        if (summaryRes?.data) setSummary(summaryRes.data);
+      } catch (err) {
+        showToast(err.response?.data?.error || err.message || 'Could not refresh summary', 'error');
+      }
+    }
     await loadSalesDetailLines(kind);
   };
 
   const handleRecalculateFromSalesDetailModal = async () => {
-    if (summary?.is_reconciled) {
-      showToast('This day is reconciled; totals cannot be recalculated here.', 'info');
-      return;
-    }
     setSalesDetailRecalculating(true);
     try {
-      await recalculateDailyCashForDate(today);
-      showToast('Daily totals refreshed from live data.', 'success');
+      await recalculateDailyCashForDate(today, { force: !!summary?.is_reconciled });
+      showToast(
+        summary?.is_reconciled
+          ? 'Stored summary updated from live data (day stays reconciled).'
+          : 'Daily totals refreshed from live data.',
+        'success'
+      );
       await loadData();
       if (salesDetailModal) await loadSalesDetailLines(salesDetailModal);
     } catch (err) {
@@ -648,16 +658,23 @@ const CashManagement = () => {
                 )}
               </div>
               <div className="cash-detail-actions">
-                {!summary.is_reconciled && (
-                  <button
-                    type="button"
-                    className="btn-secondary btn-small"
-                    onClick={handleRecalculateFromSalesDetailModal}
-                    disabled={salesDetailRecalculating}
-                  >
-                    {salesDetailRecalculating ? 'Refreshing…' : 'Refresh totals'}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="btn-secondary btn-small"
+                  onClick={handleRecalculateFromSalesDetailModal}
+                  disabled={salesDetailRecalculating}
+                  title={
+                    summary.is_reconciled
+                      ? 'Recompute cash/book sales and closing from live data; reconciliation stays locked.'
+                      : undefined
+                  }
+                >
+                  {salesDetailRecalculating
+                    ? 'Refreshing…'
+                    : summary.is_reconciled
+                      ? 'Refresh stored summary'
+                      : 'Refresh totals'}
+                </button>
                 <button type="button" className="btn-primary btn-small" onClick={closeSalesDetailModal}>
                   Close
                 </button>

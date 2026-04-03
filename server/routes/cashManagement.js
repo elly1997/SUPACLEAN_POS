@@ -275,13 +275,8 @@ router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCa
   }
   try {
     const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
-
-    // Reconciled days are immutable; otherwise always recompute so new expenses (incl. backdated) are included.
-    if (row && row.is_reconciled) {
-      return res.json(row);
-    }
-
-    const persisted = await computeAndPersistDailySummary(date, branchId);
+    const force = !!(row && row.is_reconciled);
+    const persisted = await computeAndPersistDailySummary(date, branchId, force);
     return res.json(persisted);
   } catch (err) {
     console.error('Error fetching daily cash summary:', err);
@@ -289,18 +284,23 @@ router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCa
   }
 });
 
-// Explicitly recalculate daily closing for a date from live data (same as GET /daily when not reconciled)
+// Recalculate daily closing from live data. Use body.force / query force=1 to update reconciled days (recomputes sales/closing; keeps reconciliation lock).
 router.post('/daily/recalculate/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { date } = req.params;
   const branchId = getEffectiveBranchId(req);
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to recalculate daily closing' });
   }
+  const force = req.body?.force === true || req.query?.force === '1' || req.query?.force === 'true';
   try {
+    if (force) {
+      const out = await refreshDailySummaryForce(date, branchId);
+      return res.json(out.row);
+    }
     const result = await refreshUnreconciledDailySummary(date, branchId);
     if (result.skipped) {
       return res.status(409).json({
-        error: 'This date is already reconciled. Expenses are recorded, but the closed day cannot be auto-changed. Use an adjustment entry or contact an administrator.',
+        error: 'This date is already reconciled. Use “Refresh totals” in Cash Management (or send force: true) to reload sales figures from live data without unlocking the day.',
         row: result.row
       });
     }
@@ -381,7 +381,10 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       const results = [];
       for (const bid of branchIds) {
         const openingBalance = await getExpectedOpeningBalance(today, bid);
-        const existingToday = await db.get('SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [today, bid]);
+        const existingToday = await db.get(
+          'SELECT opening_cash_declared, is_reconciled FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
+          [today, bid]
+        );
         const cashSalesRow = await db.all(`
           SELECT SUM(paid_amount) as cash_sales FROM orders
           WHERE DATE(order_date) = ? AND payment_status = 'paid_full' AND payment_method = 'cash' AND paid_amount > 0 AND branch_id = ?
@@ -395,7 +398,8 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
           bookSales = 0;
         }
         const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, bid, existingToday?.opening_cash_declared);
-        const persisted = await upsertDailySummaryFromComputed(today, bid, result);
+        const force = !!(existingToday && existingToday.is_reconciled);
+        const persisted = await upsertDailySummaryFromComputed(today, bid, result, null, force);
         results.push(persisted || result);
       }
       const consolidated = consolidateSummaries(results, today);
@@ -409,7 +413,10 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
 
   try {
     const openingBalance = await getExpectedOpeningBalance(today, branchId);
-    const existingToday = await db.get('SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [today, branchId]);
+    const existingToday = await db.get(
+      'SELECT opening_cash_declared, is_reconciled FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
+      [today, branchId]
+    );
     const cashSalesRow = await db.all(`
       SELECT SUM(paid_amount) as cash_sales
       FROM orders
@@ -429,7 +436,8 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       bookSales = 0;
     }
     const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, branchId, existingToday?.opening_cash_declared);
-    const persisted = await upsertDailySummaryFromComputed(today, branchId, result);
+    const force = !!(existingToday && existingToday.is_reconciled);
+    const persisted = await upsertDailySummaryFromComputed(today, branchId, result, null, force);
     res.json(persisted || result);
   } catch (err) {
     console.error('Error calculating today\'s cash summary:', err);
@@ -951,7 +959,10 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
       [start_date, end_date, branchId]
     );
     rows = await Promise.all((rows || []).map(async (r) => {
-      if (r?.is_reconciled) return r;
+      if (r?.is_reconciled) {
+        const out = await refreshDailySummaryForce(r.date, branchId);
+        return out.row || r;
+      }
       const refreshed = await refreshUnreconciledDailySummary(r.date, branchId);
       return refreshed.row || r;
     }));

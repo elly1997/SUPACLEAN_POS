@@ -776,8 +776,9 @@ export async function getTodayCashSummary() {
 }
 export const createDailyCashSummary = (data) => api.post('/cash-management/daily', data);
 export const saveOpeningSession = (date, data) => api.post(`/cash-management/opening-session/${date}`, data);
-/** Recompute daily closing for a calendar date from live orders/transactions/expenses (fails if day is reconciled). */
-export const recalculateDailyCashForDate = (date) => api.post(`/cash-management/daily/recalculate/${date}`);
+/** Recompute daily closing from live data. Pass `{ force: true }` to refresh reconciled days (updates stored sales/closing, keeps lock). */
+export const recalculateDailyCashForDate = (date, opts = {}) =>
+  api.post(`/cash-management/daily/recalculate/${date}`, { force: !!opts.force });
 /** Line items that make up cash_sales / book_sales for a date (branch-scoped). */
 export const getCashSalesDetailForDate = (date) =>
   api.get(`/cash-management/details/cash-sales/${date}`);
