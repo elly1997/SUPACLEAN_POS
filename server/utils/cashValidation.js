@@ -42,27 +42,68 @@ async function validateCashBalance(date, expectedCashInHand) {
 }
 
 /**
- * Calculate book sales: cash received from receive-payment / collection on the given date.
- * This feeds daily sales report so amounts the cashier receives at collection reflect in book sales.
+ * Calculate book sales: cash from payment_received transactions that are NOT already represented
+ * in same-day cash_sales. Cash sales = orders booked that day, paid_full, cash; those amounts
+ * must not also appear in book_sales or daily cash-in-hand is double-counted.
+ * Excludes any cash txn linked to a receipt where every line that day is paid_full+cash.
  * @param {string} date - Date in YYYY-MM-DD format
  * @param {number|null} branchId - Branch ID; null for admin / no branch
  * @returns {Promise<number>} Book sales amount
  */
 async function calculateBookSales(date, branchId = null) {
   try {
-    const params = [date];
-    let branchClause = '';
-    if (branchId != null) {
-      branchClause = ' AND (branch_id = ? OR branch_id IS NULL)';
-      params.push(branchId);
+    if (branchId == null) {
+      const row = await db.get(
+        `WITH cash_sale_receipts AS (
+           SELECT o.receipt_number, o.branch_id
+           FROM orders o
+           WHERE DATE(o.order_date) = ?::date
+           GROUP BY o.receipt_number, o.branch_id
+           HAVING BOOL_AND(o.payment_status = 'paid_full' AND o.payment_method = 'cash')
+         )
+         SELECT COALESCE(SUM(t.amount), 0) AS total
+         FROM transactions t
+         LEFT JOIN orders o ON o.id = t.order_id
+         WHERE DATE(t.transaction_date) = ?::date
+           AND t.transaction_type = 'payment_received'
+           AND t.payment_method = 'cash'
+           AND (
+             t.order_id IS NULL OR o.id IS NULL
+             OR NOT EXISTS (
+               SELECT 1 FROM cash_sale_receipts r
+               WHERE r.receipt_number = o.receipt_number
+                 AND r.branch_id IS NOT DISTINCT FROM o.branch_id
+             )
+           )`,
+        [date, date]
+      );
+      return parseFloat(row?.total || 0);
     }
     const row = await db.get(
-      `SELECT COALESCE(SUM(amount), 0) AS total
-       FROM transactions
-       WHERE DATE(transaction_date) = ?
-       AND transaction_type = 'payment_received'
-       AND payment_method = 'cash'` + branchClause,
-      params
+      `WITH cash_sale_receipts AS (
+         SELECT o.receipt_number, o.branch_id
+         FROM orders o
+         WHERE DATE(o.order_date) = ?::date
+           AND (o.branch_id = ? OR o.branch_id IS NULL)
+         GROUP BY o.receipt_number, o.branch_id
+         HAVING BOOL_AND(o.payment_status = 'paid_full' AND o.payment_method = 'cash')
+       )
+       SELECT COALESCE(SUM(t.amount), 0) AS total
+       FROM transactions t
+       LEFT JOIN orders o ON o.id = t.order_id
+       WHERE DATE(t.transaction_date) = ?::date
+         AND t.transaction_type = 'payment_received'
+         AND t.payment_method = 'cash'
+         AND (t.branch_id = ? OR t.branch_id IS NULL)
+         AND (
+           t.order_id IS NULL OR o.id IS NULL
+           OR NOT EXISTS (
+             SELECT 1 FROM cash_sale_receipts r
+             WHERE r.receipt_number = o.receipt_number
+               AND r.branch_id IS NOT DISTINCT FROM o.branch_id
+           )
+         )`,
+      [date, branchId, date, branchId]
     );
     return parseFloat(row?.total || 0);
   } catch (err) {
@@ -207,29 +248,69 @@ async function listCashSalesOrdersForDate(date, branchId) {
 }
 
 /**
- * Cash payment_received transactions on a calendar day (book sales / collections).
- * Must match calculateBookSales branch filter.
+ * Cash payment_received rows that count toward book_sales for the day (matches calculateBookSales).
  */
 async function listBookSalesCashTransactionsForDate(date, branchId) {
-  const params = [date];
-  let branchClause = '';
-  if (branchId != null) {
-    branchClause = ' AND (t.branch_id = ? OR t.branch_id IS NULL)';
-    params.push(branchId);
+  if (branchId == null) {
+    const rows = await db.all(
+      `WITH cash_sale_receipts AS (
+         SELECT o.receipt_number, o.branch_id
+         FROM orders o
+         WHERE DATE(o.order_date) = ?::date
+         GROUP BY o.receipt_number, o.branch_id
+         HAVING BOOL_AND(o.payment_status = 'paid_full' AND o.payment_method = 'cash')
+       )
+       SELECT t.id AS transaction_id, t.order_id, t.amount, t.payment_method, t.description,
+              t.transaction_date, t.created_by, t.branch_id,
+              o.receipt_number, c.name AS customer_name, c.phone AS customer_phone
+       FROM transactions t
+       LEFT JOIN orders o ON o.id = t.order_id
+       LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE DATE(t.transaction_date) = ?::date
+         AND t.transaction_type = 'payment_received'
+         AND t.payment_method = 'cash'
+         AND (
+           t.order_id IS NULL OR o.id IS NULL
+           OR NOT EXISTS (
+             SELECT 1 FROM cash_sale_receipts r
+             WHERE r.receipt_number = o.receipt_number
+               AND r.branch_id IS NOT DISTINCT FROM o.branch_id
+           )
+         )
+       ORDER BY t.transaction_date DESC, t.id DESC`,
+      [date, date]
+    );
+    return rows || [];
   }
   const rows = await db.all(
-    `SELECT t.id AS transaction_id, t.order_id, t.amount, t.payment_method, t.description,
+    `WITH cash_sale_receipts AS (
+       SELECT o.receipt_number, o.branch_id
+       FROM orders o
+       WHERE DATE(o.order_date) = ?::date
+         AND (o.branch_id = ? OR o.branch_id IS NULL)
+       GROUP BY o.receipt_number, o.branch_id
+       HAVING BOOL_AND(o.payment_status = 'paid_full' AND o.payment_method = 'cash')
+     )
+     SELECT t.id AS transaction_id, t.order_id, t.amount, t.payment_method, t.description,
             t.transaction_date, t.created_by, t.branch_id,
             o.receipt_number, c.name AS customer_name, c.phone AS customer_phone
      FROM transactions t
      LEFT JOIN orders o ON o.id = t.order_id
      LEFT JOIN customers c ON c.id = o.customer_id
-     WHERE DATE(t.transaction_date) = ?
+     WHERE DATE(t.transaction_date) = ?::date
        AND t.transaction_type = 'payment_received'
-       AND t.payment_method = 'cash'` +
-      branchClause +
-      ` ORDER BY t.transaction_date DESC, t.id DESC`,
-    params
+       AND t.payment_method = 'cash'
+       AND (t.branch_id = ? OR t.branch_id IS NULL)
+       AND (
+         t.order_id IS NULL OR o.id IS NULL
+         OR NOT EXISTS (
+           SELECT 1 FROM cash_sale_receipts r
+           WHERE r.receipt_number = o.receipt_number
+             AND r.branch_id IS NOT DISTINCT FROM o.branch_id
+         )
+       )
+     ORDER BY t.transaction_date DESC, t.id DESC`,
+    [date, branchId, date, branchId]
   );
   return rows || [];
 }

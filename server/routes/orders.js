@@ -686,15 +686,15 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
             branch_id: branchId
           };
 
-          // Create transaction record if payment was made
-          if (final_paid_amount > 0 && (payment_status === 'paid_full' || payment_status === 'advance')) {
+          // Record transaction for advances only. paid_full at order entry is counted in daily
+          // cash_sales (orders); logging payment_received here too would double-count book_sales.
+          if (final_paid_amount > 0 && payment_status === 'advance') {
             recordPaymentTransaction(orderObj, final_paid_amount, payment_method || 'cash', created_by || 'System')
               .then((transactionId) => {
                 console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Order ${orderId}`);
               })
               .catch((err) => {
                 console.error('Error recording payment transaction:', err);
-                // Don't fail the order creation if transaction recording fails
               });
           }
 

@@ -525,6 +525,13 @@ const CashManagement = () => {
                 Collection
               </button>
               , then refresh totals.
+              {salesDetailModal === 'book' && (
+                <>
+                  {' '}
+                  Book sales lists cash from advances and later payments only; same-day paid-in-full register
+                  sales are in Cash sales, not here.
+                </>
+              )}
             </p>
             {salesDetailLoading ? (
               <p className="cash-detail-loading">Loading…</p>
