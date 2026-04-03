@@ -1,5 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { getTodayCashSummary, createDailyCashSummary, reconcileDailyCash, getBankDeposits, createBankDeposit, getActiveBankAccounts, getCashSummaryRange, getUnreconciledClosings, saveOpeningSession } from '../api/api';
+import { useNavigate } from 'react-router-dom';
+import {
+  getTodayCashSummary,
+  createDailyCashSummary,
+  reconcileDailyCash,
+  getBankDeposits,
+  createBankDeposit,
+  getActiveBankAccounts,
+  getCashSummaryRange,
+  getUnreconciledClosings,
+  saveOpeningSession,
+  getCashSalesDetailForDate,
+  getBookSalesDetailForDate,
+  recalculateDailyCashForDate
+} from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
@@ -8,6 +22,7 @@ import { receiptWidthCss } from '../utils/receiptPrintConfig';
 import './CashManagement.css';
 
 const CashManagement = () => {
+  const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
   const { user, selectedBranchId, isAdmin } = useAuth();
   const [summary, setSummary] = useState(null);
@@ -36,6 +51,11 @@ const CashManagement = () => {
   const [openingCashInput, setOpeningCashInput] = useState('');
   const [openingNotes, setOpeningNotes] = useState('');
   const [savingOpening, setSavingOpening] = useState(false);
+  const [salesDetailModal, setSalesDetailModal] = useState(null);
+  const [salesDetailLines, setSalesDetailLines] = useState([]);
+  const [salesDetailTotal, setSalesDetailTotal] = useState(0);
+  const [salesDetailLoading, setSalesDetailLoading] = useState(false);
+  const [salesDetailRecalculating, setSalesDetailRecalculating] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
   const today = new Date().toISOString().split('T')[0];
   const isAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
@@ -371,6 +391,66 @@ const CashManagement = () => {
     }
   };
 
+  const formatDetailWhen = (v) => {
+    if (!v) return '—';
+    try {
+      return new Date(v).toLocaleString();
+    } catch (e) {
+      return String(v);
+    }
+  };
+
+  const closeSalesDetailModal = () => {
+    setSalesDetailModal(null);
+    setSalesDetailLines([]);
+    setSalesDetailTotal(0);
+    setSalesDetailLoading(false);
+  };
+
+  const loadSalesDetailLines = async (kind) => {
+    setSalesDetailLoading(true);
+    try {
+      const res =
+        kind === 'cash' ? await getCashSalesDetailForDate(today) : await getBookSalesDetailForDate(today);
+      const data = res.data || {};
+      setSalesDetailLines(Array.isArray(data.lines) ? data.lines : []);
+      setSalesDetailTotal(Number(data.total) || 0);
+    } catch (err) {
+      showToast(err.response?.data?.error || err.message || 'Failed to load detail', 'error');
+      setSalesDetailLines([]);
+      setSalesDetailTotal(0);
+    } finally {
+      setSalesDetailLoading(false);
+    }
+  };
+
+  const openSalesDetailModal = async (kind) => {
+    if (summary?.all_branches) {
+      showToast('Select a specific branch to view line items.', 'error');
+      return;
+    }
+    setSalesDetailModal(kind);
+    await loadSalesDetailLines(kind);
+  };
+
+  const handleRecalculateFromSalesDetailModal = async () => {
+    if (summary?.is_reconciled) {
+      showToast('This day is reconciled; totals cannot be recalculated here.', 'info');
+      return;
+    }
+    setSalesDetailRecalculating(true);
+    try {
+      await recalculateDailyCashForDate(today);
+      showToast('Daily totals refreshed from live data.', 'success');
+      await loadData();
+      if (salesDetailModal) await loadSalesDetailLines(salesDetailModal);
+    } catch (err) {
+      showToast(err.response?.data?.error || err.message || 'Recalculate failed', 'error');
+    } finally {
+      setSalesDetailRecalculating(false);
+    }
+  };
+
   if (loading) {
     return <Loader message="Loading cash summary…" fullPage />;
   }
@@ -403,6 +483,179 @@ const CashManagement = () => {
   return (
     <div className="cash-management-page">
       <ToastContainer />
+      {salesDetailModal && (
+        <div
+          className="cash-detail-modal-overlay"
+          onClick={closeSalesDetailModal}
+          role="dialog"
+          aria-modal="true"
+          aria-label={salesDetailModal === 'cash' ? 'Cash sales lines' : 'Book sales lines'}
+        >
+          <div className="cash-detail-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="cash-detail-modal-header">
+              <h3 id="cash-detail-modal-title">
+                {salesDetailModal === 'cash'
+                  ? 'Cash sales — today'
+                  : 'Book sales — cash collections today'}
+              </h3>
+              <button
+                type="button"
+                className="cash-detail-modal-close"
+                onClick={closeSalesDetailModal}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <p className="cash-detail-modal-sub">
+              {new Date(today).toLocaleDateString('en-GB', {
+                weekday: 'short',
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric'
+              })}
+              {' · '}
+              Sum of listed lines should match the summary total. Fix payments in{' '}
+              <button type="button" className="btn-link" onClick={() => navigate('/orders')}>
+                Orders
+              </button>
+              {' or '}
+              <button type="button" className="btn-link" onClick={() => navigate('/collection')}>
+                Collection
+              </button>
+              , then refresh totals.
+            </p>
+            {salesDetailLoading ? (
+              <p className="cash-detail-loading">Loading…</p>
+            ) : salesDetailModal === 'cash' ? (
+              <div className="cash-detail-table-wrap interactive-scroll-region" tabIndex={0} role="region" aria-labelledby="cash-detail-modal-title" {...tableScrollHandlers}>
+                <table className="cash-detail-table">
+                  <thead>
+                    <tr>
+                      <th>Receipt</th>
+                      <th>Customer</th>
+                      <th className="num">Paid (TSh)</th>
+                      <th>When</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {salesDetailLines.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="text-muted">No cash sales rows for this date.</td>
+                      </tr>
+                    ) : (
+                      salesDetailLines.map((row) => (
+                        <tr key={`cs-${row.order_id}`}>
+                          <td>{row.receipt_number || '—'}</td>
+                          <td>
+                            <div>{row.customer_name || '—'}</div>
+                            <div className="text-muted small">{row.customer_phone || ''}</div>
+                          </td>
+                          <td className="num">{Number(row.paid_amount || 0).toLocaleString()}</td>
+                          <td>{formatDetailWhen(row.order_date)}</td>
+                          <td>
+                            {row.receipt_number ? (
+                              <button
+                                type="button"
+                                className="btn-link"
+                                onClick={() =>
+                                  navigate(`/collection?receipt=${encodeURIComponent(row.receipt_number)}`)
+                                }
+                              >
+                                Open
+                              </button>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="cash-detail-table-wrap interactive-scroll-region" tabIndex={0} role="region" aria-labelledby="cash-detail-modal-title" {...tableScrollHandlers}>
+                <table className="cash-detail-table">
+                  <thead>
+                    <tr>
+                      <th>When</th>
+                      <th>Receipt</th>
+                      <th>Customer</th>
+                      <th className="num">Amount (TSh)</th>
+                      <th>Recorded by</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {salesDetailLines.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="text-muted">No book sales (cash payment) rows for this date.</td>
+                      </tr>
+                    ) : (
+                      salesDetailLines.map((row) => (
+                        <tr key={`bs-${row.transaction_id}`}>
+                          <td>{formatDetailWhen(row.transaction_date)}</td>
+                          <td>{row.receipt_number || '—'}</td>
+                          <td>
+                            <div>{row.customer_name || '—'}</div>
+                            <div className="text-muted small">{row.customer_phone || ''}</div>
+                          </td>
+                          <td className="num">{Number(row.amount || 0).toLocaleString()}</td>
+                          <td>{row.created_by || '—'}</td>
+                          <td>
+                            {row.receipt_number ? (
+                              <button
+                                type="button"
+                                className="btn-link"
+                                onClick={() =>
+                                  navigate(`/collection?receipt=${encodeURIComponent(row.receipt_number)}`)
+                                }
+                              >
+                                Open
+                              </button>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="cash-detail-modal-footer">
+              <div className="cash-detail-total-row">
+                <strong>Lines total:</strong>{' '}
+                <span className="num">TSh {salesDetailTotal.toLocaleString()}</span>
+                {salesDetailModal === 'cash' && (
+                  <span className="text-muted cash-detail-compare">
+                    {' · '}Summary: TSh {toNum(summary.cash_sales).toLocaleString()}
+                  </span>
+                )}
+                {salesDetailModal === 'book' && (
+                  <span className="text-muted cash-detail-compare">
+                    {' · '}Summary: TSh {toNum(summary.book_sales).toLocaleString()}
+                  </span>
+                )}
+              </div>
+              <div className="cash-detail-actions">
+                {!summary.is_reconciled && (
+                  <button
+                    type="button"
+                    className="btn-secondary btn-small"
+                    onClick={handleRecalculateFromSalesDetailModal}
+                    disabled={salesDetailRecalculating}
+                  >
+                    {salesDetailRecalculating ? 'Refreshing…' : 'Refresh totals'}
+                  </button>
+                )}
+                <button type="button" className="btn-primary btn-small" onClick={closeSalesDetailModal}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {lastSyncedAt && (
         <div className="sync-cache-banner" role="status">
           Showing data from last sync — {new Date(lastSyncedAt).toLocaleString()}
@@ -525,12 +778,38 @@ const CashManagement = () => {
               <tr>
                 <td>💰 Cash Sales</td>
                 <td className="num">{parseFloat(summary.cash_sales || 0).toLocaleString()}</td>
-                <td className="text-muted">Paid in full with cash today</td>
+                <td className="text-muted">
+                  <div className="cash-metric-desc">
+                    <span>Paid in full with cash today</span>
+                    {!summary.all_branches && (
+                      <button
+                        type="button"
+                        className="btn-link cash-metric-view-btn"
+                        onClick={() => openSalesDetailModal('cash')}
+                      >
+                        View lines
+                      </button>
+                    )}
+                  </div>
+                </td>
               </tr>
               <tr>
                 <td>📖 Book Sales</td>
                 <td className="num">{parseFloat(summary.book_sales || 0).toLocaleString()}</td>
-                <td className="text-muted">Collections from unpaid orders</td>
+                <td className="text-muted">
+                  <div className="cash-metric-desc">
+                    <span>Cash collected on account (receive payment / collection)</span>
+                    {!summary.all_branches && (
+                      <button
+                        type="button"
+                        className="btn-link cash-metric-view-btn"
+                        onClick={() => openSalesDetailModal('book')}
+                      >
+                        View lines
+                      </button>
+                    )}
+                  </div>
+                </td>
               </tr>
               <tr>
                 <td>💳 Card & M-Pesa</td>

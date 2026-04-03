@@ -226,6 +226,46 @@ async function refreshUnreconciledSummariesFromDate(branchId, startDate) {
   return { expenseDayRefresh: expenseDayRefresh || { skipped: false }, daysRefreshed: sorted.length };
 }
 
+// Line-level detail for cash sales on a date (matches daily summary cash_sales)
+router.get('/details/cash-sales/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+  const { date } = req.params;
+  const branchId = getEffectiveBranchId(req);
+  if (branchId == null) {
+    return res.status(400).json({ error: 'Select a branch to view cash sales detail' });
+  }
+  try {
+    const {
+      listCashSalesOrdersForDate
+    } = require('../utils/cashValidation');
+    const lines = await listCashSalesOrdersForDate(date, branchId);
+    const total = lines.reduce((s, r) => s + num(r.paid_amount), 0);
+    res.json({ date, branch_id: branchId, lines, total });
+  } catch (err) {
+    console.error('Error listing cash sales detail:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Line-level detail for book sales (cash collections) on a date (matches daily summary book_sales)
+router.get('/details/book-sales/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+  const { date } = req.params;
+  const branchId = getEffectiveBranchId(req);
+  if (branchId == null) {
+    return res.status(400).json({ error: 'Select a branch to view book sales detail' });
+  }
+  try {
+    const {
+      listBookSalesCashTransactionsForDate
+    } = require('../utils/cashValidation');
+    const lines = await listBookSalesCashTransactionsForDate(date, branchId);
+    const total = lines.reduce((s, r) => s + num(r.amount), 0);
+    res.json({ date, branch_id: branchId, lines, total });
+  } catch (err) {
+    console.error('Error listing book sales detail:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get daily cash summary by date (cashiers, managers, admins can view)
 router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { date } = req.params;

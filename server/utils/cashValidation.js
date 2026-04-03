@@ -177,11 +177,61 @@ async function getPaymentHistory(orderId) {
   }
 }
 
+/**
+ * Line items for daily cash sales total (paid-in-full cash orders on order_date).
+ * Must match the query in cashManagement.computeAndPersistDailySummary.
+ */
+async function listCashSalesOrdersForDate(date, branchId) {
+  if (branchId == null) return [];
+  const rows = await db.all(
+    `SELECT o.id AS order_id, o.receipt_number, o.customer_name, o.customer_phone,
+            o.paid_amount, o.total_amount, o.order_date, o.payment_status, o.payment_method
+     FROM orders o
+     WHERE DATE(o.order_date) = ?
+       AND o.payment_status = 'paid_full'
+       AND o.payment_method = 'cash'
+       AND o.paid_amount > 0
+       AND o.branch_id = ?
+     ORDER BY o.order_date DESC, o.id DESC`,
+    [date, branchId]
+  );
+  return rows || [];
+}
+
+/**
+ * Cash payment_received transactions on a calendar day (book sales / collections).
+ * Must match calculateBookSales branch filter.
+ */
+async function listBookSalesCashTransactionsForDate(date, branchId) {
+  const params = [date];
+  let branchClause = '';
+  if (branchId != null) {
+    branchClause = ' AND (t.branch_id = ? OR t.branch_id IS NULL)';
+    params.push(branchId);
+  }
+  const rows = await db.all(
+    `SELECT t.id AS transaction_id, t.order_id, t.amount, t.payment_method, t.description,
+            t.transaction_date, t.created_by, t.branch_id,
+            o.receipt_number, o.customer_name, o.customer_phone
+     FROM transactions t
+     LEFT JOIN orders o ON o.id = t.order_id
+     WHERE DATE(t.transaction_date) = ?
+       AND t.transaction_type = 'payment_received'
+       AND t.payment_method = 'cash'` +
+      branchClause +
+      ` ORDER BY t.transaction_date DESC, t.id DESC`,
+    params
+  );
+  return rows || [];
+}
+
 module.exports = {
   validateCashBalance,
   calculateBookSales,
   calculateMobileMoneyReceived,
   calculateCardReceived,
   calculateBankReceived,
-  getPaymentHistory
+  getPaymentHistory,
+  listCashSalesOrdersForDate,
+  listBookSalesCashTransactionsForDate
 };
