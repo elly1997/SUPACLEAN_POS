@@ -179,13 +179,18 @@ async function getPaymentHistory(orderId) {
 
 /**
  * Line items for daily cash sales total (paid-in-full cash orders on order_date).
- * Must match the query in cashManagement.computeAndPersistDailySummary.
+ * One row per receipt: `orders` stores one row per garment/line item, so the same
+ * receipt_number appears on multiple rows; we aggregate paid_amount to match how
+ * cash_sales is summed in cashManagement.computeAndPersistDailySummary.
  */
 async function listCashSalesOrdersForDate(date, branchId) {
   if (branchId == null) return [];
   const rows = await db.all(
-    `SELECT o.id AS order_id, o.receipt_number, c.name AS customer_name, c.phone AS customer_phone,
-            o.paid_amount, o.total_amount, o.order_date, o.payment_status, o.payment_method
+    `SELECT MIN(o.id) AS order_id, o.receipt_number,
+            MAX(c.name) AS customer_name, MAX(c.phone) AS customer_phone,
+            SUM(o.paid_amount) AS paid_amount, SUM(o.total_amount) AS total_amount,
+            MAX(o.order_date) AS order_date, MAX(o.payment_status) AS payment_status,
+            MAX(o.payment_method) AS payment_method
      FROM orders o
      JOIN customers c ON c.id = o.customer_id
      WHERE DATE(o.order_date) = ?
@@ -193,7 +198,8 @@ async function listCashSalesOrdersForDate(date, branchId) {
        AND o.payment_method = 'cash'
        AND o.paid_amount > 0
        AND o.branch_id = ?
-     ORDER BY o.order_date DESC, o.id DESC`,
+     GROUP BY o.branch_id, o.receipt_number
+     ORDER BY MAX(o.order_date) DESC, MIN(o.id) DESC`,
     [date, branchId]
   );
   return rows || [];

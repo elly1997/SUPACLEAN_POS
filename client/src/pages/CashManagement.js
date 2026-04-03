@@ -546,7 +546,7 @@ const CashManagement = () => {
                       </tr>
                     ) : (
                       salesDetailLines.map((row) => (
-                        <tr key={`cs-${row.order_id}`}>
+                        <tr key={`cs-${row.receipt_number || ''}-${row.order_id}`}>
                           <td>{row.receipt_number || '—'}</td>
                           <td>
                             <div>{row.customer_name || '—'}</div>
