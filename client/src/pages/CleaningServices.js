@@ -9,17 +9,30 @@ import {
   getCleaningFinancialSummary,
   getCleaningExpenses,
   getCleaningExpenseCategories,
-  createCleaningExpense
+  createCleaningExpense,
+  getActiveBankAccounts
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import Loader from '../components/Loader';
 import './CleaningServices.css';
 
 const BUSINESS_INFO = {
-  name: 'SUPACLEAN',
+  legalName: 'FREMBO ENTERPRISES COMPANY LIMITED',
+  brandName: 'SUPACLEAN',
+  brandTagline: 'Professional Cleaning Services',
   tin: '191-360-370',
-  location: 'Levolosi Arusha',
+  registeredAddress: 'Arusha City, Tanzania',
+  operatingLocation: 'Levolosi, Arusha',
 };
+
+function escapeHtml(str) {
+  if (str == null || str === '') return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 const defaultLineItem = () => ({
   id: Math.random().toString(36).slice(2),
@@ -297,86 +310,378 @@ const CleaningServices = () => {
   const handlePrint = async (id, docFromCreate) => {
     try {
       const doc = docFromCreate || (await getCleaningDocument(id)).data;
+      let bankAccounts = [];
+      try {
+        const accRes = await getActiveBankAccounts();
+        bankAccounts = Array.isArray(accRes.data) ? accRes.data : [];
+      } catch {
+        bankAccounts = [];
+      }
+
       const customerName = doc.customer_name || 'Customer';
       const customerPhone = doc.customer_phone || '';
       const customerEmail = doc.email || '';
       const customerAddress = doc.address || '';
-      const title = doc.document_type === 'quotation' ? 'QUOTATION' : 'INVOICE';
+      const isQuotation = doc.document_type === 'quotation';
+      const title = isQuotation ? 'QUOTATION' : 'TAX INVOICE';
+      const docNo = escapeHtml(doc.document_number || '');
       const lines = (doc.items || []).map(
         (it) =>
           `<tr>
-            <td>${(it.service_type || '').trim() || '—'}</td>
-            <td>${(it.description || '').replace(/</g, '&lt;')}</td>
-            <td>${it.quantity}</td>
-            <td>${Number(it.unit_price).toLocaleString()}</td>
-            <td>${Number(it.total_amount).toLocaleString()}</td>
+            <td>${escapeHtml((it.service_type || '').trim() || '—')}</td>
+            <td>${escapeHtml(it.description || '')}</td>
+            <td class="num">${escapeHtml(String(it.quantity))}</td>
+            <td class="num">${Number(it.unit_price).toLocaleString()}</td>
+            <td class="num">${Number(it.total_amount).toLocaleString()}</td>
           </tr>`
       );
-      const total = doc.total_amount != null ? Number(doc.total_amount).toLocaleString() : '0';
-      const docDate = doc.document_date ? new Date(doc.document_date).toLocaleDateString() : '';
-      const dueDate = doc.due_date ? new Date(doc.due_date).toLocaleDateString() : '';
+      const totalNum = doc.total_amount != null ? Number(doc.total_amount) : 0;
+      const total = totalNum.toLocaleString();
+      const docDate = doc.document_date ? new Date(doc.document_date).toLocaleDateString(undefined, { day: '2-digit', month: 'long', year: 'numeric' }) : '';
+      const dueDate = doc.due_date ? new Date(doc.due_date).toLocaleDateString(undefined, { day: '2-digit', month: 'long', year: 'numeric' }) : '';
+      const isInvoiceDoc = doc.document_type === 'invoice';
+      const paidNum = isInvoiceDoc ? Number(doc.paid_amount || 0) : 0;
+      const balanceNum = isInvoiceDoc && doc.balance_due != null ? Number(doc.balance_due) : null;
+      let summaryRowsHtml = '';
+      if (isInvoiceDoc && paidNum > 0) {
+        summaryRowsHtml = `
+              <tr><td>Invoice total (TSh)</td><td>${total}</td></tr>
+              <tr><td>Amount received (TSh)</td><td>${paidNum.toLocaleString()}</td></tr>
+              <tr class="total"><td>Balance due (TSh)</td><td>${balanceNum != null ? balanceNum.toLocaleString() : total}</td></tr>`;
+      } else if (isInvoiceDoc) {
+        summaryRowsHtml = `<tr class="total"><td>Total due (TSh)</td><td>${total}</td></tr>`;
+      } else {
+        summaryRowsHtml = `<tr class="total"><td>Quoted total (TSh)</td><td>${total}</td></tr>`;
+      }
+
+      const bankRows =
+        bankAccounts.length > 0
+          ? bankAccounts
+              .map(
+                (a) =>
+                  `<tr>
+                  <td>${escapeHtml(a.name || 'Account')}</td>
+                  <td class="mono">${escapeHtml(a.account_number || '—')}</td>
+                </tr>`
+              )
+              .join('')
+          : '';
+
+      const paymentSection =
+        bankAccounts.length > 0
+          ? `
+          <section class="payment-section">
+            <h2 class="section-title">Payment details</h2>
+            <p class="payment-intro">
+              Payments are payable to <strong>${escapeHtml(BUSINESS_INFO.legalName)}</strong> in <strong>Tanzanian Shillings (TSh)</strong>.
+              Please use <strong>${docNo}</strong> as the payment reference so we can allocate your payment correctly.
+            </p>
+            <table class="bank-table">
+              <thead>
+                <tr>
+                  <th>Bank / account name</th>
+                  <th>Account number</th>
+                </tr>
+              </thead>
+              <tbody>${bankRows}</tbody>
+            </table>
+            <p class="payment-note">Kindly send proof of payment to our office or your usual contact once the transfer is completed.</p>
+          </section>`
+          : `
+          <section class="payment-section payment-section--empty">
+            <h2 class="section-title">Payment details</h2>
+            <p class="payment-intro muted">Bank accounts are managed in Admin settings. Ask your administrator or contact accounts for the current payment instructions.</p>
+          </section>`;
 
       const printHTML = `
         <!DOCTYPE html>
-        <html>
+        <html lang="en">
         <head>
           <meta charset="utf-8">
-          <title>${title} ${doc.document_number}</title>
+          <title>${escapeHtml(title)} ${docNo}</title>
           <style>
-            body { font-family: Arial, sans-serif; font-size: 12px; color: #000; max-width: 800px; margin: 0 auto; padding: 20px; }
-            .header { display: flex; justify-content: space-between; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #333; }
-            .business h1 { margin: 0 0 4px 0; font-size: 18px; }
-            .business p { margin: 4px 0; }
-            .doc-title { font-size: 20px; font-weight: bold; text-align: center; margin: 16px 0; }
-            table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-            th, td { border: 1px solid #333; padding: 8px; text-align: left; }
-            th { background: #f0f0f0; }
-            .text-right { text-align: right; }
-            .total-row { font-weight: bold; }
-            .footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid #999; font-size: 11px; color: #555; }
-            @media print { body { padding: 0; } .no-print { display: none; } }
+            @page { size: A4; margin: 14mm; }
+            * { box-sizing: border-box; }
+            body {
+              font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+              font-size: 11px;
+              line-height: 1.45;
+              color: #1a1a1a;
+              margin: 0;
+              padding: 24px;
+              max-width: 210mm;
+              margin-left: auto;
+              margin-right: auto;
+            }
+            .sheet-accent {
+              height: 5px;
+              background: #1e3a5f;
+              margin: -24px -24px 20px -24px;
+            }
+            .letterhead {
+              display: flex;
+              justify-content: space-between;
+              align-items: flex-start;
+              gap: 24px;
+              padding-bottom: 18px;
+              border-bottom: 1px solid #c5cdd6;
+              margin-bottom: 20px;
+            }
+            .legal-name {
+              font-size: 9px;
+              letter-spacing: 0.12em;
+              text-transform: uppercase;
+              color: #4a5568;
+              font-weight: 600;
+              margin-bottom: 6px;
+            }
+            .brand-name {
+              font-size: 22px;
+              font-weight: 700;
+              color: #1e3a5f;
+              letter-spacing: -0.02em;
+              margin: 0 0 2px 0;
+            }
+            .brand-tagline {
+              font-size: 11px;
+              color: #5c6c7c;
+              margin-bottom: 12px;
+            }
+            .company-lines {
+              font-size: 10px;
+              color: #374151;
+            }
+            .company-lines p { margin: 3px 0; }
+            .doc-badge {
+              text-align: right;
+              min-width: 140px;
+            }
+            .doc-badge-inner {
+              display: inline-block;
+              border: 2px solid #1e3a5f;
+              color: #1e3a5f;
+              font-size: 11px;
+              font-weight: 700;
+              letter-spacing: 0.08em;
+              padding: 8px 14px;
+              text-transform: uppercase;
+            }
+            .meta-grid {
+              display: grid;
+              grid-template-columns: repeat(4, 1fr);
+              gap: 12px;
+              margin-bottom: 20px;
+            }
+            @media (max-width: 640px) {
+              .meta-grid { grid-template-columns: repeat(2, 1fr); }
+            }
+            .meta-cell {
+              border: 1px solid #e2e8f0;
+              padding: 10px 12px;
+              background: #f8fafc;
+            }
+            .meta-label {
+              font-size: 9px;
+              text-transform: uppercase;
+              letter-spacing: 0.06em;
+              color: #64748b;
+              margin-bottom: 4px;
+            }
+            .meta-value { font-size: 12px; font-weight: 600; color: #0f172a; }
+            .bill-to {
+              border: 1px solid #c5cdd6;
+              padding: 14px 16px;
+              margin-bottom: 20px;
+              background: #fff;
+            }
+            .bill-to h3 {
+              margin: 0 0 10px 0;
+              font-size: 9px;
+              text-transform: uppercase;
+              letter-spacing: 0.08em;
+              color: #64748b;
+            }
+            .bill-to p { margin: 4px 0; font-size: 12px; }
+            .items-table {
+              width: 100%;
+              border-collapse: collapse;
+              margin: 0 0 8px 0;
+              font-size: 10px;
+            }
+            .items-table th {
+              background: #1e3a5f;
+              color: #fff;
+              font-weight: 600;
+              text-align: left;
+              padding: 10px 8px;
+              border: 1px solid #1e3a5f;
+            }
+            .items-table th.num, .items-table td.num { text-align: right; }
+            .items-table td {
+              padding: 9px 8px;
+              border: 1px solid #d1d9e0;
+              vertical-align: top;
+            }
+            .items-table tbody tr:nth-child(even) { background: #f8fafc; }
+            .summary-wrap {
+              display: flex;
+              justify-content: flex-end;
+              margin-bottom: 22px;
+            }
+            .summary-table {
+              width: 280px;
+              border-collapse: collapse;
+              font-size: 11px;
+            }
+            .summary-table td {
+              padding: 6px 10px;
+              border: 1px solid #e2e8f0;
+            }
+            .summary-table td:first-child { background: #f1f5f9; font-weight: 500; }
+            .summary-table td:last-child { text-align: right; font-weight: 600; }
+            .summary-table tr.total td {
+              background: #1e3a5f;
+              color: #fff;
+              border-color: #1e3a5f;
+              font-size: 12px;
+            }
+            .notes-block {
+              margin-bottom: 20px;
+              padding: 12px 14px;
+              background: #f8fafc;
+              border-left: 3px solid #1e3a5f;
+              font-size: 10px;
+            }
+            .payment-section {
+              margin-top: 8px;
+              padding-top: 18px;
+              border-top: 2px solid #1e3a5f;
+              page-break-inside: avoid;
+            }
+            .payment-section--empty { border-top-color: #cbd5e1; }
+            .section-title {
+              font-size: 12px;
+              text-transform: uppercase;
+              letter-spacing: 0.06em;
+              color: #1e3a5f;
+              margin: 0 0 10px 0;
+            }
+            .payment-intro { font-size: 10px; margin: 0 0 12px 0; color: #334155; max-width: 100%; }
+            .payment-intro.muted { color: #64748b; font-style: italic; }
+            .payment-note { font-size: 9px; color: #64748b; margin: 12px 0 0 0; }
+            .bank-table {
+              width: 100%;
+              border-collapse: collapse;
+              font-size: 10px;
+            }
+            .bank-table th {
+              text-align: left;
+              padding: 8px 10px;
+              background: #eef2f7;
+              border: 1px solid #cbd5e1;
+              font-weight: 600;
+            }
+            .bank-table td {
+              padding: 8px 10px;
+              border: 1px solid #e2e8f0;
+            }
+            .bank-table .mono { font-family: Consolas, 'Courier New', monospace; letter-spacing: 0.03em; }
+            .doc-footer {
+              margin-top: 28px;
+              padding-top: 14px;
+              border-top: 1px solid #e2e8f0;
+              font-size: 9px;
+              color: #64748b;
+              text-align: center;
+            }
+            .no-print { margin-top: 20px; }
+            .no-print button {
+              font-size: 13px;
+              padding: 8px 16px;
+              margin-right: 10px;
+              cursor: pointer;
+            }
+            @media print {
+              body { padding: 0; }
+              .sheet-accent { margin: 0 0 16px 0; }
+              .no-print { display: none !important; }
+            }
           </style>
         </head>
         <body>
-          <div class="header">
-            <div class="business">
-              <h1>${BUSINESS_INFO.name}</h1>
-              <p><strong>TIN:</strong> ${BUSINESS_INFO.tin}</p>
-              <p><strong>Location:</strong> ${BUSINESS_INFO.location}</p>
+          <div class="sheet-accent"></div>
+          <header class="letterhead">
+            <div>
+              <div class="legal-name">${escapeHtml(BUSINESS_INFO.legalName)}</div>
+              <h1 class="brand-name">${escapeHtml(BUSINESS_INFO.brandName)}</h1>
+              <div class="brand-tagline">${escapeHtml(BUSINESS_INFO.brandTagline)}</div>
+              <div class="company-lines">
+                <p><strong>Registered address:</strong> ${escapeHtml(BUSINESS_INFO.registeredAddress)}</p>
+                <p><strong>Operating location:</strong> ${escapeHtml(BUSINESS_INFO.operatingLocation)}</p>
+                <p><strong>TIN:</strong> ${escapeHtml(BUSINESS_INFO.tin)}</p>
+              </div>
             </div>
-            <div class="customer">
-              <p><strong>Customer</strong></p>
-              <p>${customerName.replace(/</g, '&lt;')}</p>
-              ${customerPhone ? `<p>${customerPhone.replace(/</g, '&lt;')}</p>` : ''}
-              ${customerEmail ? `<p>${customerEmail.replace(/</g, '&lt;')}</p>` : ''}
-              ${customerAddress ? `<p>${customerAddress.replace(/</g, '&lt;')}</p>` : ''}
+            <div class="doc-badge">
+              <div class="doc-badge-inner">${escapeHtml(title)}</div>
+            </div>
+          </header>
+
+          <div class="meta-grid">
+            <div class="meta-cell">
+              <div class="meta-label">${isQuotation ? 'Quotation no.' : 'Invoice no.'}</div>
+              <div class="meta-value">${docNo}</div>
+            </div>
+            <div class="meta-cell">
+              <div class="meta-label">Document date</div>
+              <div class="meta-value">${escapeHtml(docDate)}</div>
+            </div>
+            <div class="meta-cell">
+              <div class="meta-label">${isQuotation ? 'Valid until' : 'Due date'}</div>
+              <div class="meta-value">${dueDate ? escapeHtml(dueDate) : '—'}</div>
+            </div>
+            <div class="meta-cell">
+              <div class="meta-label">Currency</div>
+              <div class="meta-value">TSh</div>
             </div>
           </div>
-          <div class="doc-title">${title}</div>
-          <p><strong>Document:</strong> ${doc.document_number} &nbsp; <strong>Date:</strong> ${docDate} ${dueDate ? ' &nbsp; <strong>Due:</strong> ' + dueDate : ''}</p>
-          <table>
+
+          <div class="bill-to">
+            <h3>Bill to</h3>
+            <p><strong>${escapeHtml(customerName)}</strong></p>
+            ${customerPhone ? `<p>${escapeHtml(customerPhone)}</p>` : ''}
+            ${customerEmail ? `<p>${escapeHtml(customerEmail)}</p>` : ''}
+            ${customerAddress ? `<p>${escapeHtml(customerAddress)}</p>` : ''}
+          </div>
+
+          <table class="items-table">
             <thead>
               <tr>
-                <th>Type of service</th>
+                <th style="width:18%">Service type</th>
                 <th>Description</th>
-                <th>Qty</th>
-                <th>Unit price (TSh)</th>
-                <th>Amount (TSh)</th>
+                <th class="num" style="width:8%">Qty</th>
+                <th class="num" style="width:14%">Unit price (TSh)</th>
+                <th class="num" style="width:14%">Amount (TSh)</th>
               </tr>
             </thead>
             <tbody>${lines.join('')}</tbody>
-            <tfoot>
-              <tr class="total-row">
-                <td colspan="4" class="text-right">Total</td>
-                <td>${total}</td>
-              </tr>
-            </tfoot>
           </table>
-          ${doc.notes ? `<p><strong>Notes:</strong> ${doc.notes.replace(/</g, '&lt;')}</p>` : ''}
-          <div class="footer">
-            <p>${BUSINESS_INFO.name} · TIN: ${BUSINESS_INFO.tin} · ${BUSINESS_INFO.location}</p>
+
+          <div class="summary-wrap">
+            <table class="summary-table">
+              ${summaryRowsHtml}
+            </table>
           </div>
-          <p class="no-print" style="margin-top: 24px;">
+
+          ${doc.notes ? `<div class="notes-block"><strong>Notes</strong><br>${escapeHtml(doc.notes)}</div>` : ''}
+
+          ${paymentSection}
+
+          <footer class="doc-footer">
+            <p>${escapeHtml(BUSINESS_INFO.legalName)} · Trading as <strong>${escapeHtml(BUSINESS_INFO.brandName)}</strong> · TIN ${escapeHtml(BUSINESS_INFO.tin)} · ${escapeHtml(BUSINESS_INFO.registeredAddress)}</p>
+            <p>This document was generated electronically and is valid without signature unless otherwise agreed in writing.</p>
+          </footer>
+
+          <p class="no-print">
             <button type="button" onclick="window.print();">Print</button>
             <button type="button" onclick="window.close();">Close</button>
           </p>
