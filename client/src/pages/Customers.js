@@ -1,12 +1,29 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getCustomers, createCustomer, updateCustomer, uploadCustomersExcel, checkServerConnection, sendBalanceReminder } from '../api/api';
+import {
+  getCustomers,
+  createCustomer,
+  updateCustomer,
+  uploadCustomersExcel,
+  checkServerConnection,
+  sendBalanceReminder,
+  getBulkSmsPreview,
+  sendBulkCustomerSms
+} from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
+import {
+  loadBulkSmsTemplates,
+  saveBulkSmsTemplates,
+  resetBulkSmsTemplatesToDefaults,
+  BULK_SMS_TEMPLATE_BODY_MAX,
+} from '../utils/bulkSmsTemplates';
 import './Customers.css';
+
+const BULK_SMS_MAX_CHARS = 640;
 
 const CUSTOMERS_EXPORT_COLUMNS = [
   { key: 'branch_id', label: 'Branch ID' },
@@ -46,6 +63,16 @@ const Customers = () => {
   const [loadingMore, setLoadingMore] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showExportPopup, setShowExportPopup] = useState(false);
+  const [showBulkSmsModal, setShowBulkSmsModal] = useState(false);
+  const [bulkSmsMessage, setBulkSmsMessage] = useState('');
+  const [bulkSmsRespectOptOut, setBulkSmsRespectOptOut] = useState(true);
+  const [bulkSmsPreview, setBulkSmsPreview] = useState(null);
+  const [bulkSmsPreviewLoading, setBulkSmsPreviewLoading] = useState(false);
+  const [bulkSmsSubmitting, setBulkSmsSubmitting] = useState(false);
+  const [bulkSmsResult, setBulkSmsResult] = useState(null);
+  const [bulkSmsTemplates, setBulkSmsTemplates] = useState(() => loadBulkSmsTemplates());
+  const [bulkSmsPickedTemplateId, setBulkSmsPickedTemplateId] = useState('');
+  const [bulkSmsShowTemplateManager, setBulkSmsShowTemplateManager] = useState(false);
   const searchInputRef = useRef(null);
 
   const CUSTOMERS_PAGE_SIZE = 50;
@@ -204,6 +231,142 @@ const Customers = () => {
     }
   };
 
+  const loadBulkSmsPreview = useCallback(async () => {
+    setBulkSmsPreviewLoading(true);
+    try {
+      const res = await getBulkSmsPreview({ respect_opt_out: bulkSmsRespectOptOut ? '1' : '0' });
+      setBulkSmsPreview(res.data || null);
+    } catch (e) {
+      setBulkSmsPreview(null);
+      showToast(e.response?.data?.error || e.message || 'Could not load SMS preview', 'error');
+    } finally {
+      setBulkSmsPreviewLoading(false);
+    }
+  }, [bulkSmsRespectOptOut, showToast]);
+
+  useEffect(() => {
+    if (!showBulkSmsModal) return;
+    loadBulkSmsPreview();
+  }, [showBulkSmsModal, loadBulkSmsPreview]);
+
+  const handleOpenBulkSms = () => {
+    setBulkSmsMessage('');
+    setBulkSmsResult(null);
+    setBulkSmsPickedTemplateId('');
+    setBulkSmsShowTemplateManager(false);
+    setBulkSmsTemplates(loadBulkSmsTemplates());
+    setBulkSmsPreview(null);
+    setBulkSmsPreviewLoading(true);
+    setShowBulkSmsModal(true);
+  };
+
+  const handleCloseBulkSms = () => {
+    setShowBulkSmsModal(false);
+    setBulkSmsMessage('');
+    setBulkSmsResult(null);
+    setBulkSmsPickedTemplateId('');
+    setBulkSmsShowTemplateManager(false);
+  };
+
+  const setBulkSmsMessageTracked = useCallback(
+    (value) => {
+      setBulkSmsMessage(value);
+      setBulkSmsPickedTemplateId((picked) => {
+        if (!picked) return '';
+        const t = bulkSmsTemplates.find((x) => x.id === picked);
+        return t && t.body === value ? picked : '';
+      });
+    },
+    [bulkSmsTemplates]
+  );
+
+  const handleBulkSmsTemplateFieldChange = (id, field, rawValue) => {
+    const value =
+      field === 'body' ? String(rawValue).slice(0, BULK_SMS_TEMPLATE_BODY_MAX) : String(rawValue).slice(0, 100);
+    setBulkSmsTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
+  };
+
+  const handleSaveBulkSmsTemplates = () => {
+    try {
+      const saved = saveBulkSmsTemplates(bulkSmsTemplates);
+      setBulkSmsTemplates(saved);
+      showToast('Templates saved on this browser', 'success');
+      if (bulkSmsPickedTemplateId) {
+        const t = saved.find((x) => x.id === bulkSmsPickedTemplateId);
+        if (t) setBulkSmsMessage(t.body);
+      }
+    } catch (e) {
+      showToast('Could not save templates', 'error');
+    }
+  };
+
+  const handleAddBulkSmsTemplate = () => {
+    const id = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    setBulkSmsTemplates((prev) => [...prev, { id, name: 'New template', body: '' }]);
+    setBulkSmsShowTemplateManager(true);
+  };
+
+  const handleDeleteBulkSmsTemplate = (id) => {
+    if (!window.confirm('Delete this template?')) return;
+    const next = bulkSmsTemplates.filter((t) => t.id !== id);
+    setBulkSmsTemplates(next);
+    try {
+      saveBulkSmsTemplates(next);
+      showToast('Template deleted', 'success');
+    } catch {
+      showToast('Could not save after delete', 'error');
+    }
+    if (bulkSmsPickedTemplateId === id) {
+      setBulkSmsPickedTemplateId('');
+    }
+  };
+
+  const handleResetBulkSmsTemplates = () => {
+    if (!window.confirm('Replace all templates with the built-in defaults? Your custom templates will be removed from this browser.')) return;
+    const fresh = resetBulkSmsTemplatesToDefaults();
+    setBulkSmsTemplates(fresh);
+    setBulkSmsPickedTemplateId('');
+    showToast('Templates reset to defaults', 'success');
+  };
+
+  const handleSendBulkSms = async (e) => {
+    e.preventDefault();
+    const msg = bulkSmsMessage.trim();
+    if (msg.length < 3) {
+      showToast('Message is too short', 'error');
+      return;
+    }
+    if (msg.length > BULK_SMS_MAX_CHARS) {
+      showToast(`Message must be at most ${BULK_SMS_MAX_CHARS} characters`, 'error');
+      return;
+    }
+    const n = bulkSmsPreview?.would_send ?? 0;
+    if (n < 1) {
+      showToast('No recipients match your filters. Add phone numbers or adjust opt-out settings.', 'error');
+      return;
+    }
+    const ok = window.confirm(
+      `Send this SMS to ${n} phone number(s)?\n\nThis uses your SMS provider (e.g. Africa's Talking) and may incur charges.`
+    );
+    if (!ok) return;
+    setBulkSmsSubmitting(true);
+    setBulkSmsResult(null);
+    try {
+      const res = await sendBulkCustomerSms({
+        message: msg,
+        respect_sms_opt_out: bulkSmsRespectOptOut
+      });
+      setBulkSmsResult(res.data);
+      const { sent, failed } = res.data;
+      showToast(`Bulk SMS finished: ${sent} sent${failed ? `, ${failed} failed` : ''}.`, failed ? 'warning' : 'success');
+      loadBulkSmsPreview();
+    } catch (err) {
+      showToast(err.response?.data?.error || err.message || 'Bulk SMS failed', 'error');
+    } finally {
+      setBulkSmsSubmitting(false);
+    }
+  };
+
   const handleExportCustomers = async (format) => {
     setExporting(true);
     try {
@@ -243,6 +406,186 @@ const Customers = () => {
   return (
     <div className="customers-page">
       <ToastContainer />
+      {showBulkSmsModal && (
+        <div className="export-popup-overlay" onClick={handleCloseBulkSms} role="dialog" aria-modal="true" aria-labelledby="bulk-sms-title">
+          <div className="export-popup bulk-sms-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="export-popup-header">
+              <h3 id="bulk-sms-title">Bulk SMS to customers</h3>
+              <button type="button" className="export-popup-close" onClick={handleCloseBulkSms} aria-label="Close">
+                ×
+              </button>
+            </div>
+            <p className="export-popup-hint">
+              One SMS per unique phone number for laundry customers in the current branch view (same scope as this list). Admin viewing all
+              branches reaches every customer. Max {bulkSmsPreview?.capped_at ?? 300} sends per run.
+            </p>
+            <div className="bulk-sms-preview-block">
+              {bulkSmsPreviewLoading ? (
+                <p className="bulk-sms-muted">Loading recipient counts…</p>
+              ) : bulkSmsPreview ? (
+                <ul className="bulk-sms-stats">
+                  <li>
+                    <strong>{bulkSmsPreview.would_send}</strong> will receive SMS
+                  </li>
+                  <li>{bulkSmsPreview.total_customers_in_scope} customers in scope</li>
+                  {bulkSmsPreview.skipped_no_phone > 0 && (
+                    <li className="bulk-sms-warn">{bulkSmsPreview.skipped_no_phone} skipped (no phone)</li>
+                  )}
+                  {bulkSmsPreview.skipped_opted_out > 0 && (
+                    <li className="bulk-sms-warn">{bulkSmsPreview.skipped_opted_out} skipped (SMS disabled)</li>
+                  )}
+                  {bulkSmsPreview.skipped_duplicate_phone > 0 && (
+                    <li className="bulk-sms-muted">{bulkSmsPreview.skipped_duplicate_phone} duplicate phone rows merged</li>
+                  )}
+                </ul>
+              ) : (
+                <p className="bulk-sms-muted">Could not load preview.</p>
+              )}
+            </div>
+            <label className="bulk-sms-checkbox">
+              <input
+                type="checkbox"
+                checked={bulkSmsRespectOptOut}
+                onChange={(e) => setBulkSmsRespectOptOut(e.target.checked)}
+              />
+              Skip customers who turned off SMS notifications
+            </label>
+            {bulkSmsRespectOptOut === false && (
+              <p className="bulk-sms-warn small">Only disable if you have consent; marketing rules may apply.</p>
+            )}
+            <form onSubmit={handleSendBulkSms} className="bulk-sms-form">
+              <div className="bulk-sms-template-toolbar">
+                <button
+                  type="button"
+                  className="btn-secondary bulk-sms-toolbar-btn"
+                  onClick={() => setBulkSmsShowTemplateManager((v) => !v)}
+                  disabled={bulkSmsSubmitting}
+                >
+                  {bulkSmsShowTemplateManager ? 'Hide' : 'Manage'} saved templates
+                </button>
+              </div>
+              {bulkSmsShowTemplateManager && (
+                <div className="bulk-sms-template-manager">
+                  <p className="bulk-sms-muted" style={{ marginTop: 0 }}>
+                    Templates are stored in this browser only. Edit names and message text, then click <strong>Save templates</strong>. Use the
+                    dropdown below to load one into the message field — you can still edit before sending.
+                  </p>
+                  <div className="bulk-sms-template-manager-actions">
+                    <button type="button" className="btn-secondary" onClick={handleAddBulkSmsTemplate} disabled={bulkSmsSubmitting}>
+                      + Add template
+                    </button>
+                    <button type="button" className="btn-primary" onClick={handleSaveBulkSmsTemplates} disabled={bulkSmsSubmitting}>
+                      Save templates
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={handleResetBulkSmsTemplates} disabled={bulkSmsSubmitting}>
+                      Reset to defaults
+                    </button>
+                  </div>
+                  <ul className="bulk-sms-template-list">
+                    {bulkSmsTemplates.map((tpl) => (
+                      <li key={tpl.id} className="bulk-sms-template-card">
+                        <label className="bulk-sms-template-card-label">Template name</label>
+                        <input
+                          type="text"
+                          className="bulk-sms-template-name-input"
+                          value={tpl.name}
+                          onChange={(e) => handleBulkSmsTemplateFieldChange(tpl.id, 'name', e.target.value)}
+                          disabled={bulkSmsSubmitting}
+                          maxLength={100}
+                        />
+                        <label className="bulk-sms-template-card-label">Message text (max {BULK_SMS_TEMPLATE_BODY_MAX} chars)</label>
+                        <textarea
+                          className="bulk-sms-template-body-input"
+                          rows={3}
+                          maxLength={BULK_SMS_TEMPLATE_BODY_MAX}
+                          value={tpl.body}
+                          onChange={(e) => handleBulkSmsTemplateFieldChange(tpl.id, 'body', e.target.value)}
+                          disabled={bulkSmsSubmitting}
+                        />
+                        <div className="bulk-sms-template-card-footer">
+                          <span className="bulk-sms-muted">{tpl.body.length} / {BULK_SMS_TEMPLATE_BODY_MAX}</span>
+                          <button
+                            type="button"
+                            className="btn-secondary bulk-sms-delete-template"
+                            onClick={() => handleDeleteBulkSmsTemplate(tpl.id)}
+                            disabled={bulkSmsSubmitting}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <label className="export-popup-label" htmlFor="bulk-sms-template">
+                Insert saved template
+              </label>
+              <select
+                id="bulk-sms-template"
+                className="bulk-sms-template-select"
+                value={bulkSmsPickedTemplateId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (!id) {
+                    setBulkSmsPickedTemplateId('');
+                    return;
+                  }
+                  const t = bulkSmsTemplates.find((x) => x.id === id);
+                  if (t) {
+                    setBulkSmsPickedTemplateId(id);
+                    setBulkSmsMessage(t.body);
+                  }
+                }}
+                disabled={bulkSmsSubmitting}
+              >
+                <option value="">Choose a template…</option>
+                {bulkSmsTemplates.map((tpl) => (
+                  <option key={tpl.id} value={tpl.id}>
+                    {tpl.name}
+                  </option>
+                ))}
+              </select>
+              <p className="bulk-sms-template-hint">The message below is what will be sent — edit it freely before clicking Send.</p>
+              <label className="export-popup-label" htmlFor="bulk-sms-text">
+                Message to send
+              </label>
+              <textarea
+                id="bulk-sms-text"
+                className="bulk-sms-textarea"
+                rows={5}
+                maxLength={BULK_SMS_MAX_CHARS}
+                value={bulkSmsMessage}
+                onChange={(e) => setBulkSmsMessageTracked(e.target.value)}
+                placeholder="e.g. SUPACLEAN will be closed Mon 7 Apr for the holiday. We reopen Tue 8 Apr. Thank you."
+                disabled={bulkSmsSubmitting}
+              />
+              <div className="bulk-sms-char-row">
+                <span className={bulkSmsMessage.length > 480 ? 'bulk-sms-warn' : ''}>
+                  {bulkSmsMessage.length} / {BULK_SMS_MAX_CHARS} characters
+                </span>
+                <span className="bulk-sms-muted">Long texts may use multiple SMS (extra cost).</span>
+              </div>
+              {bulkSmsResult && !bulkSmsResult.dry_run && (
+                <div className="bulk-sms-result" role="status">
+                  Sent: <strong>{bulkSmsResult.sent}</strong>, failed: <strong>{bulkSmsResult.failed}</strong>
+                  {bulkSmsResult.truncated_to_max && (
+                    <span className="bulk-sms-warn"> — capped; run again if needed.</span>
+                  )}
+                </div>
+              )}
+              <div className="export-popup-actions" style={{ marginTop: '16px' }}>
+                <button type="button" className="btn-secondary" onClick={handleCloseBulkSms} disabled={bulkSmsSubmitting}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" disabled={bulkSmsSubmitting || bulkSmsPreviewLoading}>
+                  {bulkSmsSubmitting ? 'Sending…' : 'Send bulk SMS'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
       {showExportPopup && (
         <div className="export-popup-overlay" onClick={() => setShowExportPopup(false)} role="dialog" aria-label="Export options">
           <div className="export-popup" onClick={e => e.stopPropagation()}>
@@ -296,6 +639,15 @@ const Customers = () => {
                   title="Export customers"
                 >
                   {exporting ? '…' : 'Export'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  style={{ marginRight: '12px' }}
+                  onClick={handleOpenBulkSms}
+                  title="Send SMS to all customers in this branch (e.g. holiday notice)"
+                >
+                  Bulk SMS
                 </button>
               </div>
               <button

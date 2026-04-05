@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
 const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
+const { sendSMS } = require('../utils/sms');
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 const multer = require('multer');
@@ -142,6 +143,186 @@ router.get('/', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+const BULK_SMS_MAX_LEN = 640;
+const BULK_SMS_MAX_RECIPIENTS = 300;
+const BULK_SMS_MIN_LEN = 3;
+
+/** Same branch scope as GET /customers?light=1 */
+async function fetchCustomersForBulkSms(req) {
+  const effectiveBranchId = getEffectiveBranchId(req);
+  const whereConditions = [];
+  const params = [];
+  if (effectiveBranchId != null) {
+    whereConditions.push(
+      '(c.primary_branch_id = ? OR (c.primary_branch_id IS NULL AND c.id IN (SELECT DISTINCT customer_id FROM orders WHERE branch_id = ?)))'
+    );
+    params.push(effectiveBranchId, effectiveBranchId);
+  }
+  const whereClause = whereConditions.length > 0 ? ' WHERE ' + whereConditions.join(' AND ') : '';
+  const rows = await db.all(
+    `SELECT c.id, c.name, c.phone, c.sms_notifications_enabled
+     FROM customers c${whereClause}
+     ORDER BY c.name, c.id`,
+    params
+  );
+  return rows || [];
+}
+
+function tzPhoneDedupeKey(phone) {
+  const d = String(phone || '').replace(/\D/g, '');
+  if (!d) return '';
+  const last9 = d.slice(-9);
+  if (last9.length !== 9) return d;
+  return '255' + last9;
+}
+
+function buildBulkRecipientList(rows, respectSmsOptOut) {
+  let skippedNoPhone = 0;
+  let skippedOptOut = 0;
+  let skippedDuplicate = 0;
+  const seen = new Set();
+  const recipients = [];
+  for (const row of rows) {
+    const phone = row.phone && String(row.phone).trim();
+    if (!phone) {
+      skippedNoPhone++;
+      continue;
+    }
+    const smsOn = row.sms_notifications_enabled !== 0 && row.sms_notifications_enabled !== false;
+    if (respectSmsOptOut && !smsOn) {
+      skippedOptOut++;
+      continue;
+    }
+    const key = tzPhoneDedupeKey(phone);
+    if (!key) {
+      skippedNoPhone++;
+      continue;
+    }
+    if (seen.has(key)) {
+      skippedDuplicate++;
+      continue;
+    }
+    seen.add(key);
+    recipients.push({
+      id: row.id,
+      name: row.name || 'Customer',
+      phone
+    });
+  }
+  return { recipients, skippedNoPhone, skippedOptOut, skippedDuplicate };
+}
+
+// Preview counts for bulk SMS (holiday / announcements)
+router.get(
+  '/bulk-sms-preview',
+  requireBranchAccess(),
+  requirePermission('canManageCustomers'),
+  async (req, res) => {
+    try {
+      const respectSmsOptOut = req.query.respect_opt_out !== '0' && req.query.respect_opt_out !== 'false';
+      const rows = await fetchCustomersForBulkSms(req);
+      const { recipients, skippedNoPhone, skippedOptOut, skippedDuplicate } = buildBulkRecipientList(rows, respectSmsOptOut);
+      res.json({
+        total_customers_in_scope: rows.length,
+        would_send: recipients.length,
+        capped_at: BULK_SMS_MAX_RECIPIENTS,
+        skipped_no_phone: skippedNoPhone,
+        skipped_opted_out: skippedOptOut,
+        skipped_duplicate_phone: skippedDuplicate
+      });
+    } catch (err) {
+      console.error('bulk-sms-preview:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// Send bulk SMS to laundry customers in branch scope (or all if admin / no branch filter)
+router.post(
+  '/bulk-sms',
+  requireBranchAccess(),
+  requirePermission('canManageCustomers'),
+  async (req, res) => {
+    const message = typeof req.body.message === 'string' ? req.body.message.trim() : '';
+    const respectSmsOptOut = req.body.respect_sms_opt_out !== false && req.body.respect_sms_opt_out !== 0;
+    const dryRun = req.body.dry_run === true || req.body.dry_run === 'true';
+
+    if (message.length < BULK_SMS_MIN_LEN) {
+      return res.status(400).json({ error: `Message must be at least ${BULK_SMS_MIN_LEN} characters` });
+    }
+    if (message.length > BULK_SMS_MAX_LEN) {
+      return res.status(400).json({ error: `Message must be at most ${BULK_SMS_MAX_LEN} characters` });
+    }
+
+    try {
+      const rows = await fetchCustomersForBulkSms(req);
+      const built = buildBulkRecipientList(rows, respectSmsOptOut);
+      const truncatedToMax = built.recipients.length > BULK_SMS_MAX_RECIPIENTS;
+      let recipients = built.recipients;
+      const { skippedNoPhone, skippedOptOut, skippedDuplicate } = built;
+
+      if (recipients.length > BULK_SMS_MAX_RECIPIENTS) {
+        recipients = recipients.slice(0, BULK_SMS_MAX_RECIPIENTS);
+      }
+
+      if (dryRun) {
+        return res.json({
+          dry_run: true,
+          would_send: recipients.length,
+          skipped_no_phone: skippedNoPhone,
+          skipped_opted_out: skippedOptOut,
+          skipped_duplicate_phone: skippedDuplicate,
+          truncated_to_max: truncatedToMax
+        });
+      }
+
+      let sent = 0;
+      let failed = 0;
+      const errors = [];
+
+      for (let i = 0; i < recipients.length; i++) {
+        const r = recipients[i];
+        try {
+          const result = await sendSMS(r.phone, message, {
+            customerId: r.id,
+            orderId: null,
+            notificationType: 'bulk_announcement'
+          });
+          if (result && result.success) sent++;
+          else {
+            failed++;
+            if (errors.length < 15) {
+              errors.push({ customer_id: r.id, name: r.name, error: result?.error || 'Send failed' });
+            }
+          }
+        } catch (e) {
+          failed++;
+          if (errors.length < 15) {
+            errors.push({ customer_id: r.id, name: r.name, error: e.message || String(e) });
+          }
+        }
+        if (i < recipients.length - 1 && recipients.length > 1) {
+          await new Promise((resolve) => setTimeout(resolve, 75));
+        }
+      }
+
+      res.json({
+        sent,
+        failed,
+        message_length: message.length,
+        skipped_no_phone: skippedNoPhone,
+        skipped_opted_out: skippedOptOut,
+        skipped_duplicate_phone: skippedDuplicate,
+        truncated_to_max: truncatedToMax,
+        errors
+      });
+    } catch (err) {
+      console.error('bulk-sms:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
 
 // Get customer by ID
 router.get('/:id', async (req, res) => {

@@ -193,6 +193,13 @@ export const uploadCustomersExcel = (formData) => api.post('/customers/upload-ex
 });
 export const sendBalanceReminder = (customerId, channels = ['sms']) => api.post(`/customers/${customerId}/send-balance-reminder`, { channels });
 
+/** Preview recipient counts for bulk SMS (branch-scoped like customer list). */
+export const getBulkSmsPreview = (params = {}) =>
+  api.get('/customers/bulk-sms-preview', { params });
+
+/** Send bulk SMS to laundry customers. body: { message, respect_sms_opt_out?, dry_run? } */
+export const sendBulkCustomerSms = (body) => api.post('/customers/bulk-sms', body);
+
 // Services (offline-first)
 export async function getServices(includeInactive = false) {
   if (isOffline()) {

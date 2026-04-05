@@ -525,3 +525,181 @@
   color: var(--text-secondary);
   font-weight: 500;
 }
+
+/* Bulk SMS modal */
+.bulk-sms-modal.export-popup {
+  min-width: min(520px, 94vw);
+  max-width: 560px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.bulk-sms-preview-block {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  background: var(--bg-primary, rgba(0, 0, 0, 0.04));
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
+.bulk-sms-stats {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.bulk-sms-stats li {
+  margin: 4px 0;
+}
+.bulk-sms-muted {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+.bulk-sms-warn {
+  color: #b45309;
+}
+.bulk-sms-warn.small {
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+.bulk-sms-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+.bulk-sms-checkbox input {
+  margin-top: 2px;
+}
+.bulk-sms-textarea {
+  width: 100%;
+  padding: 12px;
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  resize: vertical;
+  min-height: 100px;
+}
+.bulk-sms-char-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.bulk-sms-result {
+  margin-top: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  background: rgba(34, 197, 94, 0.12);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+}
+.bulk-sms-form {
+  margin-top: 4px;
+}
+.bulk-sms-template-select {
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.bulk-sms-template-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+  line-height: 1.4;
+}
+.bulk-sms-template-toolbar {
+  margin-bottom: 10px;
+}
+.bulk-sms-toolbar-btn {
+  font-size: 13px;
+}
+.bulk-sms-template-manager {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary, rgba(0, 0, 0, 0.03));
+  max-height: 320px;
+  overflow-y: auto;
+}
+.bulk-sms-template-manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.bulk-sms-template-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.bulk-sms-template-card {
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+.bulk-sms-template-card-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.bulk-sms-template-name-input {
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.bulk-sms-template-body-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  resize: vertical;
+  min-height: 72px;
+}
+.bulk-sms-template-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+}
+.bulk-sms-delete-template {
+  font-size: 12px;
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.45);
+}
+[data-theme="dark"] .bulk-sms-delete-template {
+  color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.35);
+}
