@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
-const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
+const { authenticate, requireBranchAccess, requireBranchFeature, requireRole } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getEffectiveBranchId } = require('../utils/branchFilter');
 
@@ -851,6 +851,67 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
     });
   } catch (err) {
     console.error('Error reconciling daily cash:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Admin only: unlock a reconciled day so branch staff can add expenses, payments, book sales, etc., then reconcile again.
+ * Appends an audit line to daily_cash_summaries.notes and refreshes this day and later unreconciled days in the chain.
+ */
+router.post('/unreconcile/:date', requireBranchAccess(), requireRole('admin'), async (req, res) => {
+  const { date } = req.params;
+  const { reason, branch_id: bodyBranchId } = req.body || {};
+  let branchId = getEffectiveBranchId(req);
+  if (branchId == null && req.user?.role === 'admin') {
+    const bid = bodyBranchId != null ? parseInt(bodyBranchId, 10) : NaN;
+    if (!Number.isFinite(bid)) {
+      return res.status(400).json({
+        error: 'When viewing all branches, pass branch_id in the request body to identify which branch to unlock.',
+      });
+    }
+    branchId = bid;
+  }
+  if (branchId == null) {
+    return res.status(400).json({ error: 'Select a branch in the header or pass branch_id in the request body.' });
+  }
+
+  try {
+    const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    if (!row) {
+      return res.status(404).json({ error: 'No daily cash summary for this date and branch.' });
+    }
+    const reconciled =
+      row.is_reconciled === true ||
+      row.is_reconciled === 1 ||
+      row.is_reconciled === 'true' ||
+      row.is_reconciled === '1';
+    if (!reconciled) {
+      return res.status(409).json({ error: 'This day is not marked reconciled; nothing to reverse.' });
+    }
+
+    const adminLabel = req.user?.username || req.user?.fullName || 'admin';
+    const auditLine = `[${new Date().toISOString()}] Unreconciled by ${adminLabel}${reason && String(reason).trim() ? `: ${String(reason).trim().slice(0, 500)}` : ''}`;
+    const newNotes = row.notes ? `${row.notes}\n${auditLine}` : auditLine;
+
+    await db.run(
+      `UPDATE daily_cash_summaries
+       SET is_reconciled = FALSE, reconciled_by = NULL, reconciled_at = NULL, notes = ?
+       WHERE date = ? AND branch_id = ?`,
+      [newNotes, date, branchId]
+    );
+
+    const chain = await refreshUnreconciledSummariesFromDate(branchId, date);
+    const updated = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+
+    res.json({
+      success: true,
+      message: 'Reconciliation reversed. The branch can edit this day and reconcile again when ready.',
+      row: updated,
+      days_refreshed: chain.daysRefreshed ?? 0,
+    });
+  } catch (err) {
+    console.error('Error unreconciling daily cash:', err);
     res.status(500).json({ error: err.message });
   }
 });

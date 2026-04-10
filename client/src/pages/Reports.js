@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   BarChart,
@@ -17,7 +17,10 @@ import {
   getDailyProfitReport,
   getSalesReport,
   getServiceReport,
-  getCustomerReport
+  getCustomerReport,
+  unreconcileDailyCash,
+  getBankDeposits,
+  getBranches
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
@@ -105,7 +108,7 @@ const exportCSV = (rows, columns, filename, branchLabel) => {
 const Reports = () => {
   const [searchParams] = useSearchParams();
   const { showToast, ToastContainer } = useToast();
-  const { branch } = useAuth();
+  const { branch, user, hasPermission, selectedBranchId } = useAuth();
   const csvBranchLabel = branch?.name || (branch?.id != null ? `Branch ID ${branch.id}` : null);
   const [summary, setSummary] = useState(null);
   const [financialReport, setFinancialReport] = useState(null);
@@ -139,20 +142,90 @@ const Reports = () => {
     dailyProfit: true
   });
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const [unreconcileModal, setUnreconcileModal] = useState(null);
+  const [unreconcileReason, setUnreconcileReason] = useState('');
+  const [unreconcileSubmitting, setUnreconcileSubmitting] = useState(false);
+  const [bankDeposits, setBankDeposits] = useState([]);
+  const [branchesList, setBranchesList] = useState([]);
   const tableScrollHandlers = useHorizontalScrollRegion();
+  const isAdmin = user?.role === 'admin';
+  const canViewBankDeposits = hasPermission('canManageCash');
+
+  const branchPerformance = useMemo(() => {
+    const map = new Map();
+    for (const row of profitReport) {
+      const id = row.branch_id;
+      if (id == null) continue;
+      const o = map.get(id) || {
+        branch_id: id,
+        branch_name: row.branch_name || `Branch ${id}`,
+        revenue: 0,
+        expenses: 0,
+        profit: 0,
+        days: 0,
+        reconciled_days: 0
+      };
+      o.revenue += parseFloat(row.revenue) || 0;
+      o.expenses += parseFloat(row.expenses) || 0;
+      o.profit += parseFloat(row.profit) || 0;
+      o.days += 1;
+      const v = row.is_reconciled;
+      if (v === true || v === 1 || v === '1' || v === 'true') o.reconciled_days += 1;
+      map.set(id, o);
+    }
+    return [...map.values()].sort((a, b) => b.revenue - a.revenue);
+  }, [profitReport]);
+
+  const salesPeriodTotals = useMemo(() => {
+    let orders = 0;
+    let revenue = 0;
+    let collected = 0;
+    for (const d of salesReport) {
+      orders += parseInt(d.total_orders, 10) || 0;
+      revenue += parseFloat(d.total_revenue) || 0;
+      collected += parseFloat(d.collected_revenue) || 0;
+    }
+    return { orders, revenue, collected };
+  }, [salesReport]);
+
+  const bankDepositsTotal = useMemo(
+    () => bankDeposits.reduce((s, d) => s + (parseFloat(d.amount) || 0), 0),
+    [bankDeposits]
+  );
+
+  const reconciledRowsCount = useMemo(
+    () =>
+      profitReport.filter((r) => {
+        const v = r.is_reconciled;
+        return v === true || v === 1 || v === '1' || v === 'true';
+      }).length,
+    [profitReport]
+  );
+
+  const scopeLabel = useMemo(() => {
+    if (selectedBranchId == null && isAdmin) return 'All branches';
+    const name = branchesList.find((b) => b.id === selectedBranchId)?.name;
+    return name || branch?.name || (selectedBranchId != null ? `Branch #${selectedBranchId}` : 'Current branch');
+  }, [selectedBranchId, isAdmin, branchesList, branch?.name]);
 
   const loadReports = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
       const today = new Date().toISOString().split('T')[0];
-      const [summaryRes, financialRes, profitRes, salesRes, serviceRes, customerRes] = await Promise.all([
+      const depositPromise =
+        canViewBankDeposits
+          ? getBankDeposits({ start_date: dateRange.start, end_date: dateRange.end }).catch(() => ({ data: [] }))
+          : Promise.resolve({ data: [] });
+
+      const [summaryRes, financialRes, profitRes, salesRes, serviceRes, customerRes, depRes] = await Promise.all([
         getOverviewReport(today),
         getFinancialReport(dateRange.start, dateRange.end, reportPeriod),
         getDailyProfitReport(dateRange.start, dateRange.end),
         getSalesReport(dateRange.start, dateRange.end),
         getServiceReport(dateRange.start, dateRange.end),
-        getCustomerReport({ month: customerFilter.month, year: customerFilter.year })
+        getCustomerReport({ month: customerFilter.month, year: customerFilter.year }),
+        depositPromise
       ]);
 
       setSummary(summaryRes.data);
@@ -161,6 +234,7 @@ const Reports = () => {
       setSalesReport(salesRes.data || []);
       setServiceReport(serviceRes.data || []);
       setCustomerReport(customerRes.data || []);
+      setBankDeposits(Array.isArray(depRes.data) ? depRes.data : []);
       const synced = [summaryRes, financialRes, salesRes, serviceRes, customerRes].find((r) => r.fromCache && r.syncedAt);
       if (synced) setLastSyncedAt(synced.syncedAt); else setLastSyncedAt(null);
     } catch (error) {
@@ -175,14 +249,22 @@ const Reports = () => {
       setSalesReport([]);
       setServiceReport([]);
       setCustomerReport([]);
+      setBankDeposits([]);
     } finally {
       setLoading(false);
     }
-  }, [dateRange.start, dateRange.end, reportPeriod, customerFilter.month, customerFilter.year]);
+  }, [dateRange.start, dateRange.end, reportPeriod, customerFilter.month, customerFilter.year, canViewBankDeposits]);
 
   useEffect(() => {
     loadReports();
   }, [loadReports]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    getBranches()
+      .then((r) => setBranchesList(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setBranchesList([]));
+  }, [isAdmin]);
 
   const applyPreset = (key) => {
     const presets = presetRanges();
@@ -209,22 +291,65 @@ const Reports = () => {
   const handleDateRangeChange = async () => {
     setLoading(true);
     try {
-      const [financialRes, profitRes, salesRes, serviceRes] = await Promise.all([
+      const depositPromise =
+        canViewBankDeposits
+          ? getBankDeposits({ start_date: dateRange.start, end_date: dateRange.end }).catch(() => ({ data: [] }))
+          : Promise.resolve({ data: [] });
+      const [financialRes, profitRes, salesRes, serviceRes, depRes] = await Promise.all([
         getFinancialReport(dateRange.start, dateRange.end, reportPeriod),
         getDailyProfitReport(dateRange.start, dateRange.end),
         getSalesReport(dateRange.start, dateRange.end),
-        getServiceReport(dateRange.start, dateRange.end)
+        getServiceReport(dateRange.start, dateRange.end),
+        depositPromise
       ]);
       setFinancialReport(financialRes.data);
       setProfitReport(profitRes.data || []);
       setSalesReport(salesRes.data);
       setServiceReport(serviceRes.data);
+      setBankDeposits(Array.isArray(depRes.data) ? depRes.data : []);
       const synced = [financialRes, salesRes, serviceRes].find((r) => r.fromCache && r.syncedAt);
       if (synced) setLastSyncedAt(synced.syncedAt); else setLastSyncedAt(null);
     } catch (error) {
       console.error('Error loading reports:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const isProfitRowReconciled = (row) => {
+    const v = row.is_reconciled;
+    return v === true || v === 1 || v === '1' || v === 'true';
+  };
+
+  const openUnreconcileModal = (row) => {
+    const bid = row.branch_id != null ? Number(row.branch_id) : NaN;
+    if (!Number.isFinite(bid)) {
+      showToast('This row has no branch; cannot reverse reconciliation.', 'error');
+      return;
+    }
+    setUnreconcileReason('');
+    setUnreconcileModal({
+      date: row.date,
+      branchId: bid,
+      branchName: row.branch_name || `Branch ${bid}`,
+    });
+  };
+
+  const handleConfirmUnreconcile = async () => {
+    if (!unreconcileModal) return;
+    setUnreconcileSubmitting(true);
+    try {
+      await unreconcileDailyCash(unreconcileModal.date, {
+        branch_id: unreconcileModal.branchId,
+        reason: unreconcileReason.trim() || undefined,
+      });
+      showToast('Reconciliation reversed. The branch can correct entries and reconcile again in Cash Management.', 'success');
+      setUnreconcileModal(null);
+      await handleDateRangeChange();
+    } catch (e) {
+      showToast(e.response?.data?.error || e.message || 'Could not reverse reconciliation', 'error');
+    } finally {
+      setUnreconcileSubmitting(false);
     }
   };
 
@@ -305,164 +430,344 @@ const Reports = () => {
   return (
     <div className="reports-page">
       <ToastContainer />
+      {unreconcileModal && (
+        <div
+          className="reports-modal-overlay"
+          onClick={() => !unreconcileSubmitting && setUnreconcileModal(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="unreconcile-modal-title"
+        >
+          <div className="reports-modal" onClick={(e) => e.stopPropagation()}>
+            <h3 id="unreconcile-modal-title">Reverse reconciliation?</h3>
+            <p className="reports-modal-body">
+              Unlock <strong>{unreconcileModal.date}</strong> for <strong>{unreconcileModal.branchName}</strong> so managers can add missing expenses,
+              payments, or book sales, then reconcile again. An audit line is appended to the daily summary notes.
+            </p>
+            <label htmlFor="unreconcile-reason" className="reports-modal-label">
+              Reason (optional)
+            </label>
+            <textarea
+              id="unreconcile-reason"
+              className="reports-modal-textarea"
+              rows={3}
+              value={unreconcileReason}
+              onChange={(e) => setUnreconcileReason(e.target.value)}
+              placeholder="e.g. Branch forgot to record an expense for this date"
+              disabled={unreconcileSubmitting}
+            />
+            <div className="reports-modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => setUnreconcileModal(null)} disabled={unreconcileSubmitting}>
+                Cancel
+              </button>
+              <button type="button" className="btn-primary" onClick={handleConfirmUnreconcile} disabled={unreconcileSubmitting}>
+                {unreconcileSubmitting ? 'Working…' : 'Reverse reconciliation'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {lastSyncedAt && (
         <div className="sync-cache-banner" role="status">
           Showing data from last sync — {new Date(lastSyncedAt).toLocaleString()}
         </div>
       )}
-      <div className="page-header page-header-modern">
-        <div>
-          <h1>Reports & Analytics</h1>
-          <p className="subtitle">View business insights and statistics</p>
+      <header className="reports-dashboard-header">
+        <div className="reports-dashboard-header-inner">
+          <div>
+            <h1 className="reports-dashboard-title">Reports &amp; analytics</h1>
+            <p className="reports-dashboard-sub">Reconciled financials, sales velocity, and bank deposits for the selected period.</p>
+          </div>
+          <div className="reports-scope-chip" title="Change branch in the sidebar (admin)">
+            <span className="reports-scope-chip-label">Scope</span>
+            <span className="reports-scope-chip-value">{scopeLabel}</span>
+          </div>
         </div>
-      </div>
+      </header>
 
-      <div className="reports-tabs-wrap">
-        <div className="reports-tabs">
+      <div className="reports-tabs-wrap reports-tabs-modern">
+        <nav className="reports-tabs" aria-label="Report sections">
           <button
             type="button"
             className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
             onClick={() => setActiveTab('overview')}
           >
-            📊 Overview
+            Overview
           </button>
           <button
             type="button"
             className={`tab-btn ${activeTab === 'sales' ? 'active' : ''}`}
             onClick={() => setActiveTab('sales')}
           >
-            💰 Sales
+            Sales
           </button>
           <button
             type="button"
             className={`tab-btn ${activeTab === 'customers' ? 'active' : ''}`}
             onClick={() => setActiveTab('customers')}
           >
-            👥 Customers
+            Customers
           </button>
           <button
             type="button"
             className={`tab-btn ${activeTab === 'services' ? 'active' : ''}`}
             onClick={() => setActiveTab('services')}
           >
-            🧺 Services
+            Services
           </button>
-        </div>
+        </nav>
       </div>
 
       {activeTab === 'overview' && (
         <>
-          <p className="report-summary-line" aria-live="polite">{overviewSummaryLine}</p>
-          <div className="today-summary">
-            <h2>Today&apos;s Summary</h2>
-            <div className="summary-cards-compact">
-              <div className="summary-card-compact">
-                <div className="summary-label-compact">Total Income</div>
-                <div className="summary-value-compact">{formatTSh(summary?.total_income)}</div>
+          <p className="reports-live-line" aria-live="polite">{overviewSummaryLine}</p>
+
+          <section className="reports-panel reports-panel--today">
+            <h2 className="reports-panel-heading">Today (live)</h2>
+            <div className="reports-kpi-grid reports-kpi-grid--sm">
+              <div className="reports-kpi reports-kpi--income">
+                <span className="reports-kpi-label">Total income</span>
+                <span className="reports-kpi-value">{formatTSh(summary?.total_income)}</span>
               </div>
-              <div className="summary-card-compact">
-                <div className="summary-label-compact">Cash Income</div>
-                <div className="summary-value-compact">{formatTSh(summary?.cash_income)}</div>
+              <div className="reports-kpi">
+                <span className="reports-kpi-label">Cash income</span>
+                <span className="reports-kpi-value">{formatTSh(summary?.cash_income)}</span>
               </div>
-              <div className="summary-card-compact">
-                <div className="summary-label-compact">Total Transactions</div>
-                <div className="summary-value-compact">{summary?.total_transactions ?? 0}</div>
+              <div className="reports-kpi">
+                <span className="reports-kpi-label">Transactions</span>
+                <span className="reports-kpi-value">{summary?.total_transactions ?? 0}</span>
               </div>
-              <div className="summary-card-compact">
-                <div className="summary-label-compact">Net Income</div>
-                <div className="summary-value-compact">{formatTSh(summary?.net_income)}</div>
+              <div className="reports-kpi reports-kpi--profit">
+                <span className="reports-kpi-label">Net (today)</span>
+                <span className="reports-kpi-value">{formatTSh(summary?.net_income)}</span>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div className="date-range-selector">
-            <h2>Financial Report (Reconciled Data)</h2>
-            <div className="date-presets">
+          <section className="reports-control-card" aria-label="Date range and grouping">
+            <div className="reports-control-head">
+              <h2 className="reports-panel-heading">Period &amp; grouping</h2>
+              <p className="reports-control-hint">
+                Admins: use the <strong>branch selector</strong> in the sidebar to compare all branches or focus one location. Data below respects that scope.
+              </p>
+            </div>
+            <div className="reports-presets-row">
               {Object.entries(presetRanges()).map(([key, p]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className="preset-btn"
-                  onClick={() => applyPreset(key)}
-                >
+                <button key={key} type="button" className="reports-preset-pill" onClick={() => applyPreset(key)}>
                   {p.label}
                 </button>
               ))}
             </div>
-            <div className="date-inputs">
-              <input
-                type="date"
-                value={dateRange.start}
-                onChange={(e) => setDateRange((prev) => ({ ...prev, start: e.target.value }))}
-                aria-label="Start date"
-              />
-              <span>to</span>
-              <input
-                type="date"
-                value={dateRange.end}
-                onChange={(e) => setDateRange((prev) => ({ ...prev, end: e.target.value }))}
-                aria-label="End date"
-              />
-              <select
-                value={reportPeriod}
-                onChange={(e) => setReportPeriod(e.target.value)}
-                className="report-period-select"
-                aria-label="Group by"
-              >
-                <option value="day">Daily</option>
-                <option value="week">Weekly</option>
-                <option value="month">Monthly</option>
-              </select>
-              <button type="button" className="btn-primary" onClick={handleDateRangeChange}>
-                Update Report
-              </button>
-              {hasFinancialData && (
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() =>
-                    exportCSV(
-                      financialReport.data,
-                      [
-                        { key: 'period', label: 'Period' },
-                        { key: 'total_revenue', label: 'Revenue' },
-                        { key: 'total_expenses', label: 'Expenses' },
-                        { key: 'profit', label: 'Profit' },
-                        { key: 'reconciled_days', label: 'Reconciled Days' }
-                      ],
-                      `financial-${dateRange.start}-${dateRange.end}.csv`,
-                      csvBranchLabel
-                    )
-                  }
+            <div className="reports-date-row">
+              <label className="reports-date-field">
+                <span>From</span>
+                <input
+                  type="date"
+                  value={dateRange.start}
+                  onChange={(e) => setDateRange((prev) => ({ ...prev, start: e.target.value }))}
+                  aria-label="Start date"
+                />
+              </label>
+              <label className="reports-date-field">
+                <span>To</span>
+                <input
+                  type="date"
+                  value={dateRange.end}
+                  onChange={(e) => setDateRange((prev) => ({ ...prev, end: e.target.value }))}
+                  aria-label="End date"
+                />
+              </label>
+              <label className="reports-date-field reports-date-field--grow">
+                <span>Columns</span>
+                <select
+                  value={reportPeriod}
+                  onChange={(e) => setReportPeriod(e.target.value)}
+                  aria-label="Group financial totals by"
                 >
-                  Export CSV
+                  <option value="day">Daily summary</option>
+                  <option value="week">Weekly summary</option>
+                  <option value="month">Monthly summary</option>
+                </select>
+              </label>
+              <div className="reports-date-actions">
+                <button type="button" className="btn-primary" onClick={handleDateRangeChange}>
+                  Apply range
                 </button>
-              )}
+                {hasFinancialData && (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() =>
+                      exportCSV(
+                        financialReport.data,
+                        [
+                          { key: 'period', label: 'Period' },
+                          { key: 'total_revenue', label: 'Revenue' },
+                          { key: 'total_expenses', label: 'Expenses' },
+                          { key: 'profit', label: 'Profit' },
+                          { key: 'reconciled_days', label: 'Reconciled Days' }
+                        ],
+                        `financial-${dateRange.start}-${dateRange.end}.csv`,
+                        csvBranchLabel
+                      )
+                    }
+                  >
+                    Export CSV
+                  </button>
+                )}
+              </div>
             </div>
+            <p className="reports-period-meta">
+              {dateRange.start} → {dateRange.end} ·{' '}
+              {reportPeriod === 'month' ? 'Monthly business totals (reconciled days in each bucket)' : reportPeriod === 'week' ? 'Weekly rollups' : 'Daily columns'}{' '}
+              — {financialSummaryLine}
+            </p>
+          </section>
+
+          <section className="reports-kpi-strip" aria-label="Period KPIs">
+            <div className="reports-kpi reports-kpi--revenue">
+              <span className="reports-kpi-label">Revenue (reconciled)</span>
+              <span className="reports-kpi-value">{formatTSh(financialReport?.totals?.total_revenue)}</span>
+            </div>
+            <div className="reports-kpi reports-kpi--expense">
+              <span className="reports-kpi-label">Expenses</span>
+              <span className="reports-kpi-value">{formatTSh(financialReport?.totals?.total_expenses)}</span>
+            </div>
+            <div className="reports-kpi reports-kpi--profit">
+              <span className="reports-kpi-label">Profit</span>
+              <span className="reports-kpi-value">{formatTSh(financialReport?.totals?.total_profit)}</span>
+            </div>
+            <div className="reports-kpi">
+              <span className="reports-kpi-label">Orders (period)</span>
+              <span className="reports-kpi-value">{salesPeriodTotals.orders.toLocaleString()}</span>
+            </div>
+            <div className="reports-kpi">
+              <span className="reports-kpi-label">Sales revenue</span>
+              <span className="reports-kpi-value">{formatTSh(salesPeriodTotals.revenue)}</span>
+            </div>
+            {canViewBankDeposits && (
+              <div className="reports-kpi reports-kpi--bank">
+                <span className="reports-kpi-label">Bank deposits</span>
+                <span className="reports-kpi-value">{formatTSh(bankDepositsTotal)}</span>
+                <span className="reports-kpi-foot">{bankDeposits.length} transfer{bankDeposits.length === 1 ? '' : 's'}</span>
+              </div>
+            )}
+            <div className="reports-kpi">
+              <span className="reports-kpi-label">Reconciled rows</span>
+              <span className="reports-kpi-value">{reconciledRowsCount}</span>
+              <span className="reports-kpi-foot">daily summaries</span>
+            </div>
+          </section>
+
+          {reportPeriod === 'month' && hasFinancialData && (
+            <section className="reports-panel reports-panel--monthly" aria-label="Monthly summary">
+              <h2 className="reports-panel-heading">Monthly business summary</h2>
+              <p className="reports-panel-lead">
+                Each column is one calendar month of <strong>reconciled</strong> daily cash data in the current branch scope. Use this for board-level revenue and cost trends.
+              </p>
+              <div className="reports-monthly-cards">
+                {financialReport.data.slice(0, 12).map((row, idx) => (
+                  <div key={idx} className="reports-month-card">
+                    <div className="reports-month-card-period">{row.period}</div>
+                    <div className="reports-month-card-metric">
+                      <span>Revenue</span>
+                      <strong>{formatTSh(row.total_revenue)}</strong>
+                    </div>
+                    <div className="reports-month-card-metric">
+                      <span>Profit</span>
+                      <strong className={parseFloat(row.profit || 0) >= 0 ? 'pos' : 'neg'}>{formatTSh(row.profit)}</strong>
+                    </div>
+                    <div className="reports-month-card-foot">
+                      {row.reconciled_days > 0 ? `${row.reconciled_days} rec. days` : '—'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <div className="reports-split-layout">
+            {branchPerformance.length > 0 && (
+              <section className="reports-panel reports-panel--branch" aria-label="Branch comparison">
+                <h2 className="reports-panel-heading">Branch comparison</h2>
+                <p className="reports-panel-lead">Totals from reconciled daily summaries in this date range (per branch).</p>
+                <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" {...tableScrollHandlers}>
+                  <table className="reports-table-pro">
+                    <thead>
+                      <tr>
+                        <th scope="col">Branch</th>
+                        <th scope="col" className="num">Revenue</th>
+                        <th scope="col" className="num">Expenses</th>
+                        <th scope="col" className="num">Profit</th>
+                        <th scope="col" className="num">Rec. days</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {branchPerformance.map((b) => (
+                        <tr key={b.branch_id}>
+                          <td>{b.branch_name}</td>
+                          <td className="num">{formatTSh(b.revenue)}</td>
+                          <td className="num">{formatTSh(b.expenses)}</td>
+                          <td className="num">
+                            <span className={b.profit >= 0 ? 'reports-num-pos' : 'reports-num-neg'}>{formatTSh(b.profit)}</span>
+                          </td>
+                          <td className="num">
+                            {b.reconciled_days}/{b.days}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            {canViewBankDeposits && (
+              <section className="reports-panel reports-panel--deposits" aria-label="Bank deposits">
+                <h2 className="reports-panel-heading">Bank deposits</h2>
+                <p className="reports-panel-lead">
+                  Cash banked in the selected range ({formatTSh(bankDepositsTotal)} total). Recorded in Cash Management → Bank deposits.
+                </p>
+                {bankDeposits.length > 0 ? (
+                  <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" {...tableScrollHandlers}>
+                    <table className="reports-table-pro reports-table-pro--compact">
+                      <thead>
+                        <tr>
+                          <th scope="col">Date</th>
+                          <th scope="col">Account</th>
+                          <th scope="col" className="num">Amount</th>
+                          <th scope="col">Reference</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bankDeposits.slice(0, 25).map((d) => (
+                          <tr key={d.id}>
+                            <td>{d.date}</td>
+                            <td>{d.bank_account_name || d.bank_name || '—'}</td>
+                            <td className="num">{formatTSh(d.amount)}</td>
+                            <td className="reports-cell-muted">{d.reference_number || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {bankDeposits.length > 25 && (
+                      <p className="reports-table-cap">Showing 25 of {bankDeposits.length} deposits — narrow the date range if needed.</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="reports-empty-inline">No bank deposits in this period for the current scope.</p>
+                )}
+              </section>
+            )}
+          </div>
+
+          <div className="date-range-selector reports-financial-block">
+            <h2 className="reports-section-title">Financial report (reconciled)</h2>
             <p className="report-summary-line report-summary-line--muted">{financialSummaryLine}</p>
 
             {hasFinancialData && (
-              <div className="report-totals-cards">
-                <div className="report-total-card revenue">
-                  <span className="report-total-label">Total Revenue</span>
-                  <span className="report-total-value">{formatTSh(financialReport.totals?.total_revenue)}</span>
-                </div>
-                <div className="report-total-card expenses">
-                  <span className="report-total-label">Total Expenses</span>
-                  <span className="report-total-value">{formatTSh(financialReport.totals?.total_expenses)}</span>
-                </div>
-                <div className="report-total-card profit">
-                  <span className="report-total-label">Total Profit</span>
-                  <span className="report-total-value" style={{ color: (financialReport.totals?.total_profit ?? 0) >= 0 ? '#4caf50' : '#f44336' }}>
-                    {formatTSh(financialReport.totals?.total_profit)}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {hasFinancialData && (
               <div className="table-wrapper interactive-scroll-region" style={{ marginTop: '16px' }} tabIndex={0} role="region" aria-label="Financial report table" {...tableScrollHandlers}>
-                <table className="report-table-compact" aria-label="Financial report by period">
+                <table className="reports-table-pro" aria-label="Financial report by period">
                   <caption className="sr-only">Financial report by period: revenue, expenses, profit, reconciled days</caption>
                   <thead>
                     <tr>
@@ -502,9 +807,9 @@ const Reports = () => {
           </div>
 
           {/* Daily Profit section */}
-          <div className="report-card-compact">
-            <h2>
-              <span>Daily Profit (Reconciled)</span>
+          <div className="reports-panel reports-panel--daily">
+            <h2 className="reports-panel-heading reports-panel-heading--row">
+              <span>Daily profit (reconciled detail)</span>
               <button
                 type="button"
                 className="collapse-btn"
@@ -516,6 +821,12 @@ const Reports = () => {
             </h2>
             {expandedSections.dailyProfit && (
               <>
+                {isAdmin && (
+                  <p className="reports-admin-unreconcile-hint">
+                    <strong>Admin:</strong> Reconciled days that still need corrections (missing expense, cash payment, book sale, etc.) can be{' '}
+                    <strong>unlocked</strong> with <em>Reverse</em> so the branch fixes Cash Management and reconciles again.
+                  </p>
+                )}
                 {hasProfitData && profitChartData.length > 0 && (
                   <ChartErrorBoundary>
                     <div className="report-chart-wrap">
@@ -540,20 +851,49 @@ const Reports = () => {
                       <thead>
                         <tr>
                           <th scope="col">Date</th>
+                          <th scope="col">Branch</th>
+                          <th scope="col" style={{ textAlign: 'center' }}>Status</th>
                           <th scope="col" style={{ textAlign: 'right' }}>Revenue</th>
                           <th scope="col" style={{ textAlign: 'right' }}>Expenses</th>
                           <th scope="col" style={{ textAlign: 'right' }}>Profit</th>
+                          {isAdmin && <th scope="col" style={{ textAlign: 'center' }}>Admin</th>}
                         </tr>
                       </thead>
                       <tbody>
-                        {profitReport.slice(0, 14).map((row, idx) => (
-                          <tr key={idx}>
+                        {profitReport.slice(0, 31).map((row, idx) => (
+                          <tr key={`${row.date}-${row.branch_id ?? 'x'}-${idx}`}>
                             <td>{row.date}</td>
+                            <td>{row.branch_name || (row.branch_id != null ? `Branch ${row.branch_id}` : '—')}</td>
+                            <td style={{ textAlign: 'center' }}>
+                              {isProfitRowReconciled(row) ? (
+                                <span className="reports-reconciled-pill" title="Locked — use Reverse (admin) to allow edits">
+                                  Reconciled
+                                </span>
+                              ) : (
+                                <span className="reports-pending-pill">Open</span>
+                              )}
+                            </td>
                             <td style={{ textAlign: 'right', color: 'var(--primary-color)' }}>{formatTSh(row.revenue)}</td>
                             <td style={{ textAlign: 'right', color: '#f44336' }}>{formatTSh(row.expenses)}</td>
                             <td style={{ textAlign: 'right', color: parseFloat(row.profit || 0) >= 0 ? '#4caf50' : '#f44336', fontWeight: 'bold' }}>
                               {formatTSh(row.profit)}
                             </td>
+                            {isAdmin && (
+                              <td style={{ textAlign: 'center' }}>
+                                {isProfitRowReconciled(row) ? (
+                                  <button
+                                    type="button"
+                                    className="btn-secondary reports-reverse-btn"
+                                    onClick={() => openUnreconcileModal(row)}
+                                    title="Unlock this day for the branch so they can correct entries"
+                                  >
+                                    Reverse
+                                  </button>
+                                ) : (
+                                  <span className="reports-muted-dash">—</span>
+                                )}
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>

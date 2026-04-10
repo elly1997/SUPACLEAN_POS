@@ -281,6 +281,8 @@ router.get('/profit/daily', requireBranchAccess(), async (req, res) => {
     let query = `
       SELECT 
         d.date,
+        d.branch_id,
+        COALESCE(b.name, 'Branch ' || CAST(d.branch_id AS TEXT)) as branch_name,
         d.cash_sales + d.book_sales + d.card_sales + d.mobile_money_sales as revenue,
         d.expenses_from_cash + d.expenses_from_bank + d.expenses_from_mpesa as expenses,
         (d.cash_sales + d.book_sales + d.card_sales + d.mobile_money_sales) - 
@@ -290,6 +292,7 @@ router.get('/profit/daily', requireBranchAccess(), async (req, res) => {
         d.card_sales + d.mobile_money_sales as digital_sales,
         d.is_reconciled
       FROM daily_cash_summaries d
+      LEFT JOIN branches b ON b.id = d.branch_id
       WHERE d.date >= $1 AND d.date <= $2
     `;
     

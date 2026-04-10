@@ -792,6 +792,8 @@ export const getCashSalesDetailForDate = (date) =>
 export const getBookSalesDetailForDate = (date) =>
   api.get(`/cash-management/details/book-sales/${date}`);
 export const reconcileDailyCash = (date, data) => api.post(`/cash-management/reconcile/${date}`, data);
+/** Admin only: unlock a reconciled day so the branch can correct expenses/payments and reconcile again. */
+export const unreconcileDailyCash = (date, data) => api.post(`/cash-management/unreconcile/${date}`, data);
 export const getUnreconciledClosings = (params = {}) => api.get('/cash-management/unreconciled', { params });
 export async function getCashSummaryRange(startDate, endDate) {
   if (isOffline()) {
