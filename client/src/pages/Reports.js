@@ -761,7 +761,7 @@ const Reports = () => {
             )}
           </div>
 
-          <div className="date-range-selector reports-financial-block">
+          <div className="reports-financial-block">
             <h2 className="reports-section-title">Financial report (reconciled)</h2>
             <p className="report-summary-line report-summary-line--muted">{financialSummaryLine}</p>
 
@@ -846,17 +846,17 @@ const Reports = () => {
                 )}
                 {hasProfitData ? (
                   <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" aria-label="Daily profit table" {...tableScrollHandlers}>
-                    <table className="report-table-compact" aria-label="Daily profit by date">
+                    <table className="reports-table-pro reports-table-pro--compact" aria-label="Daily profit by date">
                       <caption className="sr-only">Daily profit: date, revenue, expenses, profit</caption>
                       <thead>
                         <tr>
                           <th scope="col">Date</th>
                           <th scope="col">Branch</th>
-                          <th scope="col" style={{ textAlign: 'center' }}>Status</th>
-                          <th scope="col" style={{ textAlign: 'right' }}>Revenue</th>
-                          <th scope="col" style={{ textAlign: 'right' }}>Expenses</th>
-                          <th scope="col" style={{ textAlign: 'right' }}>Profit</th>
-                          {isAdmin && <th scope="col" style={{ textAlign: 'center' }}>Admin</th>}
+                          <th scope="col" className="reports-th-center">Status</th>
+                          <th scope="col" className="num">Revenue</th>
+                          <th scope="col" className="num">Expenses</th>
+                          <th scope="col" className="num">Profit</th>
+                          {isAdmin && <th scope="col" className="reports-th-center">Admin</th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -911,10 +911,11 @@ const Reports = () => {
       )}
 
       {activeTab === 'sales' && (
-        <div className="report-card-compact">
-          <p className="report-summary-line" aria-live="polite">{salesSummaryLine}</p>
-          <h2>
-            <span>Sales by Date</span>
+        <section className="reports-panel reports-panel--sales" aria-label="Sales report">
+          <p className="reports-live-line" aria-live="polite">{salesSummaryLine}</p>
+          <p className="reports-panel-lead">Uses the same date range as Overview (apply range there first).</p>
+          <h2 className="reports-panel-heading reports-panel-heading--row">
+            <span>Sales by date</span>
             <button
               type="button"
               className="collapse-btn"
@@ -945,52 +946,54 @@ const Reports = () => {
               <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" aria-label="Sales report table" {...tableScrollHandlers}>
                 {hasSalesData ? (
                   <>
-                    <table className="report-table-compact" aria-label="Sales by date">
+                    <table className="reports-table-pro reports-table-pro--compact" aria-label="Sales by date">
                       <caption className="sr-only">Sales by date: orders, revenue, collected, pending, ready</caption>
                       <thead>
                         <tr>
                           <th scope="col">Date</th>
-                          <th scope="col">Orders</th>
-                          <th scope="col">Total Revenue</th>
-                          <th scope="col">Collected</th>
-                          <th scope="col">Pending</th>
-                          <th scope="col">Ready</th>
+                          <th scope="col" className="num">Orders</th>
+                          <th scope="col" className="num">Total revenue</th>
+                          <th scope="col" className="num">Collected</th>
+                          <th scope="col" className="num">Pending</th>
+                          <th scope="col" className="num">Ready</th>
                         </tr>
                       </thead>
                       <tbody>
                         {salesReport.map((day) => (
                           <tr key={day.date}>
                             <td>{new Date(day.date).toLocaleDateString('en-GB')}</td>
-                            <td>{day.total_orders}</td>
-                            <td>{formatTSh(day.total_revenue)}</td>
-                            <td>{formatTSh(day.collected_revenue)}</td>
-                            <td>{day.pending_orders}</td>
-                            <td>{day.ready_orders}</td>
+                            <td className="num">{day.total_orders}</td>
+                            <td className="num">{formatTSh(day.total_revenue)}</td>
+                            <td className="num">{formatTSh(day.collected_revenue)}</td>
+                            <td className="num">{day.pending_orders}</td>
+                            <td className="num">{day.ready_orders}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                    <button
-                      type="button"
-                      className="btn-secondary btn-export"
-                      onClick={() =>
-                        exportCSV(
-                          salesReport,
-                          [
-                            { key: 'date', label: 'Date' },
-                            { key: 'total_orders', label: 'Orders' },
-                            { key: 'total_revenue', label: 'Total Revenue' },
-                            { key: 'collected_revenue', label: 'Collected' },
-                            { key: 'pending_orders', label: 'Pending' },
-                            { key: 'ready_orders', label: 'Ready' }
-                          ],
-                          `sales-${dateRange.start}-${dateRange.end}.csv`,
-                          csvBranchLabel
-                        )
-                      }
-                    >
-                      Export CSV
-                    </button>
+                    <div className="reports-export-row">
+                      <button
+                        type="button"
+                        className="btn-secondary btn-export"
+                        onClick={() =>
+                          exportCSV(
+                            salesReport,
+                            [
+                              { key: 'date', label: 'Date' },
+                              { key: 'total_orders', label: 'Orders' },
+                              { key: 'total_revenue', label: 'Total Revenue' },
+                              { key: 'collected_revenue', label: 'Collected' },
+                              { key: 'pending_orders', label: 'Pending' },
+                              { key: 'ready_orders', label: 'Ready' }
+                            ],
+                            `sales-${dateRange.start}-${dateRange.end}.csv`,
+                            csvBranchLabel
+                          )
+                        }
+                      >
+                        Export CSV
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <p className="empty-state empty-state--explained">
@@ -1000,14 +1003,15 @@ const Reports = () => {
               </div>
             </>
           )}
-        </div>
+        </section>
       )}
 
       {activeTab === 'services' && (
-        <div className="report-card-compact">
-          <p className="report-summary-line" aria-live="polite">{servicesSummaryLine}</p>
-          <h2>
-            <span>Service Performance</span>
+        <section className="reports-panel reports-panel--services" aria-label="Services report">
+          <p className="reports-live-line" aria-live="polite">{servicesSummaryLine}</p>
+          <p className="reports-panel-lead">Uses the same date range as Overview.</p>
+          <h2 className="reports-panel-heading reports-panel-heading--row">
+            <span>Service performance</span>
             <button
               type="button"
               className="collapse-btn"
@@ -1037,46 +1041,48 @@ const Reports = () => {
               <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" aria-label="Service report table" {...tableScrollHandlers}>
                 {hasServiceData ? (
                   <>
-                    <table className="report-table-compact" aria-label="Service performance">
+                    <table className="reports-table-pro reports-table-pro--compact" aria-label="Service performance">
                       <caption className="sr-only">Service performance: orders, revenue, average order value</caption>
                       <thead>
                         <tr>
                           <th scope="col">Service</th>
-                          <th scope="col">Orders</th>
-                          <th scope="col">Total Revenue</th>
-                          <th scope="col">Avg Order Value</th>
+                          <th scope="col" className="num">Orders</th>
+                          <th scope="col" className="num">Total revenue</th>
+                          <th scope="col" className="num">Avg order</th>
                         </tr>
                       </thead>
                       <tbody>
                         {serviceReport.map((service) => (
                           <tr key={service.service_name}>
                             <td>{service.service_name}</td>
-                            <td>{service.order_count ?? 0}</td>
-                            <td>{formatTSh(service.total_revenue)}</td>
-                            <td>{formatTSh(Math.round(service.average_order_value || 0))}</td>
+                            <td className="num">{service.order_count ?? 0}</td>
+                            <td className="num">{formatTSh(service.total_revenue)}</td>
+                            <td className="num">{formatTSh(Math.round(service.average_order_value || 0))}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                    <button
-                      type="button"
-                      className="btn-secondary btn-export"
-                      onClick={() =>
-                        exportCSV(
-                          serviceReport,
-                          [
-                            { key: 'service_name', label: 'Service' },
-                            { key: 'order_count', label: 'Orders' },
-                            { key: 'total_revenue', label: 'Total Revenue' },
-                            { key: 'average_order_value', label: 'Avg Order Value' }
-                          ],
-                          `services-${dateRange.start}-${dateRange.end}.csv`,
-                          csvBranchLabel
-                        )
-                      }
-                    >
-                      Export CSV
-                    </button>
+                    <div className="reports-export-row">
+                      <button
+                        type="button"
+                        className="btn-secondary btn-export"
+                        onClick={() =>
+                          exportCSV(
+                            serviceReport,
+                            [
+                              { key: 'service_name', label: 'Service' },
+                              { key: 'order_count', label: 'Orders' },
+                              { key: 'total_revenue', label: 'Total Revenue' },
+                              { key: 'average_order_value', label: 'Avg Order Value' }
+                            ],
+                            `services-${dateRange.start}-${dateRange.end}.csv`,
+                            csvBranchLabel
+                          )
+                        }
+                      >
+                        Export CSV
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <p className="empty-state empty-state--explained">
@@ -1086,14 +1092,15 @@ const Reports = () => {
               </div>
             </>
           )}
-        </div>
+        </section>
       )}
 
       {activeTab === 'customers' && (
-        <div className="report-card-compact">
-          <p className="report-summary-line" aria-live="polite">{customersSummaryLine}</p>
-          <h2>
-            <span>Top Customers – Loyalty Program</span>
+        <section className="reports-panel reports-panel--customers" aria-label="Customers loyalty report">
+          <p className="reports-live-line" aria-live="polite">{customersSummaryLine}</p>
+          <p className="reports-panel-lead">Filter by calendar month; independent of the Overview date range.</p>
+          <h2 className="reports-panel-heading reports-panel-heading--row">
+            <span>Top customers — loyalty</span>
             <button
               type="button"
               className="collapse-btn"
@@ -1105,7 +1112,7 @@ const Reports = () => {
           </h2>
           {expandedSections.customers && (
             <>
-              <div className="filter-controls-compact">
+              <div className="reports-filter-bar">
                 <select
                   value={customerFilter.month}
                   onChange={(e) => setCustomerFilter((prev) => ({ ...prev, month: parseInt(e.target.value, 10) }))}
@@ -1154,21 +1161,21 @@ const Reports = () => {
                   </button>
                 )}
               </div>
-              <div className="info-banner-compact">
-                <strong>Loyalty Points:</strong> 1 point per 20,000 TSh spent. 100 points = Free wash worth 10,000 TSh
+              <div className="reports-info-banner">
+                <strong>Loyalty points:</strong> 1 point per 20,000 TSh spent. 100 points = free wash worth 10,000 TSh
               </div>
               <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" aria-label="Customer report table" {...tableScrollHandlers}>
                 {hasCustomerData ? (
-                  <table className="report-table-compact" aria-label="Top customers loyalty">
+                  <table className="reports-table-pro reports-table-pro--compact" aria-label="Top customers loyalty">
                     <caption className="sr-only">Top customers by loyalty: orders, spent, points, tier, last order</caption>
                     <thead>
                       <tr>
                         <th scope="col">Customer</th>
-                        <th scope="col">Orders</th>
-                        <th scope="col">Spent</th>
+                        <th scope="col" className="num">Orders</th>
+                        <th scope="col" className="num">Spent</th>
                         <th scope="col">Points</th>
                         <th scope="col">Tier</th>
-                        <th scope="col">Last Order</th>
+                        <th scope="col">Last order</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1180,8 +1187,8 @@ const Reports = () => {
                               <small>{customer.phone}</small>
                             </div>
                           </td>
-                          <td>{customer.total_orders ?? 0}</td>
-                          <td>{formatTSh(customer.total_spent)}</td>
+                          <td className="num">{customer.total_orders ?? 0}</td>
+                          <td className="num">{formatTSh(customer.total_spent)}</td>
                           <td>
                             <div className="points-cell">
                               <span className="points-display points-monthly">{customer.monthly_points_earned ?? 0} this month</span>
@@ -1211,7 +1218,7 @@ const Reports = () => {
               </div>
             </>
           )}
-        </div>
+        </section>
       )}
     </div>
   );
