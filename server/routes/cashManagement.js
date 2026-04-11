@@ -4,6 +4,7 @@ const db = require('../database/query');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireRole } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getEffectiveBranchId } = require('../utils/branchFilter');
+const { sqlOperatingExpensesOnly } = require('../utils/operatingExpenses');
 
 // All cash-management routes require branch feature 'cash_management' (admin bypasses)
 router.use(authenticate, requireBranchFeature('cash_management'));
@@ -518,6 +519,7 @@ async function calculateRemaining(date, openingBalance, cashSales, bookSales, br
     FROM expenses e
     WHERE e.date::date = $1::date
     AND (e.branch_id = $2 OR e.branch_id IS NULL)
+    ${sqlOperatingExpensesOnly()}
   `, [date, branchId]);
   
   const expensesFromCash = num(expensesRow[0]?.expenses_from_cash);
@@ -631,6 +633,7 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
       FROM expenses e
       WHERE e.date::date = $1::date
       AND (e.branch_id = $2 OR e.branch_id IS NULL)
+      ${sqlOperatingExpensesOnly()}
     `, [today, branchId]);
     
     const expensesFromCash = num(expensesRow[0]?.expenses_from_cash);
@@ -766,10 +769,12 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
         const expensesBank = parseFloat(row.expenses_from_bank) || 0;
         const expensesMpesa = parseFloat(row.expenses_from_mpesa) || 0;
         const totalExpenses = expensesCash + expensesBank + expensesMpesa;
+        const bankDepositsDay = parseFloat(row.bank_deposits) || 0;
         const closing = parseFloat(row.closing_balance) || 0;
-        const cashOut = expensesCash;
-        const expectedCash = opening + cashSales + bookSales - cashOut;
-        const actualCash = openingDeclared + cashSales + bookSales - cashOut;
+        // Cash drawer: operating cash expenses + cash banked (deposits), not double-counted in totalExpenses.
+        const cashOutDrawer = expensesCash + bankDepositsDay;
+        const expectedCash = opening + cashSales + bookSales - cashOutDrawer;
+        const actualCash = openingDeclared + cashSales + bookSales - cashOutDrawer;
         const dateFormatted = new Date(date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
         const cashierName = reconciled_by || 'Cashier';
 
@@ -806,7 +811,8 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
           `Received Today: TZS ${fmt(bookSales)}`,
           '',
           '📤 *OUTFLOWS*',
-          `• Expenses: TZS ${fmt(totalExpenses)}`,
+          `• Operating expenses: TZS ${fmt(totalExpenses)}`,
+          `• Bank deposits (cash to bank, not P&L): TZS ${fmt(bankDepositsDay)}`,
           `• Stock Purchases: TZS 0`,
           '',
           '📊 *PROFIT & LOSS*',
@@ -824,7 +830,8 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
           `Opening (Declared): TZS ${fmt(openingDeclared)}`,
           `+ Cash Sales: TZS ${fmt(cashSales)}`,
           `+ Collections: TZS ${fmt(bookSales)}`,
-          `- Cash Out: TZS ${fmt(cashOut)}`,
+          `- Cash expenses: TZS ${fmt(expensesCash)}`,
+          `- Bank deposits: TZS ${fmt(bankDepositsDay)}`,
           `*Expected Cash: TZS ${fmt(expectedCash)}*`,
           `*Actual Cash: TZS ${fmt(actualCash)}*`,
           '━━━━━━━━━━━━━━━━',

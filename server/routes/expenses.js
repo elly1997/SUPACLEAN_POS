@@ -5,6 +5,7 @@ const { authenticate, requireBranchAccess, requireBranchFeature } = require('../
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 const cashManagement = require('./cashManagement');
+const { sqlOperatingExpensesOnly } = require('../utils/operatingExpenses');
 
 /** Normalize expense date to YYYY-MM-DD for consistent daily closing buckets */
 function normalizeExpenseDate(d) {
@@ -190,7 +191,7 @@ router.get('/summary/by-category', requireBranchAccess(), requirePermission('can
       COUNT(*) as count
     FROM expenses e
     WHERE 1=1
-      AND COALESCE(e.is_voided, FALSE) = FALSE
+      ${sqlOperatingExpensesOnly()}
   `;
   const params = [];
   let paramIndex = 1;
