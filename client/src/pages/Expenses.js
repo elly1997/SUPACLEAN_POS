@@ -152,7 +152,17 @@ const Expenses = () => {
     } catch (error) {
       const msg = error.response?.data?.error || error.message || 'Failed to update daily closing';
       if (error.response?.status === 409) {
-        showToast(msg, 'error');
+        const offerForce = window.confirm(
+          `${msg}\n\nReload this day’s figures from live data (orders, expenses, bank deposits)? The day stays reconciled; only stored totals are updated.`
+        );
+        if (offerForce) {
+          try {
+            await recalculateDailyCashForDate(filterDate, { force: true });
+            showToast(`Daily closing refreshed for ${filterDate} (includes bank deposits and expenses).`, 'success');
+          } catch (err2) {
+            showToast('Error: ' + (err2.response?.data?.error || err2.message), 'error');
+          }
+        }
       } else {
         showToast('Error updating daily closing: ' + msg, 'error');
       }
