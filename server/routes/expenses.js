@@ -6,6 +6,7 @@ const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 const cashManagement = require('./cashManagement');
 const { sqlOperatingExpensesOnly } = require('../utils/operatingExpenses');
+const { assertNotFutureBusinessDate } = require('../utils/businessDate');
 
 /** Normalize expense date to YYYY-MM-DD for consistent daily closing buckets */
 function normalizeExpenseDate(d) {
@@ -326,6 +327,10 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
   }
 
   const expenseDate = normalizeExpenseDate(date);
+
+  if (!assertNotFutureBusinessDate(expenseDate, res, 'date')) {
+    return;
+  }
   
   const branchId = getEffectiveBranchId(req) ?? req.user?.branchId ?? req.branch?.id ?? null;
   if (!branchId) {
@@ -432,6 +437,10 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
     const newDate = normalizeExpenseDate(date);
     const oldDate = normalizeExpenseDate(existing.date);
     const branchId = existing.branch_id != null ? existing.branch_id : (getEffectiveBranchId(req) ?? req.user?.branchId ?? null);
+
+    if (!assertNotFutureBusinessDate(newDate, res, 'date')) {
+      return;
+    }
     
     if (await isReconciledDay(oldDate, branchId) || await isReconciledDay(newDate, branchId)) {
       return res.status(409).json({

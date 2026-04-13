@@ -15,6 +15,7 @@ const { validatePayment } = require('../utils/paymentValidation');
 const { recordPaymentTransaction, logPaymentChange } = require('../utils/paymentTransactions');
 const { checkDuplicatePayment } = require('../utils/paymentTransactions');
 const cashManagement = require('./cashManagement');
+const { assertNotFutureBusinessDate, getBusinessTodayYmd } = require('../utils/businessDate');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 const fs = require('fs');
@@ -31,11 +32,15 @@ const upload = multer({ dest: uploadsDir });
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
 const roundFigure = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x));
 
+function paymentBookDateYmd(paymentDate) {
+  return typeof paymentDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(paymentDate.trim())
+    ? paymentDate.trim()
+    : getBusinessTodayYmd();
+}
+
 function buildPaymentTimestampIso(paymentDate) {
   const todayIso = new Date().toISOString();
-  const datePart = typeof paymentDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(paymentDate.trim())
-    ? paymentDate.trim()
-    : todayIso.slice(0, 10);
+  const datePart = paymentBookDateYmd(paymentDate);
   return `${datePart}T${todayIso.slice(11, 19)}.000Z`;
 }
 
@@ -601,6 +606,9 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
     if (Number.isNaN(parsedOrderDate.getTime())) {
       return res.status(400).json({ error: 'Invalid order_date. Use ISO date/time format.' });
     }
+    if (!assertNotFutureBusinessDate(parsedOrderDate, res, 'order_date')) {
+      return;
+    }
     const finalOrderDateIso = parsedOrderDate.toISOString();
 
 
@@ -1159,6 +1167,9 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
           });
         }
         
+        if (!assertNotFutureBusinessDate(paymentBookDateYmd(payment_date), res, 'payment_date')) {
+          return;
+        }
         // Check for duplicate payment using first order ID
         const paymentTimestampIso = buildPaymentTimestampIso(payment_date);
         const timestamp = paymentTimestampIso;
@@ -1266,6 +1277,9 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
       });
     }
 
+    if (!assertNotFutureBusinessDate(paymentBookDateYmd(payment_date), res, 'payment_date')) {
+      return;
+    }
     // Check for duplicate payment (use first order id)
     const paymentTimestampIso = buildPaymentTimestampIso(payment_date);
     const timestamp = paymentTimestampIso;

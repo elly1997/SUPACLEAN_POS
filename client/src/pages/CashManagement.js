@@ -20,6 +20,7 @@ import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
 import { receiptWidthCss } from '../utils/receiptPrintConfig';
 import { formatCustomerReceiptId } from '../utils/receiptId';
+import { getBusinessTodayYmd } from '../utils/businessDate';
 import './CashManagement.css';
 
 const CashManagement = () => {
@@ -58,7 +59,7 @@ const CashManagement = () => {
   const [salesDetailLoading, setSalesDetailLoading] = useState(false);
   const [salesDetailRecalculating, setSalesDetailRecalculating] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
-  const today = new Date().toISOString().split('T')[0];
+  const today = getBusinessTodayYmd();
   const isAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
   const toNum = (v) => {
     const n = Number(v);

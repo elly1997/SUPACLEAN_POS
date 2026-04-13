@@ -5,6 +5,7 @@ const { authenticate, requireBranchAccess, requireBranchFeature, requireRole } =
 const { requirePermission } = require('../middleware/permissions');
 const { getEffectiveBranchId } = require('../utils/branchFilter');
 const { sqlOperatingExpensesOnly } = require('../utils/operatingExpenses');
+const { getBusinessTodayYmd, assertNotFutureBusinessDate } = require('../utils/businessDate');
 
 // All cash-management routes require branch feature 'cash_management' (admin bypasses)
 router.use(authenticate, requireBranchFeature('cash_management'));
@@ -274,6 +275,9 @@ router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCa
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to view cash management' });
   }
+  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+    return;
+  }
   try {
     const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
     const force = !!(row && row.is_reconciled);
@@ -291,6 +295,9 @@ router.post('/daily/recalculate/:date', requireBranchAccess(), requirePermission
   const branchId = getEffectiveBranchId(req);
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to recalculate daily closing' });
+  }
+  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+    return;
   }
   const force = req.body?.force === true || req.query?.force === '1' || req.query?.force === 'true';
   try {
@@ -320,6 +327,9 @@ router.post('/opening-session/:date', requireBranchAccess(), requirePermission('
   const branchId = getEffectiveBranchId(req);
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to start opening session' });
+  }
+  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+    return;
   }
   if (!Number.isFinite(openingCash) || openingCash < 0) {
     return res.status(400).json({ error: 'opening_cash must be a valid non-negative number' });
@@ -365,7 +375,7 @@ router.post('/opening-session/:date', requireBranchAccess(), requirePermission('
 // When admin and no branch selected: return consolidated totals across all branches
 router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const branchId = getEffectiveBranchId(req);
-  const today = new Date().toISOString().split('T')[0];
+  const today = getBusinessTodayYmd();
   const isAdminAllBranches = req.user?.role === 'admin' && (branchId == null || branchId === '');
 
   if (!isAdminAllBranches && branchId == null) {
@@ -578,6 +588,9 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
     return res.status(400).json({ error: 'Select a branch to save cash summary' });
   }
   const today = date || new Date().toISOString().split('T')[0];
+  if (!assertNotFutureBusinessDate(String(today).trim().slice(0, 10), res, 'date')) {
+    return;
+  }
   
   try {
     const openingBalance = await getExpectedOpeningBalance(today, branchId);
@@ -720,6 +733,9 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
   const branchId = getEffectiveBranchId(req);
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to reconcile' });
+  }
+  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+    return;
   }
   try {
     // Always refresh from source data right before locking to ensure closing balance is correct.
@@ -929,6 +945,7 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
   const isAdminAllBranches = req.user?.role === 'admin' && (branchId == null || branchId === '');
   const limitRaw = Number.parseInt(req.query.limit, 10);
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 365) : 60;
+  const businessToday = getBusinessTodayYmd();
 
   if (!isAdminAllBranches && branchId == null) {
     return res.status(400).json({ error: 'Select a branch to view unreconciled closings' });
@@ -941,9 +958,10 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
          FROM daily_cash_summaries dcs
          LEFT JOIN branches b ON b.id = dcs.branch_id
          WHERE COALESCE(dcs.is_reconciled, FALSE) = FALSE
+         AND dcs.date <= ?
          ORDER BY dcs.date DESC, dcs.id DESC
          LIMIT ?`,
-        [limit]
+        [businessToday, limit]
       );
       rows = await Promise.all((rows || []).map(async (r) => {
         const refreshed = await refreshUnreconciledDailySummary(r.date, r.branch_id);
@@ -958,9 +976,10 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
        LEFT JOIN branches b ON b.id = dcs.branch_id
        WHERE COALESCE(dcs.is_reconciled, FALSE) = FALSE
        AND dcs.branch_id = ?
+       AND dcs.date <= ?
        ORDER BY dcs.date DESC, dcs.id DESC
        LIMIT ?`,
-      [branchId, limit]
+      [branchId, businessToday, limit]
     );
     rows = await Promise.all((rows || []).map(async (r) => {
       const refreshed = await refreshUnreconciledDailySummary(r.date, branchId);

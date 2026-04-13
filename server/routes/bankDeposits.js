@@ -4,6 +4,8 @@ const db = require('../database/query');
 const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getEffectiveBranchId } = require('../utils/branchFilter');
+const { assertNotFutureBusinessDate } = require('../utils/businessDate');
+const cashManagement = require('./cashManagement');
 
 router.use(authenticate, requireBranchFeature('bank_deposits'));
 
@@ -83,6 +85,10 @@ router.post('/', requireBranchAccess(), requirePermission('canManageCash'), asyn
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to record a bank deposit' });
   }
+
+  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+    return;
+  }
   
   const displayName = bank_name && bank_name.trim() ? bank_name.trim() : null;
   
@@ -97,6 +103,12 @@ router.post('/', requireBranchAccess(), requirePermission('canManageCash'), asyn
       `SELECT d.*, b.name as bank_account_name FROM bank_deposits d LEFT JOIN bank_accounts b ON d.bank_account_id = b.id WHERE d.id = ?`,
       [newId]
     );
+    // Keep daily_cash_summaries.bank_deposits / closing in sync (same source as Pending reconciliations).
+    try {
+      await cashManagement.refreshUnreconciledDailySummary(String(date).trim().slice(0, 10), branchId);
+    } catch (refreshErr) {
+      console.error('refreshUnreconciledDailySummary after bank deposit:', refreshErr.message);
+    }
     res.status(201).json(deposit || result.row);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -117,6 +129,21 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageCash'), as
   const branchId = getEffectiveBranchId(req);
   
   try {
+    let prevQuery = `SELECT id, date, branch_id FROM bank_deposits WHERE id = ?`;
+    const prevParams = [id];
+    if (branchId != null) {
+      prevQuery += ' AND branch_id = ?';
+      prevParams.push(branchId);
+    }
+    const previous = await db.get(prevQuery, prevParams);
+    if (!previous) {
+      return res.status(404).json({ error: 'Deposit not found' });
+    }
+
+    if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+      return;
+    }
+
     let query = `UPDATE bank_deposits SET date = ?, amount = ?, reference_number = ?, bank_name = ?, bank_account_id = ?, notes = ? WHERE id = ?`;
     const params = [date, amount, reference_number || null, (bank_name && bank_name.trim()) || null, bank_account_id || null, notes || null, id];
     if (branchId != null) {
@@ -133,6 +160,17 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageCash'), as
       `SELECT d.*, b.name as bank_account_name FROM bank_deposits d LEFT JOIN bank_accounts b ON d.bank_account_id = b.id WHERE d.id = ?`,
       [id]
     );
+    const bid = previous.branch_id != null ? previous.branch_id : branchId;
+    const newDay = String(date).trim().slice(0, 10);
+    const oldDay = String(previous.date).trim().slice(0, 10);
+    if (bid != null) {
+      try {
+        await cashManagement.refreshUnreconciledDailySummary(newDay, bid);
+        if (oldDay !== newDay) await cashManagement.refreshUnreconciledDailySummary(oldDay, bid);
+      } catch (refreshErr) {
+        console.error('refreshUnreconciledDailySummary after bank deposit update:', refreshErr.message);
+      }
+    }
     res.json(deposit);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -145,6 +183,17 @@ router.delete('/:id', requireBranchAccess(), requirePermission('canManageCash'),
   const branchId = getEffectiveBranchId(req);
   
   try {
+    let qPrev = 'SELECT date, branch_id FROM bank_deposits WHERE id = ?';
+    const pPrev = [id];
+    if (branchId != null) {
+      qPrev += ' AND branch_id = ?';
+      pPrev.push(branchId);
+    }
+    const row = await db.get(qPrev, pPrev);
+    if (!row) {
+      return res.status(404).json({ error: 'Deposit not found' });
+    }
+
     let query = 'DELETE FROM bank_deposits WHERE id = ?';
     const params = [id];
     if (branchId != null) {
@@ -154,6 +203,15 @@ router.delete('/:id', requireBranchAccess(), requirePermission('canManageCash'),
     const result = await db.run(query, params);
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Deposit not found' });
+    }
+    const bid = row.branch_id != null ? row.branch_id : branchId;
+    const day = String(row.date).trim().slice(0, 10);
+    if (bid != null) {
+      try {
+        await cashManagement.refreshUnreconciledDailySummary(day, bid);
+      } catch (refreshErr) {
+        console.error('refreshUnreconciledDailySummary after bank deposit delete:', refreshErr.message);
+      }
     }
     res.json({ message: 'Deposit deleted successfully' });
   } catch (err) {

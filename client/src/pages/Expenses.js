@@ -4,6 +4,7 @@ import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
+import { getBusinessTodayYmd } from '../utils/businessDate';
 import './Expenses.css';
 
 const DEFAULT_EXPENSE_CATEGORIES = [
@@ -27,15 +28,6 @@ const PAYMENT_SOURCES = [
   { value: 'mpesa', label: '📱 M-Pesa' }
 ];
 
-/** Local calendar YYYY-MM-DD (avoid UTC drift from toISOString() for Tanzania / cash dates). */
-function localCalendarDateYMD() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
 const Expenses = () => {
   const { showToast, ToastContainer } = useToast();
   const { hasPermission, selectedBranchId } = useAuth();
@@ -46,7 +38,7 @@ const Expenses = () => {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({
-    date: localCalendarDateYMD(),
+    date: getBusinessTodayYmd(),
     category: '',
     amount: '',
     payment_source: 'cash',
@@ -57,7 +49,7 @@ const Expenses = () => {
     bank_name: '',
     employee_id: ''
   });
-  const [filterDate, setFilterDate] = useState(() => localCalendarDateYMD());
+  const [filterDate, setFilterDate] = useState(() => getBusinessTodayYmd());
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [payrollEmployees, setPayrollEmployees] = useState([]);
@@ -314,6 +306,7 @@ const Expenses = () => {
           <input
             id="expenses-filter-date"
             type="date"
+            max={getBusinessTodayYmd()}
             value={filterDate}
             onChange={(e) => setFilterDate(e.target.value)}
             className="date-filter"
@@ -364,6 +357,7 @@ const Expenses = () => {
                 <label>Expense date * (cash & reports)</label>
                 <input
                   type="date"
+                  max={getBusinessTodayYmd()}
                   value={formData.date}
                   onChange={(e) => setFormData({ ...formData, date: e.target.value })}
                   required
