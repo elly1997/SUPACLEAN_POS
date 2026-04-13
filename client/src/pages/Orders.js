@@ -691,7 +691,7 @@ Phone: ${receiptGroup.customer_phone}
       const rows = buildOrderExportRows(data);
       const title = `Orders_${filter}_${new Date().toISOString().slice(0, 10)}`;
       const exportBranch = { branchName: branch?.name || rows[0]?.branch_name, branchId: branch?.id ?? selectedBranchId ?? rows[0]?.branch_id };
-      if (format === 'pdf') exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+      if (format === 'pdf') await exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
       else await exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
       showToast(`Exported ${rows.length} receipt(s) as ${format.toUpperCase()}`, 'success');
       setShowExportPopup(false);
@@ -716,7 +716,7 @@ Phone: ${receiptGroup.customer_phone}
       const rows = buildOrderExportRows(data);
       const title = 'Uncollected_Stock_' + new Date().toISOString().slice(0, 10);
       const exportBranch = { branchName: branch?.name || rows[0]?.branch_name, branchId: branch?.id ?? selectedBranchId ?? rows[0]?.branch_id };
-      if (format === 'pdf') exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+      if (format === 'pdf') await exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
       else await exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
       showToast(`Exported ${rows.length} uncollected receipt(s) as ${format.toUpperCase()}`, 'success');
       setShowExportPopup(false);

@@ -1,6 +1,7 @@
 const { sendSMS, generateOrderConfirmation, generateCollectionReminder, calendarDaysUtc, daysOverdueFromEstimated, generateInvoiceReminder, generatePaymentNoticeShort } = require('./sms');
 const { sendWhatsApp } = require('./whatsapp');
 const db = require('../database/db');
+const { computeDedupeKey, hasRecentDuplicate } = require('./smsDedupe');
 
 /**
  * Unified notification service
@@ -105,6 +106,28 @@ async function sendNotification(options) {
       message = options.message || `Hello ${customerName}, this is a message from SUPACLEAN.`;
   }
 
+  const dedupeKey = computeDedupeKey({
+    customerId,
+    notificationType,
+    receiptNumber: orderData.receiptNumber,
+    invoiceNumber: orderData.invoiceNumber,
+    dedupeKey: options.dedupeKey
+  });
+  if (dedupeKey && customerId) {
+    const dup = await hasRecentDuplicate(db, { customerId, notificationType, dedupeKey });
+    if (dup) {
+      console.log(
+        `📱 Notification skipped (duplicate within window): customer ${customerId} type ${notificationType} key ${dedupeKey}`
+      );
+      return {
+        success: true,
+        skippedDuplicate: true,
+        message,
+        channels: { sms: { skippedDuplicate: true }, whatsapp: { skippedDuplicate: true } }
+      };
+    }
+  }
+
   const results = {
     sms: null,
     whatsapp: null
@@ -118,7 +141,10 @@ async function sendNotification(options) {
       sendSMS(phone, message, {
         customerId,
         orderId,
-        notificationType
+        notificationType,
+        receiptNumber: orderData.receiptNumber,
+        invoiceNumber: orderData.invoiceNumber,
+        dedupeKey: options.dedupeKey
       }).then(result => {
         results.sms = result;
         return result;
@@ -383,6 +409,9 @@ async function sendInvoiceReminder(invoice, customer, channels = ['sms', 'whatsa
  */
 async function sendSmsWithWhatsAppFallback(phone, message, options = {}) {
   const smsResult = await sendSMS(phone, message, options);
+  if (smsResult && smsResult.skippedDuplicate) {
+    return { ...smsResult, channel: null };
+  }
   if (smsResult && smsResult.success) {
     return { ...smsResult, channel: 'sms' };
   }

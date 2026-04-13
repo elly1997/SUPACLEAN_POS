@@ -176,6 +176,7 @@ function initializeTables() {
     status TEXT DEFAULT 'pending',
     sent_at DATETIME,
     error_message TEXT,
+    dedupe_key TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (customer_id) REFERENCES customers(id),
     FOREIGN KEY (order_id) REFERENCES orders(id)
@@ -444,6 +445,18 @@ function migrateDatabase() {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`);
       
+      // SMS de-duplication key (SQLite; PostgreSQL uses ensureNotificationsDedupeKey.js)
+      db.all("PRAGMA table_info(notifications)", [], (notifErr, notifColumns) => {
+        if (!notifErr && notifColumns) {
+          const notifNames = notifColumns.map((col) => col.name);
+          if (!notifNames.includes('dedupe_key')) {
+            db.run('ALTER TABLE notifications ADD COLUMN dedupe_key TEXT', (alterErr) => {
+              if (!alterErr) console.log('✅ Added dedupe_key column to notifications');
+            });
+          }
+        }
+      });
+
       // Add notification preferences and tags to customers table
       db.all("PRAGMA table_info(customers)", [], (customerErr, customerColumns) => {
         if (!customerErr && customerColumns) {

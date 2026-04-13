@@ -388,7 +388,7 @@ const Customers = () => {
       }));
       const title = 'Customers_' + new Date().toISOString().slice(0, 10);
       const exportBranch = { branchName: branch?.name || rows[0]?.branch_name, branchId: branch?.id ?? rows[0]?.branch_id };
-      if (format === 'pdf') exportToPDF(title, CUSTOMERS_EXPORT_COLUMNS, rows, exportBranch);
+      if (format === 'pdf') await exportToPDF(title, CUSTOMERS_EXPORT_COLUMNS, rows, exportBranch);
       else await exportToExcel(title, CUSTOMERS_EXPORT_COLUMNS, rows, exportBranch);
       showToast(`Exported ${data.length} customers as ${format.toUpperCase()}`, 'success');
       setShowExportPopup(false);

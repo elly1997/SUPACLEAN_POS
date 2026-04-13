@@ -64,6 +64,7 @@ if (process.env.NODE_ENV !== 'production') {
 require('./database/db');
 // Ensure bank_accounts table exists in PostgreSQL (no-op for SQLite)
 require('./database/ensureBankingSchema');
+require('./database/ensureNotificationsDedupeKey');
 // Ensure payroll and accounting control tables exist in PostgreSQL
 require('./database/ensurePayrollSchema');
 require('./database/ensureExpenseCategoriesSchema');

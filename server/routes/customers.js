@@ -671,6 +671,13 @@ router.post('/:id/send-balance-reminder', async (req, res) => {
 
   try {
     const result = await sendBalanceReminder(id, Array.isArray(channels) ? channels : [channels]);
+    if (result.skippedDuplicate) {
+      return res.json({
+        message: 'A balance reminder was already sent recently for this customer; not sending again.',
+        skipped_duplicate: true,
+        result
+      });
+    }
     if (result.success) {
       res.json({
         message: 'Balance reminder sent successfully',

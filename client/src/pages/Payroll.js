@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import ExcelJS from 'exceljs';
 import {
   createPayrollEmployee,
   getMonthlyPayroll,
@@ -354,6 +353,7 @@ const Payroll = () => {
       const lines = await actionLoadLines();
       if (!lines.length) return showToast('No saved payroll lines for selected month', 'error');
       const month = selectedHistoryMonth || monthKey;
+      const ExcelJS = (await import(/* webpackChunkName: "lib-exceljs" */ 'exceljs')).default;
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet('Payroll');
       sheet.addRow([

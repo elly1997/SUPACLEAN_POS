@@ -1,5 +1,6 @@
 const axios = require('axios');
 const db = require('../database/db');
+const { computeDedupeKey, hasRecentDuplicate } = require('./smsDedupe');
 
 // SMS notification service
 // This is a template - you'll need to integrate with a Tanzanian SMS provider
@@ -7,7 +8,30 @@ const db = require('../database/db');
 
 async function sendSMS(phone, message, options = {}) {
   const { customerId, orderId, notificationType = 'ready' } = options;
-  
+
+  const dedupeKey = computeDedupeKey({
+    ...options,
+    customerId,
+    notificationType
+  });
+  if (dedupeKey && customerId) {
+    const dup = await hasRecentDuplicate(db, {
+      customerId,
+      notificationType,
+      dedupeKey
+    });
+    if (dup) {
+      console.log(
+        `📱 SMS skipped (duplicate within window): customer ${customerId} type ${notificationType} key ${dedupeKey}`
+      );
+      return {
+        success: true,
+        skippedDuplicate: true,
+        message: 'SMS skipped — already sent recently for this receipt/customer and type'
+      };
+    }
+  }
+
   // Remove any non-numeric characters and ensure it starts with country code
   const cleanPhone = phone.replace(/\D/g, '');
   const formattedPhone = cleanPhone.startsWith('255') 
@@ -19,9 +43,9 @@ async function sendSMS(phone, message, options = {}) {
   if (customerId) {
     try {
       const insertResult = await db.run(
-        `INSERT INTO notifications (customer_id, order_id, notification_type, channel, recipient, message, status)
-         VALUES (?, ?, ?, 'sms', ?, ?, 'pending')`,
-        [customerId, orderId || null, notificationType, formattedPhone, message]
+        `INSERT INTO notifications (customer_id, order_id, notification_type, channel, recipient, message, status, dedupe_key)
+         VALUES (?, ?, ?, 'sms', ?, ?, 'pending', ?)`,
+        [customerId, orderId || null, notificationType, formattedPhone, message, dedupeKey || null]
       );
       notificationId = insertResult?.row?.id ?? insertResult?.lastID ?? null;
     } catch (insertErr) {

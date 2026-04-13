@@ -151,6 +151,15 @@ router.post('/:id/send-notice', authenticate, requireBranchAccess(), async (req,
     if (!result.success && result.error) {
       return res.status(400).json({ error: result.error, channels: result.channels });
     }
+    if (result.skippedDuplicate) {
+      return res.json({
+        success: true,
+        skipped_duplicate: true,
+        message: 'Payment notice was already sent recently for this invoice; not sending again.',
+        channels: result.channels,
+        preview: result.message
+      });
+    }
     res.json({
       success: true,
       message: 'Payment notice sent',

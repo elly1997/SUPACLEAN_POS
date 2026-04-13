@@ -432,11 +432,22 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), a
     const result = await sendSmsWithWhatsAppFallback(customerPhone, message, {
       customerId,
       orderId: first.id,
-      notificationType: 'receipt_sms'
+      notificationType: 'receipt_sms',
+      receiptNumber: String(receiptNumber).trim()
     });
 
     if (!result.success) {
       return res.status(500).json({ error: result.error || 'Failed to send', sent: false });
+    }
+    if (result.skippedDuplicate) {
+      return res.json({
+        success: true,
+        sent: false,
+        skipped_duplicate: true,
+        channel: null,
+        preview: message,
+        message: 'Receipt SMS was already sent recently for this receipt; not sending again.'
+      });
     }
     res.json({ success: true, sent: true, channel: result.channel || 'sms', preview: message });
   } catch (err) {
@@ -954,9 +965,12 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
               sendSmsWithWhatsAppFallback(orderWithCustomer.customer_phone, message, {
                 customerId: orderWithCustomer.customer_id,
                 orderId: orderWithCustomer.id,
-                notificationType: 'ready'
+                notificationType: 'ready',
+                receiptNumber: orderWithCustomer.receipt_number
               }).then(result => {
-                if (result.success) {
+                if (result.skippedDuplicate) {
+                  console.log(`📱 Ready SMS skipped (duplicate window) for receipt ${orderWithCustomer.receipt_number}`);
+                } else if (result.success) {
                   console.log(`✅ Ready notification sent via ${result.channel || 'sms'} to ${orderWithCustomer.customer_phone} for receipt ${orderWithCustomer.receipt_number}`);
                 } else {
                   console.error(`❌ Failed to send to ${orderWithCustomer.customer_phone}:`, result.error);
@@ -1862,9 +1876,18 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
     const result = await sendSmsWithWhatsAppFallback(order.customer_phone, message, {
       customerId: order.customer_id,
       orderId: order.id,
-      notificationType: notification_type
+      notificationType: notification_type,
+      receiptNumber: order.receipt_number
     });
-    
+
+    if (result.skippedDuplicate) {
+      return res.json({
+        message: 'This notification was already sent recently for this receipt; not sending again.',
+        skipped_duplicate: true,
+        channel: null
+      });
+    }
+
     if (result.success) {
       res.json({ 
         message: 'Notification sent successfully',

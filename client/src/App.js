@@ -1,26 +1,28 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
 import Loader from './components/Loader';
 import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import NewOrder from './pages/NewOrder';
-import Orders from './pages/Orders';
-import Customers from './pages/Customers';
-import Collection from './pages/Collection';
-import Reports from './pages/Reports';
-import PriceList from './pages/PriceList';
-import CashManagement from './pages/CashManagement';
-import Expenses from './pages/Expenses';
-import AdminBranches from './pages/AdminBranches';
-import AdminBanking from './pages/AdminBanking';
-import MonthlyBilling from './pages/MonthlyBilling';
-import CleaningServices from './pages/CleaningServices';
-import Payroll from './pages/Payroll';
-import Terms from './pages/Terms';
 import './App.css';
+
+// Route-level code splitting: each page loads only when visited (smaller initial JS, faster first paint).
+const Dashboard = lazy(() => import(/* webpackChunkName: "page-dashboard" */ './pages/Dashboard'));
+const NewOrder = lazy(() => import(/* webpackChunkName: "page-new-order" */ './pages/NewOrder'));
+const Orders = lazy(() => import(/* webpackChunkName: "page-orders" */ './pages/Orders'));
+const Customers = lazy(() => import(/* webpackChunkName: "page-customers" */ './pages/Customers'));
+const Collection = lazy(() => import(/* webpackChunkName: "page-collection" */ './pages/Collection'));
+const Reports = lazy(() => import(/* webpackChunkName: "page-reports" */ './pages/Reports'));
+const PriceList = lazy(() => import(/* webpackChunkName: "page-price-list" */ './pages/PriceList'));
+const CashManagement = lazy(() => import(/* webpackChunkName: "page-cash" */ './pages/CashManagement'));
+const Expenses = lazy(() => import(/* webpackChunkName: "page-expenses" */ './pages/Expenses'));
+const AdminBranches = lazy(() => import(/* webpackChunkName: "page-admin-branches" */ './pages/AdminBranches'));
+const AdminBanking = lazy(() => import(/* webpackChunkName: "page-admin-banking" */ './pages/AdminBanking'));
+const MonthlyBilling = lazy(() => import(/* webpackChunkName: "page-billing" */ './pages/MonthlyBilling'));
+const CleaningServices = lazy(() => import(/* webpackChunkName: "page-cleaning" */ './pages/CleaningServices'));
+const Payroll = lazy(() => import(/* webpackChunkName: "page-payroll" */ './pages/Payroll'));
+const Terms = lazy(() => import(/* webpackChunkName: "page-terms" */ './pages/Terms'));
 
 class AppErrorBoundary extends React.Component {
   state = { hasError: false, error: null };
@@ -101,37 +103,39 @@ function App() {
       <AuthProvider>
         <AppErrorBoundary>
         <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/terms" element={<Terms />} />
-            <Route
-              path="/*"
-              element={
-                <ProtectedRoute>
-                  <Layout>
-                    <Routes>
-                      <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                      <Route path="/dashboard" element={<Dashboard />} />
-                      <Route path="/new-order" element={<NewOrder />} />
-                      <Route path="/orders" element={<Orders />} />
-                      <Route path="/customers" element={<Customers />} />
-                      <Route path="/collection" element={<Collection />} />
-                      <Route path="/price-list" element={<PriceList />} />
-                      <Route path="/cash-management" element={<CashManagement />} />
-                      <Route path="/expenses" element={<Expenses />} />
-                      <Route path="/reports" element={<Reports />} />
-                      <Route path="/monthly-billing" element={<MonthlyBilling />} />
-                      <Route path="/payroll" element={<Payroll />} />
-                      <Route path="/cleaning-services" element={<CleaningServices />} />
-                      <Route path="/admin/branches" element={<AdminBranches />} />
-                      <Route path="/admin/banking" element={<AdminBanking />} />
-                      <Route path="*" element={<Navigate to="/dashboard" replace />} />
-                    </Routes>
-                  </Layout>
-                </ProtectedRoute>
-              }
-            />
-          </Routes>
+          <Suspense fallback={<Loader message="Loading page…" fullPage delayMs={0} />}>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route path="/terms" element={<Terms />} />
+              <Route
+                path="/*"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <Routes>
+                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                        <Route path="/dashboard" element={<Dashboard />} />
+                        <Route path="/new-order" element={<NewOrder />} />
+                        <Route path="/orders" element={<Orders />} />
+                        <Route path="/customers" element={<Customers />} />
+                        <Route path="/collection" element={<Collection />} />
+                        <Route path="/price-list" element={<PriceList />} />
+                        <Route path="/cash-management" element={<CashManagement />} />
+                        <Route path="/expenses" element={<Expenses />} />
+                        <Route path="/reports" element={<Reports />} />
+                        <Route path="/monthly-billing" element={<MonthlyBilling />} />
+                        <Route path="/payroll" element={<Payroll />} />
+                        <Route path="/cleaning-services" element={<CleaningServices />} />
+                        <Route path="/admin/branches" element={<AdminBranches />} />
+                        <Route path="/admin/banking" element={<AdminBanking />} />
+                        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                      </Routes>
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+            </Routes>
+          </Suspense>
         </Router>
         </AppErrorBoundary>
       </AuthProvider>

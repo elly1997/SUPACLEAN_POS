@@ -1,11 +1,9 @@
 /**
  * Export tables to PDF or Excel for printing and reporting.
+ * Heavy deps (jsPDF, ExcelJS) load only when the user runs an export.
  * Columns: [{ key: string, label: string }]
  * Rows: array of objects (keys match column.key).
  */
-import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
-import ExcelJS from 'exceljs';
 
 /**
  * @param {string} title - Report title
@@ -13,15 +11,20 @@ import ExcelJS from 'exceljs';
  * @param {Record<string, unknown>[]} rows
  * @param {{ branchName?: string, branchId?: number }} [options] - Optional branch for header
  */
-export function exportToPDF(title, columns, rows, options = {}) {
+export async function exportToPDF(title, columns, rows, options = {}) {
+  const { jsPDF } = await import(/* webpackChunkName: "lib-jspdf" */ 'jspdf');
+  await import(/* webpackChunkName: "lib-jspdf-autotable" */ 'jspdf-autotable');
+
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const head = [columns.map(c => c.label)];
-  const body = rows.map(row => columns.map(col => {
-    const v = row[col.key];
-    if (v == null) return '';
-    if (typeof v === 'number' && !Number.isInteger(v)) return Number(v).toFixed(2);
-    return String(v);
-  }));
+  const head = [columns.map((c) => c.label)];
+  const body = rows.map((row) =>
+    columns.map((col) => {
+      const v = row[col.key];
+      if (v == null) return '';
+      if (typeof v === 'number' && !Number.isInteger(v)) return Number(v).toFixed(2);
+      return String(v);
+    })
+  );
 
   const branchLabel = options.branchName || (options.branchId != null ? `Branch ID ${options.branchId}` : null);
   let startY = 12;
@@ -40,7 +43,7 @@ export function exportToPDF(title, columns, rows, options = {}) {
     startY: startY + 2,
     styles: { fontSize: 8 },
     headStyles: { fillColor: [66, 139, 202] },
-    margin: { left: 14, right: 14 },
+    margin: { left: 14, right: 14 }
   });
 
   const pageCount = doc.internal.getNumberOfPages();
@@ -60,13 +63,17 @@ export function exportToPDF(title, columns, rows, options = {}) {
  * @param {{ branchName?: string, branchId?: number }} [options] - Optional branch for header
  */
 export async function exportToExcel(title, columns, rows, options = {}) {
+  const ExcelJS = (await import(/* webpackChunkName: "lib-exceljs" */ 'exceljs')).default;
+
   const branchLabel = options.branchName || (options.branchId != null ? `Branch ID ${options.branchId}` : null);
-  const headers = columns.map(c => c.label);
-  const data = rows.map(row => columns.map(col => {
-    const v = row[col.key];
-    if (v == null) return '';
-    return v;
-  }));
+  const headers = columns.map((c) => c.label);
+  const data = rows.map((row) =>
+    columns.map((col) => {
+      const v = row[col.key];
+      if (v == null) return '';
+      return v;
+    })
+  );
 
   const workbook = new ExcelJS.Workbook();
   const sheetName = title.slice(0, 31).replace(/[*?:/\\[\]]/g, ' ');
@@ -81,12 +88,12 @@ export async function exportToExcel(title, columns, rows, options = {}) {
   }
   rowIndex++;
   sheet.addRow(headers);
-  data.forEach(r => sheet.addRow(r));
+  data.forEach((r) => sheet.addRow(r));
 
   const colWidths = columns.map((_, i) => {
     const maxLen = Math.max(
       String(headers[i]).length,
-      ...data.map(r => String(r[i] ?? '').length),
+      ...data.map((r) => String(r[i] ?? '').length),
       branchLabel ? String(branchLabel).length + 10 : 0
     );
     return Math.min(Math.max(maxLen + 1, 10), 50);
