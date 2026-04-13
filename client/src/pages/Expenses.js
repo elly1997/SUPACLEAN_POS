@@ -7,7 +7,6 @@ import Loader from '../components/Loader';
 import './Expenses.css';
 
 const DEFAULT_EXPENSE_CATEGORIES = [
-  'Bank Deposit',
   'Lunch',
   'Breakfast',
   'Car Fuel',
@@ -83,8 +82,13 @@ const Expenses = () => {
     const builtSet = new Set(DEFAULT_EXPENSE_CATEGORIES.map((c) => c.toLowerCase()));
     const extra = customNames.filter((n) => !builtSet.has(String(n).toLowerCase()));
     extra.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-    return [...DEFAULT_EXPENSE_CATEGORIES, ...extra];
-  }, [customCategoryRows]);
+    let list = [...DEFAULT_EXPENSE_CATEGORIES, ...extra];
+    const cur = formData.category && String(formData.category).trim();
+    if (cur && !list.some((c) => String(c).toLowerCase() === cur.toLowerCase())) {
+      list = [formData.category, ...list];
+    }
+    return list;
+  }, [customCategoryRows, formData.category]);
 
   useEffect(() => {
     loadExpenses();
@@ -368,6 +372,9 @@ const Expenses = () => {
               </div>
               <div className="form-group">
                 <label>Category *</label>
+                <p className="form-hint-muted" style={{ marginBottom: '8px' }}>
+                  Bank deposits are recorded under <strong>Cash Management → Bank deposits</strong>, not here.
+                </p>
                 <select
                   value={formData.category}
                   onChange={(e) => {

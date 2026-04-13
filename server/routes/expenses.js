@@ -99,9 +99,8 @@ async function removeLinkedSalaryAdvance(expenseId) {
   await db.run('DELETE FROM salary_advances WHERE source_expense_id = $1', [expenseId]);
 }
 
-/** Built-in categories (special handling for Bank Deposit / Salary Advance). Custom names stored per branch. */
+/** Built-in categories (Salary Advance has special handling). Bank deposits are recorded under Cash Management → Bank deposits, not here. */
 const BUILTIN_EXPENSE_CATEGORIES = [
-  'Bank Deposit',
   'Lunch',
   'Breakfast',
   'Car Fuel',
@@ -115,6 +114,9 @@ const BUILTIN_EXPENSE_CATEGORIES = [
   'Transport',
   'Other'
 ];
+
+/** Cannot be added as a custom category (reserved / use other flows). */
+const RESERVED_EXPENSE_CATEGORY_NAMES = new Set(['bank deposit']);
 
 function normalizeCustomCategoryName(name) {
   return String(name || '')
@@ -163,6 +165,11 @@ router.post('/categories', requireBranchAccess(), requirePermission('canManageEx
   }
   if (BUILTIN_EXPENSE_CATEGORIES.some((c) => c.toLowerCase() === name.toLowerCase())) {
     return res.status(400).json({ error: 'This name matches a built-in category. Use the list as-is.' });
+  }
+  if (RESERVED_EXPENSE_CATEGORY_NAMES.has(name.toLowerCase())) {
+    return res.status(400).json({
+      error: 'This name is reserved. Record bank deposits under Cash Management → Bank deposits.'
+    });
   }
   try {
     const result = await db.run(
@@ -298,7 +305,7 @@ router.get('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
   }
 });
 
-// Create new expense (managers and admins only). If category is "Bank Deposit", also creates a bank_deposits row.
+// Create new expense (managers and admins only). Bank deposits use Cash Management → bank_deposits only.
 router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
   const {
     date,
@@ -328,40 +335,20 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
         : 'Your account is not assigned to a branch. Contact the administrator to assign your account to a branch before recording expenses.'
     });
   }
-  
+
   if (category === 'Bank Deposit') {
-    const accountId = bank_account_id != null && bank_account_id !== '' ? Number(bank_account_id) : null;
-    const otherName = deposit_bank_name && String(deposit_bank_name).trim() ? String(deposit_bank_name).trim() : null;
-    if (!accountId && !otherName) {
-      return res.status(400).json({ error: 'For Bank Deposit, select a bank account or enter bank name (Other)' });
-    }
+    return res.status(400).json({
+      error: 'Bank deposits are not recorded as expenses. Use Cash Management → Bank deposits.'
+    });
   }
+
   if (isSalaryAdvanceCategory(category) && !employee_id) {
     return res.status(400).json({ error: 'employee_id is required when category is Salary Advance' });
   }
   
   try {
-    let bankDepositId = null;
-    if (category === 'Bank Deposit' && branchId) {
-      const accountId = bank_account_id != null && bank_account_id !== '' ? Number(bank_account_id) : null;
-      const otherName = deposit_bank_name && String(deposit_bank_name).trim() ? String(deposit_bank_name).trim() : null;
-      const depResult = await db.run(
-        `INSERT INTO bank_deposits (date, amount, reference_number, bank_name, bank_account_id, notes, created_by, branch_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-        [
-          expenseDate,
-          amount,
-          deposit_reference_number || null,
-          otherName || null,
-          accountId,
-          description || null,
-          created_by || null,
-          branchId
-        ]
-      );
-      bankDepositId = depResult.lastID ?? depResult.row?.id;
-    }
-    
+    const bankDepositId = null;
+
     if (await isReconciledDay(expenseDate, branchId)) {
       return res.status(409).json({
         error: 'This date is already reconciled. Record an adjustment on the current date or ask an administrator.'
@@ -451,6 +438,18 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
         error: 'This expense belongs to a reconciled day. Use adjustment entry or manager override process.'
       });
     }
+
+    if (category === 'Bank Deposit' && existing.category !== 'Bank Deposit') {
+      return res.status(400).json({
+        error: 'Bank deposits are not recorded as expenses. Use Cash Management → Bank deposits.'
+      });
+    }
+    if (existing.bank_deposit_id && category !== 'Bank Deposit') {
+      return res.status(400).json({
+        error: 'This line is linked to a bank deposit. Keep category as Bank Deposit or void the expense; use Cash Management for new deposits.'
+      });
+    }
+
     if (isSalaryAdvanceCategory(category) && !employee_id) {
       return res.status(400).json({ error: 'employee_id is required when category is Salary Advance' });
     }
