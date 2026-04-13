@@ -12,7 +12,8 @@ import {
   saveOpeningSession,
   getCashSalesDetailForDate,
   getBookSalesDetailForDate,
-  recalculateDailyCashForDate
+  recalculateDailyCashForDate,
+  refreshCashChainFromDate
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
@@ -47,6 +48,10 @@ const CashManagement = () => {
   const [reportEndDate, setReportEndDate] = useState('');
   const [rangeData, setRangeData] = useState([]);
   const [rangeLoading, setRangeLoading] = useState(false);
+  /** YYYY-MM-DD -> bank deposit rows for cashflow drill-down */
+  const [rangeDepositsByDate, setRangeDepositsByDate] = useState({});
+  const [cashflowExpanded, setCashflowExpanded] = useState({});
+  const [chainRefreshingDate, setChainRefreshingDate] = useState('');
   const [unreconciledClosings, setUnreconciledClosings] = useState([]);
   const [unreconciledLoading, setUnreconciledLoading] = useState(false);
   const [reconcilingDate, setReconcilingDate] = useState('');
@@ -135,6 +140,8 @@ const CashManagement = () => {
     loadUnreconciledClosings();
   }, [selectedBranchId]);
 
+  const rowDateKey = (row) => (row?.date != null ? String(row.date).slice(0, 10) : '');
+
   const loadRangeReport = async () => {
     const start = reportStartDate || today;
     const end = reportEndDate || today;
@@ -144,14 +151,47 @@ const CashManagement = () => {
     }
     setRangeLoading(true);
     setRangeData([]);
+    setRangeDepositsByDate({});
     try {
-      const res = await getCashSummaryRange(start, end);
-      setRangeData(Array.isArray(res.data) ? res.data : []);
+      const [rangeRes, depRes] = await Promise.all([
+        getCashSummaryRange(start, end),
+        getBankDeposits({ start_date: start, end_date: end }).catch(() => ({ data: [] }))
+      ]);
+      setRangeData(Array.isArray(rangeRes.data) ? rangeRes.data : []);
+      const deps = Array.isArray(depRes.data) ? depRes.data : [];
+      const by = {};
+      deps.forEach((d) => {
+        const k = String(d.date).slice(0, 10);
+        if (!by[k]) by[k] = [];
+        by[k].push(d);
+      });
+      setRangeDepositsByDate(by);
     } catch (err) {
       showToast('Error loading report: ' + (err.response?.data?.error || err.message), 'error');
       setRangeData([]);
     } finally {
       setRangeLoading(false);
+    }
+  };
+
+  const handleRefreshCashChain = async (dateStr) => {
+    const d = String(dateStr).slice(0, 10);
+    if (!d) return;
+    if (summary?.all_branches) {
+      showToast('Select a specific branch to refresh the cash chain.', 'error');
+      return;
+    }
+    setChainRefreshingDate(d);
+    try {
+      await refreshCashChainFromDate(d);
+      showToast(`Recalculated from ${d} forward (unreconciled days). Bank deposits and following days’ openings are updated.`, 'success');
+      await loadRangeReport();
+      loadUnreconciledClosings();
+      if (d === today) loadData();
+    } catch (error) {
+      showToast(error.response?.data?.error || error.message || 'Refresh failed', 'error');
+    } finally {
+      setChainRefreshingDate('');
     }
   };
 
@@ -917,7 +957,7 @@ const CashManagement = () => {
       )}
 
       {/* Bank Deposits Section */}
-      <div className="deposits-section">
+      <div className="deposits-section" id="bank-deposits-section">
         <div className="section-header">
           <h2>🏦 Bank Deposits</h2>
           {!summary.all_branches && (
@@ -1092,15 +1132,26 @@ const CashManagement = () => {
                     <td className="num">{(parseFloat(row.closing_balance) || 0).toLocaleString()}</td>
                     <td>Pending</td>
                     <td>
-                      <button
-                        type="button"
-                        className="btn-small btn-success"
-                        onClick={() => handleReconcileUnreconciledDate(row.date)}
-                        disabled={summary.all_branches || reconcilingDate === row.date}
-                        title={summary.all_branches ? 'Select a single branch to reconcile this day' : 'Reconcile this unreconciled day'}
-                      >
-                        {reconcilingDate === row.date ? 'Reconciling…' : 'Reconcile'}
-                      </button>
+                      <div className="range-actions-cell">
+                        <button
+                          type="button"
+                          className="btn-small btn-secondary"
+                          onClick={() => handleRefreshCashChain(rowDateKey(row))}
+                          disabled={summary.all_branches || chainRefreshingDate === rowDateKey(row)}
+                          title="Recalculate this day and all later unreconciled days (bank deposits, opening chain)"
+                        >
+                          {chainRefreshingDate === rowDateKey(row) ? 'Recalc…' : 'Recalculate chain'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-small btn-success"
+                          onClick={() => handleReconcileUnreconciledDate(rowDateKey(row))}
+                          disabled={summary.all_branches || reconcilingDate === rowDateKey(row)}
+                          title={summary.all_branches ? 'Select a single branch to reconcile this day' : 'Reconcile this unreconciled day'}
+                        >
+                          {reconcilingDate === rowDateKey(row) ? 'Reconciling…' : 'Reconcile'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1115,7 +1166,14 @@ const CashManagement = () => {
       {/* Cashflow report by date range */}
       <div className="cash-range-section">
         <h2>📅 Cashflow report by date</h2>
-        <p className="subtitle">View consolidated {summary.all_branches ? 'all-branches ' : ''}totals for a date range</p>
+        <p className="subtitle">
+          View consolidated {summary.all_branches ? 'all-branches ' : ''}totals for a date range.
+          Closing uses: declared opening + cash sales + book sales − cash expenses − bank deposits (deposits are not expenses).
+        </p>
+        <p className="subtitle text-muted" style={{ marginTop: '-6px' }}>
+          If bank deposits show 0 but you recorded them, or the next day&apos;s opening looks wrong, select the branch and click <strong>Recalculate chain</strong> for that date.
+          Edit deposit amounts in <button type="button" className="btn-link" onClick={() => document.getElementById('bank-deposits-section')?.scrollIntoView({ behavior: 'smooth' })}>Bank deposits</button> below (today), or open the deposit in your API/admin tool for other dates.
+        </p>
         <div className="range-controls">
           <div className="form-group">
             <label>Start date</label>
@@ -1156,24 +1214,99 @@ const CashManagement = () => {
                   <th className="num">Expenses (cash)</th>
                   <th className="num">Bank deposits</th>
                   <th className="num">Closing</th>
+                  <th>Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {rangeData.map((row) => (
-                  <tr key={row.date}>
-                    <td>{new Date(row.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
-                    <td className="num">{(parseFloat(row.opening_balance) || 0).toLocaleString()}</td>
-                    <td className={`num ${(parseFloat(row.opening_variance) || 0) < 0 ? 'value-negative' : 'value-positive'}`}>
-                      {(parseFloat(row.opening_variance) || 0).toLocaleString()}
-                    </td>
-                    <td className="num">{(parseFloat(row.cash_sales) || 0).toLocaleString()}</td>
-                    <td className="num">{(parseFloat(row.book_sales) || 0).toLocaleString()}</td>
-                    <td className="num">{(parseFloat(row.card_sales || 0) + parseFloat(row.mobile_money_sales || 0)).toLocaleString()}</td>
-                    <td className="num">{(parseFloat(row.expenses_from_cash) || 0).toLocaleString()}</td>
-                    <td className="num">{(parseFloat(row.bank_deposits) || 0).toLocaleString()}</td>
-                    <td className="num">{(parseFloat(row.closing_balance) || 0).toLocaleString()}</td>
-                  </tr>
-                ))}
+                {rangeData.map((row) => {
+                  const dk = rowDateKey(row);
+                  const depLines = rangeDepositsByDate[dk] || [];
+                  const expanded = !!cashflowExpanded[dk];
+                  const reconciled = !!(row.is_reconciled === true || row.is_reconciled === 1 || row.is_reconciled === '1');
+                  return (
+                    <React.Fragment key={dk || row.date}>
+                      <tr>
+                        <td>{new Date(row.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                        <td className="num">{(parseFloat(row.opening_balance) || 0).toLocaleString()}</td>
+                        <td className={`num ${(parseFloat(row.opening_variance) || 0) < 0 ? 'value-negative' : 'value-positive'}`}>
+                          {(parseFloat(row.opening_variance) || 0).toLocaleString()}
+                        </td>
+                        <td className="num">{(parseFloat(row.cash_sales) || 0).toLocaleString()}</td>
+                        <td className="num">{(parseFloat(row.book_sales) || 0).toLocaleString()}</td>
+                        <td className="num">{(parseFloat(row.card_sales || 0) + parseFloat(row.mobile_money_sales || 0)).toLocaleString()}</td>
+                        <td className="num">{(parseFloat(row.expenses_from_cash) || 0).toLocaleString()}</td>
+                        <td className="num">{(parseFloat(row.bank_deposits) || 0).toLocaleString()}</td>
+                        <td className="num">{(parseFloat(row.closing_balance) || 0).toLocaleString()}</td>
+                        <td>{reconciled ? <span className="text-muted">Reconciled</span> : <span>Pending</span>}</td>
+                        <td>
+                          <div className="range-actions-cell">
+                            {!summary.all_branches && (
+                              <button
+                                type="button"
+                                className="btn-small btn-secondary"
+                                onClick={() => handleRefreshCashChain(row.date)}
+                                disabled={!!chainRefreshingDate}
+                                title="Recalculate this day and all later unreconciled days"
+                              >
+                                {chainRefreshingDate === dk ? '…' : 'Recalc chain'}
+                              </button>
+                            )}
+                            {!summary.all_branches && !reconciled && (
+                              <button
+                                type="button"
+                                className="btn-small btn-success"
+                                onClick={() => handleReconcileUnreconciledDate(dk)}
+                                disabled={reconcilingDate === dk}
+                              >
+                                {reconcilingDate === dk ? '…' : 'Reconcile'}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="btn-small btn-link"
+                              onClick={() => setCashflowExpanded((prev) => ({ ...prev, [dk]: !prev[dk] }))}
+                            >
+                              {expanded ? 'Hide' : 'Details'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr className="cashflow-detail-row">
+                          <td colSpan={11}>
+                            <div className="cashflow-detail-inner">
+                              <p className="text-muted small" style={{ margin: '0 0 8px' }}>
+                                Bank deposit lines for this date (branch). Sum should match the &quot;Bank deposits&quot; column after recalculate.
+                              </p>
+                              {depLines.length === 0 ? (
+                                <p className="text-muted">No rows in <code>bank_deposits</code> for this date — add one below or fix the date/branch on an existing deposit.</p>
+                              ) : (
+                                <ul className="cashflow-deposit-lines">
+                                  {depLines.map((dep) => (
+                                    <li key={dep.id}>
+                                      <strong>TSh {parseFloat(dep.amount || 0).toLocaleString()}</strong>
+                                      {' · '}
+                                      {dep.bank_account_name || dep.bank_name || 'Bank'}
+                                      {dep.reference_number ? ` · Ref ${dep.reference_number}` : ''}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                              <button
+                                type="button"
+                                className="btn-link"
+                                onClick={() => document.getElementById('bank-deposits-section')?.scrollIntoView({ behavior: 'smooth' })}
+                              >
+                                Jump to Bank deposits (today)
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

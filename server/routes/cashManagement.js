@@ -319,6 +319,33 @@ router.post('/daily/recalculate/:date', requireBranchAccess(), requirePermission
   }
 });
 
+/**
+ * Recompute this date and every later unreconciled day (same as after a backdated expense).
+ * Use after bank deposits or corrections so opening/closing chain matches for following days.
+ */
+router.post('/daily/refresh-chain/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+  const { date } = req.params;
+  const branchId = getEffectiveBranchId(req);
+  if (branchId == null) {
+    return res.status(400).json({ error: 'Select a branch to refresh the cash chain' });
+  }
+  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+    return;
+  }
+  try {
+    const out = await refreshUnreconciledSummariesFromDate(branchId, String(date).trim().slice(0, 10));
+    res.json({
+      success: true,
+      days_refreshed: out.daysRefreshed ?? 0,
+      anchor: String(date).trim().slice(0, 10),
+      start_day_refresh: out.expenseDayRefresh
+    });
+  } catch (err) {
+    console.error('Error refreshing cash chain:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Record opening session cash declaration and compare with previous closing balance.
 router.post('/opening-session/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { date } = req.params;
@@ -356,8 +383,8 @@ router.post('/opening-session/:date', requireBranchAccess(), requirePermission('
         [date, branchId, expectedOpening, openingCash, openingVariance, req.user?.fullName || req.user?.username || 'Cashier', notes]
       );
     }
-    // Recompute today's rolling values using declared opening cash
-    await refreshUnreconciledDailySummary(date, branchId);
+    // Recompute this day and later unreconciled days so the next day’s expected opening tracks this closing
+    await refreshUnreconciledSummariesFromDate(branchId, date);
     const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
     res.json({
       ...row,
@@ -536,10 +563,19 @@ async function calculateRemaining(date, openingBalance, cashSales, bookSales, br
   const expensesFromBank = num(expensesRow[0]?.expenses_from_bank);
   const expensesFromMpesa = num(expensesRow[0]?.expenses_from_mpesa);
   
-  // Calculate bank deposits
-  const depositsRow = await db.get('SELECT COALESCE(SUM(amount), 0) as total FROM bank_deposits WHERE date = ? AND branch_id = ?', [date, branchId]);
-  
-  const bankDeposits = num(depositsRow?.total);
+  // Bank deposits: match calendar day; prefer explicit branch_id, then legacy NULL branch rows
+  let depositsRow = await db.get(
+    `SELECT COALESCE(SUM(amount), 0) as total FROM bank_deposits WHERE date::date = $1::date AND branch_id = $2`,
+    [date, branchId]
+  );
+  let bankDeposits = num(depositsRow?.total);
+  if (bankDeposits === 0) {
+    const legacyDep = await db.get(
+      `SELECT COALESCE(SUM(amount), 0) as total FROM bank_deposits WHERE date::date = $1::date AND branch_id IS NULL`,
+      [date]
+    );
+    bankDeposits = num(legacyDep?.total);
+  }
   
   const effectiveOpening = declaredOpeningCash != null ? num(declaredOpeningCash) : num(openingBalance);
   const openingVariance = effectiveOpening - openingBalance;

@@ -103,11 +103,11 @@ router.post('/', requireBranchAccess(), requirePermission('canManageCash'), asyn
       `SELECT d.*, b.name as bank_account_name FROM bank_deposits d LEFT JOIN bank_accounts b ON d.bank_account_id = b.id WHERE d.id = ?`,
       [newId]
     );
-    // Keep daily_cash_summaries.bank_deposits / closing in sync (same source as Pending reconciliations).
+    // Refresh this day and all later unreconciled days so closing → next opening chain stays correct.
     try {
-      await cashManagement.refreshUnreconciledDailySummary(String(date).trim().slice(0, 10), branchId);
+      await cashManagement.refreshUnreconciledSummariesFromDate(branchId, String(date).trim().slice(0, 10));
     } catch (refreshErr) {
-      console.error('refreshUnreconciledDailySummary after bank deposit:', refreshErr.message);
+      console.error('refreshUnreconciledSummariesFromDate after bank deposit:', refreshErr.message);
     }
     res.status(201).json(deposit || result.row);
   } catch (err) {
@@ -165,10 +165,10 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageCash'), as
     const oldDay = String(previous.date).trim().slice(0, 10);
     if (bid != null) {
       try {
-        await cashManagement.refreshUnreconciledDailySummary(newDay, bid);
-        if (oldDay !== newDay) await cashManagement.refreshUnreconciledDailySummary(oldDay, bid);
+        const anchor = oldDay <= newDay ? oldDay : newDay;
+        await cashManagement.refreshUnreconciledSummariesFromDate(bid, anchor);
       } catch (refreshErr) {
-        console.error('refreshUnreconciledDailySummary after bank deposit update:', refreshErr.message);
+        console.error('refreshUnreconciledSummariesFromDate after bank deposit update:', refreshErr.message);
       }
     }
     res.json(deposit);
@@ -208,9 +208,9 @@ router.delete('/:id', requireBranchAccess(), requirePermission('canManageCash'),
     const day = String(row.date).trim().slice(0, 10);
     if (bid != null) {
       try {
-        await cashManagement.refreshUnreconciledDailySummary(day, bid);
+        await cashManagement.refreshUnreconciledSummariesFromDate(bid, day);
       } catch (refreshErr) {
-        console.error('refreshUnreconciledDailySummary after bank deposit delete:', refreshErr.message);
+        console.error('refreshUnreconciledSummariesFromDate after bank deposit delete:', refreshErr.message);
       }
     }
     res.json({ message: 'Deposit deleted successfully' });

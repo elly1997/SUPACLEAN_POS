@@ -691,6 +691,32 @@
   background: var(--bg-tertiary);
 }
 
+.range-actions-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.cashflow-detail-row td {
+  vertical-align: top;
+  border-top: none;
+  padding-top: 0;
+}
+
+.cashflow-detail-inner {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+.cashflow-deposit-lines {
+  margin: 0 0 8px;
+  padding-left: 1.2rem;
+}
+
 .range-empty {
   color: var(--text-muted);
   font-size: 14px;
