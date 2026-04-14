@@ -15,21 +15,27 @@ const num = (v, fallback = 0) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+/**
+ * Expected cash opening for `date` = the prior calendar day's ending cash.
+ * For reconciled days, use reconciled_closing_balance (frozen at reconcile) so later
+ * recomputes of closing_balance cannot drift the chain or create false opening variance.
+ */
 async function getExpectedOpeningBalance(date, branchId) {
+  const day = String(date).trim().slice(0, 10);
   const row = await db.get(
-    `SELECT closing_balance
+    `SELECT COALESCE(reconciled_closing_balance, closing_balance) AS anchor_close
      FROM daily_cash_summaries
      WHERE date < ? AND branch_id = ?
      ORDER BY date DESC
      LIMIT 1`,
-    [date, branchId]
+    [day, branchId]
   );
-  return row ? num(row.closing_balance) : 0;
+  return row ? num(row.anchor_close) : 0;
 }
 
 async function upsertDailySummaryFromComputed(date, branchId, computed, notes = null, force = false) {
   const existing = await db.get(
-    'SELECT id, is_reconciled, notes FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
+    'SELECT id, is_reconciled, notes, reconciled_closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
     [date, branchId]
   );
 
@@ -57,6 +63,9 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
     closing_balance: num(computed.closing_balance)
   };
 
+  const nextReconciledSnap =
+    existing && existing.is_reconciled && force ? payload.closing_balance : existing?.reconciled_closing_balance ?? null;
+
   if (existing) {
     await db.run(
       `UPDATE daily_cash_summaries SET
@@ -76,6 +85,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
         expenses_from_mpesa = ?,
         cash_in_hand = ?,
         closing_balance = ?,
+        reconciled_closing_balance = ?,
         notes = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?`,
@@ -96,6 +106,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
         payload.expenses_from_mpesa,
         payload.cash_in_hand,
         payload.closing_balance,
+        nextReconciledSnap,
         notes != null ? notes : existing.notes || null,
         existing.id
       ]
@@ -782,11 +793,15 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
       return res.status(409).json({ error: 'This date is already reconciled and cannot be reconciled again.', row });
     }
     
+    const snapClosing = num(row.closing_balance);
     const result = await db.run(
       `UPDATE daily_cash_summaries 
-       SET is_reconciled = TRUE, reconciled_by = ?, reconciled_at = CURRENT_TIMESTAMP
+       SET is_reconciled = TRUE,
+           reconciled_by = ?,
+           reconciled_at = CURRENT_TIMESTAMP,
+           reconciled_closing_balance = ?
        WHERE date = ? AND branch_id = ?`,
-      [reconciled_by || 'Cashier', date, branchId]
+      [reconciled_by || 'Cashier', snapClosing, date, branchId]
     );
     
     if (result.changes === 0) {
@@ -955,7 +970,11 @@ router.post('/unreconcile/:date', requireBranchAccess(), requireRole('admin'), a
 
     await db.run(
       `UPDATE daily_cash_summaries
-       SET is_reconciled = FALSE, reconciled_by = NULL, reconciled_at = NULL, notes = ?
+       SET is_reconciled = FALSE,
+           reconciled_by = NULL,
+           reconciled_at = NULL,
+           reconciled_closing_balance = NULL,
+           notes = ?
        WHERE date = ? AND branch_id = ?`,
       [newNotes, date, branchId]
     );

@@ -769,8 +769,11 @@ const CashManagement = () => {
           </p>
           <div className="opening-session-grid">
             <div className="form-group">
-              <label>Expected opening (prev closing)</label>
+              <label>Expected opening (prior day&apos;s cash)</label>
               <input type="text" value={`TSh ${Number(summary.opening_balance || 0).toLocaleString()}`} disabled />
+              <small className="text-muted" style={{ display: 'block', marginTop: 6 }}>
+                Uses the previous calendar day&apos;s <strong>reconciled closing</strong> (frozen when that day was reconciled), so it does not drift if totals change later.
+              </small>
             </div>
             <div className="form-group">
               <label>Declared opening cash *</label>

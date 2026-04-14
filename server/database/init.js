@@ -606,6 +606,18 @@ function migrateDatabase() {
               }
             });
           }
+          if (!dcsColumnNames.includes('reconciled_closing_balance')) {
+            db.run("ALTER TABLE daily_cash_summaries ADD COLUMN reconciled_closing_balance REAL", (alterErr) => {
+              if (!alterErr) {
+                console.log('✅ Added reconciled_closing_balance to daily_cash_summaries');
+                db.run(
+                  `UPDATE daily_cash_summaries SET reconciled_closing_balance = closing_balance
+                   WHERE COALESCE(is_reconciled, 0) = 1 AND reconciled_closing_balance IS NULL`,
+                  () => {}
+                );
+              }
+            });
+          }
         }
       });
 

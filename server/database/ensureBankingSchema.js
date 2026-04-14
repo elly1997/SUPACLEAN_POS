@@ -33,6 +33,15 @@ async function ensure() {
     await db.run('ALTER TABLE daily_cash_summaries ADD COLUMN IF NOT EXISTS opening_variance NUMERIC(14,2) NOT NULL DEFAULT 0', []);
     await db.run('ALTER TABLE daily_cash_summaries ADD COLUMN IF NOT EXISTS opening_session_by TEXT', []);
     await db.run('ALTER TABLE daily_cash_summaries ADD COLUMN IF NOT EXISTS opening_session_at TIMESTAMP', []);
+    // Frozen at reconcile: next day’s “expected opening” must use this, not a later recomputed closing_balance
+    await db.run('ALTER TABLE daily_cash_summaries ADD COLUMN IF NOT EXISTS reconciled_closing_balance NUMERIC(14,2)', []);
+    await db.run(
+      `UPDATE daily_cash_summaries
+       SET reconciled_closing_balance = closing_balance
+       WHERE COALESCE(is_reconciled, FALSE) = TRUE
+         AND reconciled_closing_balance IS NULL`,
+      []
+    );
     console.log('✅ Banking schema (bank_accounts + expenses bank deposit) ready');
   } catch (err) {
     console.error('❌ Banking schema migration error:', err.message);
