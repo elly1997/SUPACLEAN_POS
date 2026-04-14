@@ -691,7 +691,8 @@ export async function getExpenses(params = {}) {
 export const getExpense = (id) => api.get(`/expenses/${id}`);
 export const createExpense = (data) => api.post('/expenses', data);
 export const updateExpense = (id, data) => api.put(`/expenses/${id}`, data);
-export const deleteExpense = (id) => api.delete(`/expenses/${id}`);
+export const deleteExpense = (id, body) =>
+  body != null ? api.delete(`/expenses/${id}`, { data: body }) : api.delete(`/expenses/${id}`);
 export const getExpenseCategories = () => api.get('/expenses/categories');
 export const createExpenseCategory = (data) => api.post('/expenses/categories', data);
 export async function getExpenseSummary(params = {}) {

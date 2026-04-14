@@ -825,8 +825,6 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
         const opening = parseFloat(row.opening_balance) || 0;
         const openingDeclared = row.opening_cash_declared != null ? parseFloat(row.opening_cash_declared) : opening;
         const openingVariance = parseFloat(row.opening_variance || 0);
-        const openingShortage = openingVariance < 0 ? Math.abs(openingVariance) : 0;
-        const openingOverage = openingVariance > 0 ? openingVariance : 0;
         const cashSales = parseFloat(row.cash_sales) || 0;
         const bookSales = parseFloat(row.book_sales) || 0;
         const cardSales = parseFloat(row.card_sales) || 0;
@@ -837,7 +835,6 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
         const expensesMpesa = parseFloat(row.expenses_from_mpesa) || 0;
         const totalExpenses = expensesCash + expensesBank + expensesMpesa;
         const bankDepositsDay = parseFloat(row.bank_deposits) || 0;
-        const closing = parseFloat(row.closing_balance) || 0;
         // Cash drawer: operating cash expenses + cash banked (deposits), not double-counted in totalExpenses.
         const cashOutDrawer = expensesCash + bankDepositsDay;
         const expectedCash = opening + cashSales + bookSales - cashOutDrawer;
@@ -852,7 +849,6 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
         const grossProfit = revenue - discounts - costOfGoods;
         const operatingExpenses = totalExpenses;
         const netProfit = grossProfit - operatingExpenses;
-        const adjustedNetProfit = netProfit - openingShortage;
 
         const fmt = (n) => Number(n).toLocaleString();
         const report = [
@@ -888,9 +884,9 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
           `• Cost of Goods: (TZS ${fmt(costOfGoods)})`,
           `• *Gross Profit: TZS ${fmt(grossProfit)}*`,
           `• Operating Expenses: (TZS ${fmt(operatingExpenses)})`,
-          `• Opening Shortage Loss: (TZS ${fmt(openingShortage)})`,
-          openingOverage > 0 ? `• Opening Overage: +TZS ${fmt(openingOverage)}` : null,
-          `*💰 NET PROFIT (Adjusted): TZS ${fmt(adjustedNetProfit)}*`,
+          `*💰 NET PROFIT: TZS ${fmt(netProfit)}*`,
+          '',
+          'ℹ️ Opening cash variance is for reconciliation only (not extra P&L). A short may be an unrecorded expense or deposit—book the expense on this date (Expenses → adjust reconciled day) or record deposits under Cash Management.',
           '',
           '💵 *CASH POSITION*',
           `Opening (Expected): TZS ${fmt(opening)}`,

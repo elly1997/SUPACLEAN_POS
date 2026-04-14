@@ -15,16 +15,40 @@ function normalizeExpenseDate(d) {
   return s.includes('T') ? s.split('T')[0] : s.slice(0, 10);
 }
 
+/** When true, allow create/update/void that touches a reconciled day and force-refresh that locked summary. */
+function wantsReconciledDayAcknowledgement(req) {
+  const v = req.body?.acknowledge_reconciled_day;
+  return v === true || v === 'true' || v === 1 || v === '1';
+}
+
+/**
+ * Recompute daily closing for affected dates: force-refresh any reconciled days in the set,
+ * then refresh the cash chain from the earliest date for all later unreconciled days.
+ */
 async function refreshDailyClosingForExpenseDates(branchId, ...dates) {
-  if (branchId == null) return;
-  const normalized = [...new Set(dates.map(normalizeExpenseDate).filter(Boolean))].sort();
-  if (!normalized.length) return;
-  const anchor = normalized[0];
-  try {
-    await cashManagement.refreshUnreconciledSummariesFromDate(branchId, anchor);
-  } catch (err) {
-    console.error('refreshUnreconciledSummariesFromDate failed:', anchor, err.message);
+  if (branchId == null) {
+    return { reconciledDaysForced: [], anchor: null, expenseDayRefresh: { skipped: true, reason: 'invalid' } };
   }
+  const normalized = [...new Set(dates.map(normalizeExpenseDate).filter(Boolean))].sort();
+  if (!normalized.length) {
+    return { reconciledDaysForced: [], anchor: null, expenseDayRefresh: { skipped: true, reason: 'invalid' } };
+  }
+  const anchor = normalized[0];
+  const reconciledDaysForced = [];
+  let expenseDayRefresh = { skipped: false };
+  try {
+    for (const d of normalized) {
+      if (await isReconciledDay(d, branchId)) {
+        await cashManagement.refreshDailySummaryForce(d, branchId);
+        reconciledDaysForced.push(d);
+      }
+    }
+    const out = await cashManagement.refreshUnreconciledSummariesFromDate(branchId, anchor);
+    expenseDayRefresh = out.expenseDayRefresh || expenseDayRefresh;
+  } catch (err) {
+    console.error('refreshDailyClosingForExpenseDates failed:', anchor, err.message);
+  }
+  return { reconciledDaysForced, anchor, expenseDayRefresh };
 }
 
 async function isReconciledDay(date, branchId) {
@@ -354,9 +378,11 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
   try {
     const bankDepositId = null;
 
-    if (await isReconciledDay(expenseDate, branchId)) {
+    if (await isReconciledDay(expenseDate, branchId) && !wantsReconciledDayAcknowledgement(req)) {
       return res.status(409).json({
-        error: 'This date is already reconciled. Record an adjustment on the current date or ask an administrator.'
+        error:
+          'This date is already reconciled. Tick “Adjust reconciled day” on the expense form to book on this date and refresh the locked daily summary, or choose another date.',
+        code: 'reconciled_day'
       });
     }
 
@@ -401,11 +427,15 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
     );
 
     await writeExpenseAudit('create', result.lastID, null, expense, req.body?.update_reason || null, req);
-    const { expenseDayRefresh: refresh } = await cashManagement.refreshUnreconciledSummariesFromDate(branchId, expenseDate);
+    const closingRefresh = await refreshDailyClosingForExpenseDates(branchId, expenseDate);
+    const refresh = closingRefresh.expenseDayRefresh || {};
+    const forced = closingRefresh.reconciledDaysForced || [];
+    const reconciledRefreshed = forced.includes(expenseDate);
     res.status(201).json({
       ...expense,
-      daily_closing_updated: !refresh.skipped,
-      daily_closing_locked: !!refresh.skipped && refresh.reason === 'reconciled'
+      daily_closing_updated: reconciledRefreshed || !refresh.skipped,
+      daily_closing_locked: !reconciledRefreshed && !!refresh.skipped && refresh.reason === 'reconciled',
+      reconciled_day_refreshed: reconciledRefreshed
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -442,9 +472,13 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
       return;
     }
     
-    if (await isReconciledDay(oldDate, branchId) || await isReconciledDay(newDate, branchId)) {
+    const oldReconciled = await isReconciledDay(oldDate, branchId);
+    const newReconciled = await isReconciledDay(newDate, branchId);
+    if ((oldReconciled || newReconciled) && !wantsReconciledDayAcknowledgement(req)) {
       return res.status(409).json({
-        error: 'This expense belongs to a reconciled day. Use adjustment entry or manager override process.'
+        error:
+          'This change affects a reconciled day. Tick “Adjust reconciled day” to save and refresh the locked daily summary.',
+        code: 'reconciled_day'
       });
     }
 
@@ -521,8 +555,11 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
     );
 
     await writeExpenseAudit('update', Number(id), existing, expense, req.body?.update_reason || null, req);
-    await refreshDailyClosingForExpenseDates(branchId, oldDate, newDate);
-    res.json(expense);
+    const closingRefresh = await refreshDailyClosingForExpenseDates(branchId, oldDate, newDate);
+    res.json({
+      ...expense,
+      reconciled_days_refreshed: closingRefresh.reconciledDaysForced || []
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -539,9 +576,11 @@ router.delete('/:id', requireBranchAccess(), requirePermission('canManageExpense
     }
     const delDate = normalizeExpenseDate(existing.date);
     const branchId = existing.branch_id != null ? existing.branch_id : (getEffectiveBranchId(req) ?? req.user?.branchId ?? null);
-    if (await isReconciledDay(delDate, branchId)) {
+    if (await isReconciledDay(delDate, branchId) && !wantsReconciledDayAcknowledgement(req)) {
       return res.status(409).json({
-        error: 'This expense belongs to a reconciled day. It cannot be voided without manager adjustment process.'
+        error:
+          'This expense is on a reconciled day. Confirm again to void and recalculate the locked daily summary (send acknowledge_reconciled_day).',
+        code: 'reconciled_day'
       });
     }
     const result = await db.run(
@@ -561,8 +600,11 @@ router.delete('/:id', requireBranchAccess(), requirePermission('canManageExpense
       await removeLinkedSalaryAdvance(Number(id));
     }
     await writeExpenseAudit('void', Number(id), existing, null, req.body?.void_reason || null, req);
-    await refreshDailyClosingForExpenseDates(branchId, delDate);
-    res.json({ message: 'Expense voided successfully' });
+    const closingRefresh = await refreshDailyClosingForExpenseDates(branchId, delDate);
+    res.json({
+      message: 'Expense voided successfully',
+      reconciled_days_refreshed: closingRefresh.reconciledDaysForced || []
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

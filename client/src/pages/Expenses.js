@@ -58,6 +58,7 @@ const Expenses = () => {
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [savingCategory, setSavingCategory] = useState(false);
+  const [acknowledgeReconciledDay, setAcknowledgeReconciledDay] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
 
   const loadCategories = useCallback(async () => {
@@ -175,11 +176,20 @@ const Expenses = () => {
     e.preventDefault();
     try {
       if (editingId) {
-        await updateExpense(editingId, formData);
-        showToast('Expense updated successfully', 'success');
+        const res = await updateExpense(editingId, {
+          ...formData,
+          acknowledge_reconciled_day: acknowledgeReconciledDay
+        });
+        const days = res?.data?.reconciled_days_refreshed;
+        if (Array.isArray(days) && days.length) {
+          showToast('Expense updated; reconciled daily summary was recalculated for the affected date(s).', 'success');
+        } else {
+          showToast('Expense updated successfully', 'success');
+        }
       } else {
         const res = await createExpense({
           ...formData,
+          acknowledge_reconciled_day: acknowledgeReconciledDay,
           created_by: 'Cashier',
           ...(formData.category === 'Bank Deposit' && {
             bank_account_id: formData.bank_account_id === 'other' ? '' : formData.bank_account_id,
@@ -191,7 +201,9 @@ const Expenses = () => {
           })
         });
         const data = res?.data;
-        if (data?.daily_closing_locked) {
+        if (data?.reconciled_day_refreshed) {
+          showToast('Expense recorded and reconciled daily summary was recalculated for that date.', 'success');
+        } else if (data?.daily_closing_locked) {
           showToast('Expense recorded. That day is already reconciled — daily closing was not changed automatically.', 'warning');
         } else {
           showToast('Expense added and daily closing updated for that date.', 'success');
@@ -207,6 +219,7 @@ const Expenses = () => {
   const handleEdit = (expense) => {
     const hasOtherBank = expense.category === 'Bank Deposit' && !expense.bank_account_id && (expense.deposit_bank_name || expense.bank_name);
     const expenseDateStr = expense.date != null ? String(expense.date).slice(0, 10) : filterDate;
+    setAcknowledgeReconciledDay(false);
     setEditingId(expense.id);
     setFormData({
       date: expenseDateStr,
@@ -224,15 +237,48 @@ const Expenses = () => {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this expense?')) {
+    if (!window.confirm('Are you sure you want to void this expense?')) {
       return;
     }
     try {
-      await deleteExpense(id);
-      showToast('Expense deleted successfully', 'success');
+      const res = await deleteExpense(id);
+      const days = res?.data?.reconciled_days_refreshed;
+      if (Array.isArray(days) && days.length) {
+        showToast('Expense voided; reconciled daily summary was recalculated for the affected date(s).', 'success');
+      } else {
+        showToast('Expense voided successfully', 'success');
+      }
       loadExpenses();
     } catch (error) {
-      showToast('Error deleting expense: ' + (error.response?.data?.error || error.message), 'error');
+      const status = error.response?.status;
+      const msg = error.response?.data?.error || error.message;
+      const code = error.response?.data?.code;
+      if (status === 409 && code === 'reconciled_day') {
+        if (
+          !window.confirm(
+            'This day is reconciled. Voiding will recalculate the locked daily summary and refresh later pending days. Continue?'
+          )
+        ) {
+          return;
+        }
+        try {
+          const res2 = await deleteExpense(id, {
+            void_reason: 'Voided by user',
+            acknowledge_reconciled_day: true
+          });
+          const days = res2?.data?.reconciled_days_refreshed;
+          if (Array.isArray(days) && days.length) {
+            showToast('Expense voided; reconciled daily summary was recalculated for the affected date(s).', 'success');
+          } else {
+            showToast('Expense voided successfully', 'success');
+          }
+          loadExpenses();
+        } catch (err2) {
+          showToast('Error voiding expense: ' + (err2.response?.data?.error || err2.message), 'error');
+        }
+        return;
+      }
+      showToast('Error deleting expense: ' + msg, 'error');
     }
   };
 
@@ -249,6 +295,7 @@ const Expenses = () => {
       bank_name: '',
       employee_id: ''
     });
+    setAcknowledgeReconciledDay(false);
     setEditingId(null);
     setShowForm(false);
   };
@@ -271,6 +318,7 @@ const Expenses = () => {
       bank_name: '',
       employee_id: ''
     });
+    setAcknowledgeReconciledDay(false);
     setShowForm(true);
   };
 
@@ -535,6 +583,19 @@ const Expenses = () => {
                   onChange={(e) => setFormData({ ...formData, receipt_number: e.target.value })}
                   placeholder="Optional"
                 />
+              </div>
+              <div className="form-group full-width" style={{ marginTop: '4px' }}>
+                <label className="expense-reconciled-ack" style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontWeight: 'normal', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={acknowledgeReconciledDay}
+                    onChange={(e) => setAcknowledgeReconciledDay(e.target.checked)}
+                    style={{ marginTop: '3px' }}
+                  />
+                  <span>
+                    <strong>Adjust reconciled day</strong> — allow this entry to update a day that is already reconciled. The locked daily summary for that date is recalculated and later pending days are refreshed.
+                  </span>
+                </label>
               </div>
             </div>
             <div className="form-actions">
