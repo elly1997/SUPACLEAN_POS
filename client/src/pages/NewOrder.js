@@ -751,31 +751,37 @@ const NewOrder = () => {
       }
 
       if (receipts.length > 0) {
+        const receiptNumberForSms = receipts[0].order.receipt_number;
+        // Receipt SMS is built on the server from the receipt number — do not tie it to print success.
+        const queueReceiptSms = () => {
+          sendReceiptSms(receiptNumberForSms).catch((err) => {
+            const msg = err?.response?.data?.error || err?.message || 'SMS failed';
+            console.warn('Receipt SMS not sent:', msg);
+            showToast(`Order saved. SMS notification could not be sent: ${msg}`, 'warning');
+          });
+        };
         // Always use consolidated receipt format for consistency (single or multiple items)
         try {
           const combinedReceipt = await combineReceipts(receipts, selectedCustomer, payableTotal, orderData, discountAmount);
           
           if (!combinedReceipt || !combinedReceipt.text || String(combinedReceipt.text).trim().length === 0) {
             console.error('Receipt text is empty:', combinedReceipt);
-            showToast(`Order created! Receipt: ${receipts[0].order.receipt_number}. Receipt content is empty - please print from Orders page.`, 'warning');
+            showToast(`Order created! Receipt: ${receiptNumberForSms}. Receipt content is empty - please print from Orders page.`, 'warning');
+            queueReceiptSms();
           } else {
             console.log('Printing receipt, length:', combinedReceipt.text.length);
             const receiptPayload = combinedReceipt.items
               ? { headerText: combinedReceipt.headerText, items: combinedReceipt.items, footerText: combinedReceipt.footerText, brandTitle: combinedReceipt.brandTitle || null }
               : combinedReceipt.text;
             await printReceipt(receiptPayload);
-            showToast(`Order created! Receipt: ${receipts[0].order.receipt_number}`, 'success');
+            showToast(`Order created! Receipt: ${receiptNumberForSms}`, 'success');
             playSuccessSound();
-            // Send SMS after creating order and printing receipt (customer name, ID, items, amount, status)
-            sendReceiptSms(receipts[0].order.receipt_number).catch((err) => {
-              const msg = err?.response?.data?.error || err?.message || 'SMS failed';
-              console.warn('Receipt SMS not sent:', msg);
-              showToast(`Order saved. SMS notification could not be sent: ${msg}`, 'warning');
-            });
+            queueReceiptSms();
           }
         } catch (printError) {
           console.error('Error printing receipt:', printError);
-          showToast(`Order created! Receipt: ${receipts[0].order.receipt_number}. Use Print button in Orders page if receipt didn't print.`, 'warning');
+          showToast(`Order created! Receipt: ${receiptNumberForSms}. Use Print button in Orders page if receipt didn't print.`, 'warning');
+          queueReceiptSms();
         }
       } else {
         showToast('Order creation completed but no receipts were generated.', 'warning');

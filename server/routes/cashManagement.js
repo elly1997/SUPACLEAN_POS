@@ -5,7 +5,7 @@ const { authenticate, requireBranchAccess, requireBranchFeature, requireRole } =
 const { requirePermission } = require('../middleware/permissions');
 const { getEffectiveBranchId } = require('../utils/branchFilter');
 const { sqlOperatingExpensesOnly } = require('../utils/operatingExpenses');
-const { getBusinessTodayYmd, assertNotFutureBusinessDate } = require('../utils/businessDate');
+const { getBusinessTodayYmd, assertNotFutureBusinessDate, toSqlDateString } = require('../utils/businessDate');
 
 // All cash-management routes require branch feature 'cash_management' (admin bypasses)
 router.use(authenticate, requireBranchFeature('cash_management'));
@@ -21,7 +21,8 @@ const num = (v, fallback = 0) => {
  * recomputes of closing_balance cannot drift the chain or create false opening variance.
  */
 async function getExpectedOpeningBalance(date, branchId) {
-  const day = String(date).trim().slice(0, 10);
+  const day = toSqlDateString(date);
+  if (!day) return 0;
   const row = await db.get(
     `SELECT COALESCE(reconciled_closing_balance, closing_balance) AS anchor_close
      FROM daily_cash_summaries
@@ -34,9 +35,13 @@ async function getExpectedOpeningBalance(date, branchId) {
 }
 
 async function upsertDailySummaryFromComputed(date, branchId, computed, notes = null, force = false) {
+  const day = toSqlDateString(date);
+  if (!day) {
+    throw new Error('Invalid date for daily cash summary');
+  }
   const existing = await db.get(
     'SELECT id, is_reconciled, notes, reconciled_closing_balance FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
-    [date, branchId]
+    [day, branchId]
   );
 
   // Never overwrite reconciled rows automatically unless force=true (payment backdate correction).
@@ -122,7 +127,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
       cash_in_hand, closing_balance, notes, is_reconciled
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
     [
-      date,
+      day,
       branchId,
       payload.opening_balance,
       payload.opening_cash_declared,
@@ -144,7 +149,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
     ]
   );
 
-  return db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+  return db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [day, branchId]);
 }
 
 /**
@@ -152,10 +157,14 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
  * Used when the day has no row yet, or exists but is not reconciled (so expenses/backfills update totals).
  */
 async function computeAndPersistDailySummary(date, branchId, force = false) {
-  const openingBalance = await getExpectedOpeningBalance(date, branchId);
+  const day = toSqlDateString(date);
+  if (!day) {
+    throw new Error('Invalid date for daily cash summary');
+  }
+  const openingBalance = await getExpectedOpeningBalance(day, branchId);
   const existingRow = await db.get(
     'SELECT opening_cash_declared FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
-    [date, branchId]
+    [day, branchId]
   );
 
   const cashSalesRow = await db.all(`
@@ -166,26 +175,26 @@ async function computeAndPersistDailySummary(date, branchId, force = false) {
     AND payment_method = 'cash'
     AND paid_amount > 0
     AND branch_id = ?
-  `, [date, branchId]);
+  `, [day, branchId]);
   const cashSales = num(cashSalesRow[0]?.cash_sales);
 
   const { calculateBookSales } = require('../utils/cashValidation');
   let bookSales = 0;
   try {
-    bookSales = await calculateBookSales(date, branchId);
+    bookSales = await calculateBookSales(day, branchId);
   } catch (err) {
     console.error('Error calculating book sales for daily summary:', err);
   }
 
   const calculated = await calculateRemaining(
-    date,
+    day,
     openingBalance,
     cashSales,
     bookSales,
     branchId,
     existingRow?.opening_cash_declared
   );
-  return upsertDailySummaryFromComputed(date, branchId, calculated, null, force);
+  return upsertDailySummaryFromComputed(day, branchId, calculated, null, force);
 }
 
 /**
@@ -194,11 +203,15 @@ async function computeAndPersistDailySummary(date, branchId, force = false) {
  * @returns {Promise<{ skipped: boolean, reason?: string, row?: object }>}
  */
 async function refreshUnreconciledDailySummary(date, branchId) {
-  const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+  const day = toSqlDateString(date);
+  if (!day) {
+    return { skipped: true, reason: 'invalid_date', row: null };
+  }
+  const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [day, branchId]);
   if (row && row.is_reconciled) {
     return { skipped: true, reason: 'reconciled', row };
   }
-  const persisted = await computeAndPersistDailySummary(date, branchId);
+  const persisted = await computeAndPersistDailySummary(day, branchId);
   return { skipped: false, row: persisted };
 }
 
@@ -207,7 +220,11 @@ async function refreshUnreconciledDailySummary(date, branchId) {
  * This keeps selected paid date totals/book-sales/closing in sync with transactions.
  */
 async function refreshDailySummaryForce(date, branchId) {
-  const persisted = await computeAndPersistDailySummary(date, branchId, true);
+  const day = toSqlDateString(date);
+  if (!day) {
+    throw new Error('Invalid date for daily cash summary');
+  }
+  const persisted = await computeAndPersistDailySummary(day, branchId, true);
   return { forced: true, row: persisted };
 }
 
@@ -216,8 +233,8 @@ async function refreshDailySummaryForce(date, branchId) {
  * later unreconciled day so opening/closing chains stay correct on Pending reconciliations.
  */
 async function refreshUnreconciledSummariesFromDate(branchId, startDate) {
-  const day = String(startDate || '').trim().slice(0, 10);
-  if (branchId == null || !day || day.length < 10) {
+  const day = toSqlDateString(startDate);
+  if (branchId == null || !day) {
     return { expenseDayRefresh: { skipped: true, reason: 'invalid' }, daysRefreshed: 0 };
   }
   const rowDates = await db.all(
@@ -228,7 +245,7 @@ async function refreshUnreconciledSummariesFromDate(branchId, startDate) {
   );
   const unique = new Set([day]);
   for (const r of rowDates || []) {
-    if (r?.d) unique.add(String(r.d).slice(0, 10));
+    if (r?.d) unique.add(toSqlDateString(r.d) || String(r.d).trim().slice(0, 10));
   }
   const sorted = [...unique].sort();
   let expenseDayRefresh = null;
@@ -286,13 +303,14 @@ router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCa
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to view cash management' });
   }
-  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+  const ymd = toSqlDateString(date);
+  if (!ymd || !assertNotFutureBusinessDate(ymd, res, 'date')) {
     return;
   }
   try {
-    const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
     const force = !!(row && row.is_reconciled);
-    const persisted = await computeAndPersistDailySummary(date, branchId, force);
+    const persisted = await computeAndPersistDailySummary(ymd, branchId, force);
     return res.json(persisted);
   } catch (err) {
     console.error('Error fetching daily cash summary:', err);
@@ -307,16 +325,17 @@ router.post('/daily/recalculate/:date', requireBranchAccess(), requirePermission
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to recalculate daily closing' });
   }
-  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+  const ymd = toSqlDateString(date);
+  if (!ymd || !assertNotFutureBusinessDate(ymd, res, 'date')) {
     return;
   }
   const force = req.body?.force === true || req.query?.force === '1' || req.query?.force === 'true';
   try {
     if (force) {
-      const out = await refreshDailySummaryForce(date, branchId);
+      const out = await refreshDailySummaryForce(ymd, branchId);
       return res.json(out.row);
     }
-    const result = await refreshUnreconciledDailySummary(date, branchId);
+    const result = await refreshUnreconciledDailySummary(ymd, branchId);
     if (result.skipped) {
       return res.status(409).json({
         error: 'This date is already reconciled. Use “Refresh totals” in Cash Management (or send force: true) to reload sales figures from live data without unlocking the day.',
@@ -340,15 +359,16 @@ router.post('/daily/refresh-chain/:date', requireBranchAccess(), requirePermissi
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to refresh the cash chain' });
   }
-  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+  const ymd = toSqlDateString(date);
+  if (!ymd || !assertNotFutureBusinessDate(ymd, res, 'date')) {
     return;
   }
   try {
-    const out = await refreshUnreconciledSummariesFromDate(branchId, String(date).trim().slice(0, 10));
+    const out = await refreshUnreconciledSummariesFromDate(branchId, ymd);
     res.json({
       success: true,
       days_refreshed: out.daysRefreshed ?? 0,
-      anchor: String(date).trim().slice(0, 10),
+      anchor: ymd,
       start_day_refresh: out.expenseDayRefresh
     });
   } catch (err) {
@@ -366,18 +386,19 @@ router.post('/opening-session/:date', requireBranchAccess(), requirePermission('
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to start opening session' });
   }
-  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+  const ymd = toSqlDateString(date);
+  if (!ymd || !assertNotFutureBusinessDate(ymd, res, 'date')) {
     return;
   }
   if (!Number.isFinite(openingCash) || openingCash < 0) {
     return res.status(400).json({ error: 'opening_cash must be a valid non-negative number' });
   }
   try {
-    const existing = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    const existing = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
     if (existing?.is_reconciled) {
       return res.status(409).json({ error: 'This day is already reconciled and cannot be changed.' });
     }
-    const expectedOpening = await getExpectedOpeningBalance(date, branchId);
+    const expectedOpening = await getExpectedOpeningBalance(ymd, branchId);
     const openingVariance = openingCash - expectedOpening;
 
     if (existing) {
@@ -391,12 +412,12 @@ router.post('/opening-session/:date', requireBranchAccess(), requirePermission('
       await db.run(
         `INSERT INTO daily_cash_summaries (date, branch_id, opening_balance, opening_cash_declared, opening_variance, opening_session_by, opening_session_at, notes, is_reconciled)
          VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, FALSE)`,
-        [date, branchId, expectedOpening, openingCash, openingVariance, req.user?.fullName || req.user?.username || 'Cashier', notes]
+        [ymd, branchId, expectedOpening, openingCash, openingVariance, req.user?.fullName || req.user?.username || 'Cashier', notes]
       );
     }
     // Recompute this day and later unreconciled days so the next day’s expected opening tracks this closing
-    await refreshUnreconciledSummariesFromDate(branchId, date);
-    const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    await refreshUnreconciledSummariesFromDate(branchId, ymd);
+    const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
     res.json({
       ...row,
       opening_balanced: Math.abs(parseFloat(row.opening_variance || 0)) < 0.01,
@@ -634,8 +655,8 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to save cash summary' });
   }
-  const today = date || new Date().toISOString().split('T')[0];
-  if (!assertNotFutureBusinessDate(String(today).trim().slice(0, 10), res, 'date')) {
+  const today = toSqlDateString(date) || toSqlDateString(new Date().toISOString().split('T')[0]);
+  if (!today || !assertNotFutureBusinessDate(today, res, 'date')) {
     return;
   }
   
@@ -781,13 +802,14 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
   if (branchId == null) {
     return res.status(400).json({ error: 'Select a branch to reconcile' });
   }
-  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+  const ymd = toSqlDateString(date);
+  if (!ymd || !assertNotFutureBusinessDate(ymd, res, 'date')) {
     return;
   }
   try {
     // Always refresh from source data right before locking to ensure closing balance is correct.
-    const refresh = await refreshUnreconciledDailySummary(date, branchId);
-    let row = refresh.row || await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    const refresh = await refreshUnreconciledDailySummary(ymd, branchId);
+    let row = refresh.row || await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
     if (!row) return res.status(404).json({ error: 'Daily summary not found' });
     if (refresh.skipped) {
       return res.status(409).json({ error: 'This date is already reconciled and cannot be reconciled again.', row });
@@ -801,14 +823,14 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
            reconciled_at = CURRENT_TIMESTAMP,
            reconciled_closing_balance = ?
        WHERE date = ? AND branch_id = ?`,
-      [reconciled_by || 'Cashier', snapClosing, date, branchId]
+      [reconciled_by || 'Cashier', snapClosing, ymd, branchId]
     );
     
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Daily summary not found' });
     }
 
-    row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
     const branchRow = await db.get('SELECT name FROM branches WHERE id = ?', [branchId]);
     const branchName = branchRow?.name || `Branch ${branchId}`;
 
@@ -839,7 +861,7 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
         const cashOutDrawer = expensesCash + bankDepositsDay;
         const expectedCash = opening + cashSales + bookSales - cashOutDrawer;
         const actualCash = openingDeclared + cashSales + bookSales - cashOutDrawer;
-        const dateFormatted = new Date(date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+        const dateFormatted = new Date(`${ymd}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
         const cashierName = reconciled_by || 'Cashier';
 
         // P&L: Revenue = total sales; discounts/COGS from schema if available, else 0
@@ -946,8 +968,13 @@ router.post('/unreconcile/:date', requireBranchAccess(), requireRole('admin'), a
     return res.status(400).json({ error: 'Select a branch in the header or pass branch_id in the request body.' });
   }
 
+  const ymd = toSqlDateString(date);
+  if (!ymd) {
+    return res.status(400).json({ error: 'Invalid date' });
+  }
+
   try {
-    const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
     if (!row) {
       return res.status(404).json({ error: 'No daily cash summary for this date and branch.' });
     }
@@ -972,11 +999,11 @@ router.post('/unreconcile/:date', requireBranchAccess(), requireRole('admin'), a
            reconciled_closing_balance = NULL,
            notes = ?
        WHERE date = ? AND branch_id = ?`,
-      [newNotes, date, branchId]
+      [newNotes, ymd, branchId]
     );
 
-    const chain = await refreshUnreconciledSummariesFromDate(branchId, date);
-    const updated = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [date, branchId]);
+    const chain = await refreshUnreconciledSummariesFromDate(branchId, ymd);
+    const updated = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
 
     res.json({
       success: true,

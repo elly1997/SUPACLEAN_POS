@@ -399,6 +399,17 @@ async function sendInvoiceReminder(invoice, customer, channels = ['sms', 'whatsa
 }
 
 /**
+ * True when SMS was handed to a carrier (Twilio / Africa's Talking) successfully.
+ * sendSMS() returns success: true for "logged only" dev mode (no API key) without provider set —
+ * those must not count as delivered or WhatsApp fallback is skipped and clients see false positives.
+ */
+function smsWasSentByCarrier(smsResult) {
+  if (!smsResult || !smsResult.success || smsResult.skippedDuplicate) return false;
+  const p = smsResult.provider;
+  return p === 'twilio' || p === 'africas_talking';
+}
+
+/**
  * Try SMS first; if SMS fails, send via WhatsApp. If SMS succeeds, WhatsApp is not sent.
  * Default behavior for receipt and other single-message notifications.
  *
@@ -412,7 +423,7 @@ async function sendSmsWithWhatsAppFallback(phone, message, options = {}) {
   if (smsResult && smsResult.skippedDuplicate) {
     return { ...smsResult, channel: null };
   }
-  if (smsResult && smsResult.success) {
+  if (smsWasSentByCarrier(smsResult)) {
     return { ...smsResult, channel: 'sms' };
   }
   const waResult = await sendWhatsApp(phone, message, options);

@@ -1,7 +1,8 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const db = require('../database/query');
-const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
+const { authenticate, requireBranchAccess, requireBranchFeature, requireRole } = require('../middleware/auth');
 const { sendSMS } = require('../utils/sms');
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
@@ -213,6 +214,48 @@ function buildBulkRecipientList(rows, respectSmsOptOut) {
   return { recipients, skippedNoPhone, skippedOptOut, skippedDuplicate };
 }
 
+function bulkSmsMessageSha256(message) {
+  if (typeof message !== 'string' || !message.length) return '';
+  return crypto.createHash('sha256').update(message, 'utf8').digest('hex');
+}
+
+/** Best-effort audit row; never throws to the client. */
+async function persistBulkSmsAudit(req, payload) {
+  const u = req.user;
+  if (!u) return;
+  const message = payload.message;
+  const msgLen = typeof message === 'string' ? message.length : 0;
+  const hash = bulkSmsMessageSha256(typeof message === 'string' ? message : '');
+  try {
+    const effectiveBranchId = getEffectiveBranchId(req);
+    await db.run(
+      `INSERT INTO bulk_sms_audit_log (
+        user_id, username, full_name, role, effective_branch_id,
+        respect_sms_opt_out, dry_run, message_length, message_sha256,
+        recipients_targeted, sent, failed, truncated_to_max, error_message
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        u.id,
+        String(u.username || ''),
+        u.fullName != null ? String(u.fullName) : null,
+        String(u.role || ''),
+        effectiveBranchId != null ? effectiveBranchId : null,
+        !!payload.respectSmsOptOut,
+        !!payload.dryRun,
+        msgLen,
+        hash || 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        Math.max(0, parseInt(payload.recipientsTargeted, 10) || 0),
+        Math.max(0, parseInt(payload.sent, 10) || 0),
+        Math.max(0, parseInt(payload.failed, 10) || 0),
+        !!payload.truncatedToMax,
+        payload.errorMessage ? String(payload.errorMessage).slice(0, 500) : null
+      ]
+    );
+  } catch (e) {
+    console.error('bulk_sms_audit_log insert failed:', e.message);
+  }
+}
+
 // Preview counts for bulk SMS (holiday / announcements)
 router.get(
   '/bulk-sms-preview',
@@ -267,6 +310,15 @@ router.post(
       }
 
       if (dryRun) {
+        await persistBulkSmsAudit(req, {
+          message,
+          respectSmsOptOut: respectSmsOptOut,
+          dryRun: true,
+          recipientsTargeted: recipients.length,
+          sent: 0,
+          failed: 0,
+          truncatedToMax: truncatedToMax
+        });
         return res.json({
           dry_run: true,
           would_send: recipients.length,
@@ -307,6 +359,16 @@ router.post(
         }
       }
 
+      await persistBulkSmsAudit(req, {
+        message,
+        respectSmsOptOut: respectSmsOptOut,
+        dryRun: false,
+        recipientsTargeted: recipients.length,
+        sent,
+        failed,
+        truncatedToMax: truncatedToMax
+      });
+
       res.json({
         sent,
         failed,
@@ -319,6 +381,34 @@ router.post(
       });
     } catch (err) {
       console.error('bulk-sms:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// Admin: recent bulk SMS audit (who / when / fingerprint / counts). Must stay above GET /:id.
+router.get(
+  '/bulk-sms-audit',
+  requireRole('admin'),
+  async (req, res) => {
+    const limitRaw = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(100, Math.max(1, limitRaw)) : 50;
+    try {
+      const rows = await db.all(
+        `SELECT id, created_at, user_id, username, full_name, role, effective_branch_id,
+                respect_sms_opt_out, dry_run, message_length, message_sha256,
+                recipients_targeted, sent, failed, truncated_to_max, error_message
+         FROM bulk_sms_audit_log
+         ORDER BY created_at DESC
+         LIMIT ?`,
+        [limit]
+      );
+      res.json(rows || []);
+    } catch (err) {
+      if (String(err.message || '').includes('does not exist') || /relation.*bulk_sms_audit/i.test(String(err.message))) {
+        return res.json([]);
+      }
+      console.error('bulk-sms-audit:', err);
       res.status(500).json({ error: err.message });
     }
   }

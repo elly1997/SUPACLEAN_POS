@@ -64,10 +64,44 @@ function assertNotFutureBusinessDate(input, res, fieldName = 'date') {
   return true;
 }
 
+/**
+ * Coerce API/DB values to YYYY-MM-DD for PostgreSQL `date` parameters.
+ * Never use String(date).slice(0, 10) on a JavaScript Date — it yields "Thu Apr 16".
+ *
+ * @param {string|Date|number|null|undefined} input
+ * @returns {string|null}
+ */
+function toSqlDateString(input) {
+  if (input == null || input === '') return null;
+  if (typeof input === 'string') {
+    const t = input.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+    if (/^\d{4}-\d{2}-\d{2}[T\s]/.test(t)) return t.slice(0, 10);
+    const d = new Date(t);
+    if (!Number.isNaN(d.getTime())) {
+      return getBusinessYmdForInstant(d) || d.toISOString().slice(0, 10);
+    }
+    return null;
+  }
+  if (input instanceof Date) {
+    if (Number.isNaN(input.getTime())) return null;
+    return getBusinessYmdForInstant(input) || input.toISOString().slice(0, 10);
+  }
+  if (typeof input === 'number' && Number.isFinite(input)) {
+    const d = new Date(input);
+    if (Number.isNaN(d.getTime())) return null;
+    return getBusinessYmdForInstant(d) || d.toISOString().slice(0, 10);
+  }
+  const s = String(input);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return null;
+}
+
 module.exports = {
   DEFAULT_TZ,
   getBusinessTodayYmd,
   getBusinessYmdForInstant,
   assertNotFutureBusinessDate,
-  allowFutureDates
+  allowFutureDates,
+  toSqlDateString
 };
