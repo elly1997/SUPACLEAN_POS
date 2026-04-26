@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
+import './styles/designKitPage.css';
 import App from './App';
 
 // Ignore errors from browser extensions (e.g. MetaMask) so they don't break the app UI

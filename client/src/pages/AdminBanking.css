@@ -4,24 +4,7 @@
   margin: 0 auto;
 }
 
-.banking-header {
-  margin-bottom: 24px;
-  padding: 24px;
-  background: var(--bg-secondary);
-  border-radius: 12px;
-  border: 1px solid var(--border-color);
-}
-
-.banking-header h1 {
-  font-size: 28px;
-  margin-bottom: 8px;
-  color: var(--text-primary);
-}
-
-.banking-header p {
-  font-size: 14px;
-  color: var(--text-secondary);
-}
+/* .banking-header: designKitPage.css */
 
 .banking-actions {
   margin-bottom: 20px;

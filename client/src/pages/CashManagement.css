@@ -31,37 +31,7 @@
   color: var(--text-secondary);
 }
 
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-  padding: 20px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  border: 0.5px solid var(--border-color);
-}
-
-[data-theme="dark"] .page-header {
-  background: rgba(28, 28, 30, 0.7);
-}
-
-.page-header h1 {
-  font-size: 28px;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.subtitle {
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.header-actions {
-  display: flex;
-  gap: 12px;
-}
+/* Page header: designKitPage.css (.page-header-modern) */
 
 .btn-success {
   background: var(--success-color);
@@ -903,13 +873,13 @@
     grid-template-columns: 1fr;
   }
 
-  .page-header {
+  .page-header.page-header-modern {
     flex-direction: column;
     align-items: flex-start;
     gap: 16px;
   }
 
-  .header-actions {
+  .page-header.page-header-modern .header-actions {
     width: 100%;
   }
 

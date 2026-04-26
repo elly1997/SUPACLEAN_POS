@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { getOrders, updateOrderStatus, getCollectionQueue, getOrderDashboardStats, getTodayCashSummary, getCashSummaryRange } from '../api/api';
 import { useToast } from '../hooks/useToast';
@@ -12,7 +12,7 @@ import './Dashboard.css';
 const Dashboard = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
-  const { selectedBranchId, user, hasPermission } = useAuth();
+  const { selectedBranchId, user, hasPermission, branch } = useAuth();
   const isCashier = user?.role === 'cashier';
   const canManageCash = hasPermission?.('canManageCash') ?? false;
   const [listView, setListView] = useListViewPreference();
@@ -29,6 +29,35 @@ const Dashboard = () => {
   const [readySearchInput, setReadySearchInput] = useState('');
   const [pendingSearchInput, setPendingSearchInput] = useState('');
   const today = new Date().toISOString().split('T')[0];
+
+  const todayIncome = useMemo(
+    () =>
+      Number(summary?.cash_sales || 0) +
+      Number(summary?.book_sales || 0) +
+      Number(summary?.card_sales || 0) +
+      Number(summary?.mobile_money_sales || 0),
+    [summary]
+  );
+  const cashBookPortion = useMemo(
+    () => Number(summary?.cash_sales || 0) + Number(summary?.book_sales || 0),
+    [summary]
+  );
+  const overdueCount = useMemo(() => readyQueue.filter((r) => r.is_overdue).length, [readyQueue]);
+  const openBalancesTotal = useMemo(
+    () =>
+      readyQueue.reduce((sum, r) => {
+        const b = (Number(r.total_amount) || 0) - (Number(r.paid_amount) || 0);
+        return sum + (b > 0 ? b : 0);
+      }, 0),
+    [readyQueue]
+  );
+  const subtitleDate = new Date().toLocaleDateString('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+  const branchLine = branch?.name || '';
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -166,83 +195,106 @@ const Dashboard = () => {
         <div>
           <h1>Dashboard</h1>
           <p className="subtitle">
-            {isCashier ? "Quick access: new orders & collection" : "Today's overview"} — {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            {isCashier ? 'Quick access: new orders & collection' : "Today's overview"}
+            {branchLine ? ` · ${subtitleDate} · ${branchLine}` : ` · ${subtitleDate}`}
           </p>
         </div>
         <div className="header-actions">
           <button
             type="button"
-            className="btn-secondary btn-large"
+            className="dk-btn dk-btn--secondary dk-btn--md"
+            onClick={viewInReports}
+          >
+            📈 Reports
+          </button>
+          <button
+            type="button"
+            className="dk-btn dk-btn--secondary dk-btn--md"
             onClick={() => navigate('/collection')}
           >
             Go to Collection
           </button>
           <button
             type="button"
-            className="btn-primary btn-large"
+            className="dk-btn dk-btn--primary dk-btn--md"
             onClick={() => handleQuickAction('new-order')}
           >
-            New Order
+            ➕ New Order
           </button>
         </div>
       </div>
 
       {canManageCash && (
-        <div className="dashboard-manager-cta">
-          <span className="dashboard-manager-label">Reconcile & daily totals</span>
-          <button type="button" className="btn-secondary btn-large" onClick={() => navigate('/cash-management')}>
+        <div className="dk-manager-strip">
+          <span className="dk-manager-strip__label">Reconcile & daily totals</span>
+          <button type="button" className="dk-btn dk-btn--secondary dk-btn--md" onClick={() => navigate('/cash-management')}>
             Cash Management
           </button>
         </div>
       )}
 
-      <div className="stats-grid-modern">
-        <div className="stat-card-modern income">
-          <div className="stat-icon">💰</div>
-          <div className="stat-content">
-            <h3>Today's Income</h3>
-            <p className="stat-value">
-              TSh {(
-                Number(summary?.cash_sales || 0) +
-                Number(summary?.book_sales || 0) +
-                Number(summary?.card_sales || 0) +
-                Number(summary?.mobile_money_sales || 0)
-              ).toLocaleString()}
-            </p>
-            <small>
-              Cash: TSh {(
-                Number(summary?.cash_sales || 0) +
-                Number(summary?.book_sales || 0)
-              ).toLocaleString()} | MTD: TSh {Number(monthIncome || 0).toLocaleString()}
-            </small>
+      <div className="dk-stat-strip" role="region" aria-label="Dashboard summary">
+        <div className="dk-stat-cell">
+          <div className="dk-stat-cell__row">
+            <span className="dk-stat-cell__dot dk-accent-success" aria-hidden />
+            <span className="dk-stat-cell__label">Income today</span>
           </div>
+          <div className="dk-stat-cell__value-row">
+            <span className="dk-stat-cell__value">TSh {todayIncome.toLocaleString()}</span>
+          </div>
+          <span className="dk-stat-cell__sub">
+            Cash+book TSh {cashBookPortion.toLocaleString()} · MTD TSh {Number(monthIncome || 0).toLocaleString()}
+          </span>
         </div>
-
-        <div className="stat-card-modern orders">
-          <div className="stat-icon">📋</div>
-          <div className="stat-content">
-            <h3>Total Orders</h3>
-            <p className="stat-value">{orderStats?.total_receipts ?? 0}</p>
-            <small>Receipt-based (all statuses)</small>
+        <div className="dk-stat-cell">
+          <div className="dk-stat-cell__row">
+            <span className="dk-stat-cell__dot dk-accent-info" aria-hidden />
+            <span className="dk-stat-cell__label">Total orders</span>
           </div>
+          <div className="dk-stat-cell__value-row">
+            <span className="dk-stat-cell__value">{(orderStats?.total_receipts ?? 0).toLocaleString()}</span>
+          </div>
+          <span className="dk-stat-cell__sub">Receipts (all statuses)</span>
         </div>
-
-        <div className="stat-card-modern pending">
-          <div className="stat-icon">⏳</div>
-          <div className="stat-content">
-            <h3>Pending</h3>
-            <p className="stat-value">{orderStats?.pending_receipts ?? groupedPending.length}</p>
-            <small>Receipts in progress</small>
+        <div className="dk-stat-cell">
+          <div className="dk-stat-cell__row">
+            <span className="dk-stat-cell__dot dk-accent-warning" aria-hidden />
+            <span className="dk-stat-cell__label">Pending</span>
           </div>
+          <div className="dk-stat-cell__value-row">
+            <span className="dk-stat-cell__value">{(orderStats?.pending_receipts ?? groupedPending.length).toLocaleString()}</span>
+          </div>
+          <span className="dk-stat-cell__sub">In progress</span>
         </div>
-
-        <div className="stat-card-modern ready">
-          <div className="stat-icon">✅</div>
-          <div className="stat-content">
-            <h3>Ready</h3>
-            <p className="stat-value">{orderStats?.ready_receipts ?? readyQueue.length}</p>
-            <small>Ready receipts</small>
+        <div className="dk-stat-cell">
+          <div className="dk-stat-cell__row">
+            <span className="dk-stat-cell__dot dk-accent-success" aria-hidden />
+            <span className="dk-stat-cell__label">Ready</span>
           </div>
+          <div className="dk-stat-cell__value-row">
+            <span className="dk-stat-cell__value">{(orderStats?.ready_receipts ?? readyQueue.length).toLocaleString()}</span>
+          </div>
+          <span className="dk-stat-cell__sub">For collection</span>
+        </div>
+        <div className="dk-stat-cell">
+          <div className="dk-stat-cell__row">
+            <span className="dk-stat-cell__dot dk-accent-danger" aria-hidden />
+            <span className="dk-stat-cell__label">Overdue</span>
+          </div>
+          <div className="dk-stat-cell__value-row">
+            <span className="dk-stat-cell__value">{overdueCount.toLocaleString()}</span>
+          </div>
+          <span className="dk-stat-cell__sub">Ready queue</span>
+        </div>
+        <div className="dk-stat-cell">
+          <div className="dk-stat-cell__row">
+            <span className={`dk-stat-cell__dot ${openBalancesTotal > 0 ? 'dk-accent-warning' : 'dk-accent-info'}`} aria-hidden />
+            <span className="dk-stat-cell__label">Open balances</span>
+          </div>
+          <div className="dk-stat-cell__value-row">
+            <span className="dk-stat-cell__value">TSh {openBalancesTotal.toLocaleString()}</span>
+          </div>
+          <span className="dk-stat-cell__sub">Ready queue unpaid</span>
         </div>
       </div>
 
@@ -295,9 +347,15 @@ const Dashboard = () => {
                     return null;
                   })() : null;
                   return (
-                    <div key={receipt.receipt_number} className={`dashboard-list-card ${isOverdue ? 'overdue' : ''}`}>
+                    <div
+                      key={receipt.receipt_number}
+                      className={`dashboard-list-card dk-queue-card dk-queue-card--ready ${isOverdue ? 'overdue dk-queue-card--overdue' : ''}`}
+                    >
                       <div className="dashboard-list-card-header">
-                        <Link to={`/collection?receipt=${encodeURIComponent(receipt.receipt_number)}`} className={`receipt-badge receipt-link ${isOverdue ? 'overdue-badge' : ''}`}>
+                        <Link
+                          to={`/collection?receipt=${encodeURIComponent(receipt.receipt_number)}`}
+                          className={`receipt-badge receipt-link dk-receipt-chip ${isOverdue ? 'dk-receipt-chip--overdue overdue-badge' : 'dk-receipt-chip--outline'}`}
+                        >
                           {formatReceiptForDisplay(receipt.receipt_number, receipt.all_items || [])}
                         </Link>
                         {isOverdue && hoursOverdue > 0 && <span className="overdue-indicator">⚠️ {hoursOverdue}h overdue</span>}
@@ -347,9 +405,13 @@ const Dashboard = () => {
                         return null;
                       })() : null;
                       return (
-                        <tr key={receipt.receipt_number} className={isOverdue ? 'row-overdue' : ''}>
+                        <tr key={receipt.receipt_number} className={isOverdue ? 'row-overdue dk-table-row--accent-danger' : 'dk-table-row--accent-success'}>
                           <td>
-                            <Link to={`/collection?receipt=${encodeURIComponent(receipt.receipt_number)}`} className={`receipt-badge receipt-link ${isOverdue ? 'overdue-badge' : ''}`} title="Open in Collection">
+                            <Link
+                              to={`/collection?receipt=${encodeURIComponent(receipt.receipt_number)}`}
+                              className={`receipt-badge receipt-link dk-receipt-chip ${isOverdue ? 'dk-receipt-chip--overdue overdue-badge' : 'dk-receipt-chip--outline'}`}
+                              title="Open in Collection"
+                            >
                               {formatReceiptForDisplay(receipt.receipt_number, receipt.all_items || [])}
                             </Link>
                           </td>
@@ -409,9 +471,11 @@ const Dashboard = () => {
             listView === 'card' ? (
               <div className="dashboard-cards-grid queue-scroll-area">
                 {groupedPending.map((receiptGroup) => (
-                  <div key={receiptGroup.receipt_number} className="dashboard-list-card">
+                  <div key={receiptGroup.receipt_number} className="dashboard-list-card dk-queue-card">
                     <div className="dashboard-list-card-header">
-                      <span className="receipt-badge">{formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}</span>
+                      <span className="receipt-badge dk-receipt-chip dk-receipt-chip--filled">
+                        {formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}
+                      </span>
                     </div>
                     <div className="dashboard-list-card-body">
                       <p><strong>{receiptGroup.customer_name}</strong></p>
@@ -440,8 +504,12 @@ const Dashboard = () => {
                   </thead>
                   <tbody>
                     {groupedPending.map((receiptGroup) => (
-                      <tr key={receiptGroup.receipt_number}>
-                        <td><span className="receipt-badge">{formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}</span></td>
+                      <tr key={receiptGroup.receipt_number} className="dk-table-row--accent-primary">
+                        <td>
+                          <span className="receipt-badge dk-receipt-chip dk-receipt-chip--filled">
+                            {formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}
+                          </span>
+                        </td>
                         <td><strong>{receiptGroup.customer_name}</strong></td>
                         <td className="text-muted">{receiptGroup.customer_phone}</td>
                         <td>{receiptGroup.items.length}</td>

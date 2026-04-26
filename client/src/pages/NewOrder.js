@@ -1191,7 +1191,7 @@ Phone: ${customer.phone}
           <p className="subtitle">Create a new laundry order</p>
         </div>
         <div className="header-actions">
-          <button onClick={handleReset} className="btn-secondary" type="button">
+          <button onClick={handleReset} className="dk-btn dk-btn--secondary dk-btn--md" type="button">
             🔄 Reset (Ctrl+N)
           </button>
         </div>

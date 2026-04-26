@@ -119,7 +119,7 @@ const AdminBanking = () => {
       </div>
 
       <div className="banking-actions">
-        <button type="button" className="btn-primary" onClick={() => { setEditingAccount(null); setForm({ name: '', account_number: '', is_active: true }); setShowForm(true); }}>
+        <button type="button" className="dk-btn dk-btn--primary dk-btn--md" onClick={() => { setEditingAccount(null); setForm({ name: '', account_number: '', is_active: true }); setShowForm(true); }}>
           + Add Bank Account
         </button>
       </div>

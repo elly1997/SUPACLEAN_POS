@@ -26,8 +26,10 @@
 
 .order-header-modern h1 {
   font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
-  margin-bottom: 4px;
+  margin: 0 0 4px;
 }
 
 .subtitle {

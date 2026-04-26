@@ -745,14 +745,14 @@ const CashManagement = () => {
           </p>
         </div>
         <div className="header-actions">
-          <button onClick={handleTestReceiptPrint} className="btn-secondary" type="button" title="Open print dialog to test PDA/thermal printer">
+          <button onClick={handleTestReceiptPrint} className="dk-btn dk-btn--secondary dk-btn--md" type="button" title="Open print dialog to test PDA/thermal printer">
             🖨️ Test receipt print
           </button>
-          <button onClick={loadData} className="btn-secondary" type="button">
+          <button onClick={loadData} className="dk-btn dk-btn--secondary dk-btn--md" type="button">
             🔄 Refresh
           </button>
           {!summary.all_branches && !summary.is_reconciled && (
-            <button onClick={handleReconcile} className="btn-success" type="button">
+            <button onClick={handleReconcile} className="dk-btn dk-btn--success dk-btn--md" type="button">
               ✅ Reconcile & send to director
             </button>
           )}

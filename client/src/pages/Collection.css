@@ -4,28 +4,30 @@
 }
 
 .collection-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 24px;
   padding: 20px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-radius: 16px;
+  box-shadow: var(--shadow-sm);
   border: 0.5px solid var(--border-color);
 }
 
 [data-theme="dark"] .collection-header {
   background: rgba(28, 28, 30, 0.7);
-}
-
-.collection-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
 }
 
 .collection-header h1 {
   font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
-  margin-bottom: 4px;
+  margin: 0 0 4px;
 }
 
 .subtitle {
