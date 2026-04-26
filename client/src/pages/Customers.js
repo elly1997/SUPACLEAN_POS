@@ -7,7 +7,8 @@ import {
   checkServerConnection,
   sendBalanceReminder,
   getBulkSmsPreview,
-  sendBulkCustomerSms
+  sendBulkCustomerSms,
+  getSmsStatus,
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
@@ -24,6 +25,8 @@ import {
 import './Customers.css';
 
 const BULK_SMS_MAX_CHARS = 640;
+/** Must be typed exactly (after trim) to arm the bulk send button. */
+const BULK_SMS_CONFIRM_PHRASE = 'SEND';
 
 const CUSTOMERS_EXPORT_COLUMNS = [
   { key: 'branch_id', label: 'Branch ID' },
@@ -73,6 +76,8 @@ const Customers = () => {
   const [bulkSmsTemplates, setBulkSmsTemplates] = useState(() => loadBulkSmsTemplates());
   const [bulkSmsPickedTemplateId, setBulkSmsPickedTemplateId] = useState('');
   const [bulkSmsShowTemplateManager, setBulkSmsShowTemplateManager] = useState(false);
+  const [bulkSmsServerAllowed, setBulkSmsServerAllowed] = useState(true);
+  const [bulkSmsConfirmPhrase, setBulkSmsConfirmPhrase] = useState('');
   const searchInputRef = useRef(null);
 
   const CUSTOMERS_PAGE_SIZE = 50;
@@ -236,9 +241,15 @@ const Customers = () => {
     try {
       const res = await getBulkSmsPreview({ respect_opt_out: bulkSmsRespectOptOut ? '1' : '0' });
       setBulkSmsPreview(res.data || null);
+      setBulkSmsServerAllowed(true);
     } catch (e) {
       setBulkSmsPreview(null);
-      showToast(e.response?.data?.error || e.message || 'Could not load SMS preview', 'error');
+      const bulkOff = e.response?.status === 403 && e.response?.data?.bulk_sms_enabled === false;
+      if (bulkOff) {
+        setBulkSmsServerAllowed(false);
+      } else {
+        showToast(e.response?.data?.error || e.message || 'Could not load SMS preview', 'error');
+      }
     } finally {
       setBulkSmsPreviewLoading(false);
     }
@@ -246,6 +257,10 @@ const Customers = () => {
 
   useEffect(() => {
     if (!showBulkSmsModal) return;
+    setBulkSmsConfirmPhrase('');
+    getSmsStatus()
+      .then((r) => setBulkSmsServerAllowed(r.data?.bulkSmsEnabled !== false))
+      .catch(() => setBulkSmsServerAllowed(true));
     loadBulkSmsPreview();
   }, [showBulkSmsModal, loadBulkSmsPreview]);
 
@@ -266,6 +281,8 @@ const Customers = () => {
     setBulkSmsResult(null);
     setBulkSmsPickedTemplateId('');
     setBulkSmsShowTemplateManager(false);
+    setBulkSmsConfirmPhrase('');
+    setBulkSmsServerAllowed(true);
   };
 
   const setBulkSmsMessageTracked = useCallback(
@@ -331,6 +348,14 @@ const Customers = () => {
 
   const handleSendBulkSms = async (e) => {
     e.preventDefault();
+    if (!bulkSmsServerAllowed) {
+      showToast('Bulk SMS is turned off on the server. Ask an admin to set BULK_SMS_ENABLED.', 'error');
+      return;
+    }
+    if (bulkSmsConfirmPhrase.trim() !== BULK_SMS_CONFIRM_PHRASE) {
+      showToast(`Type ${BULK_SMS_CONFIRM_PHRASE} in the confirmation box to send.`, 'error');
+      return;
+    }
     const msg = bulkSmsMessage.trim();
     if (msg.length < 3) {
       showToast('Message is too short', 'error');
@@ -419,6 +444,12 @@ const Customers = () => {
               One SMS per unique phone number for laundry customers in the current branch view (same scope as this list). Admin viewing all
               branches reaches every customer. Max {bulkSmsPreview?.capped_at ?? 300} sends per run.
             </p>
+            {!bulkSmsServerAllowed && (
+              <p className="bulk-sms-warn" role="alert">
+                Bulk SMS is disabled on the server (environment <code>BULK_SMS_ENABLED=false</code>). Receipt, ready, and reminder SMS still
+                work. Change the env var on the host to re-enable blasts.
+              </p>
+            )}
             <div className="bulk-sms-preview-block">
               {bulkSmsPreviewLoading ? (
                 <p className="bulk-sms-muted">Loading recipient counts…</p>
@@ -574,11 +605,37 @@ const Customers = () => {
                   )}
                 </div>
               )}
+              <label className="export-popup-label" htmlFor="bulk-sms-confirm">
+                Type <strong>{BULK_SMS_CONFIRM_PHRASE}</strong> to confirm
+              </label>
+              <input
+                id="bulk-sms-confirm"
+                type="text"
+                className="bulk-sms-confirm-input"
+                autoComplete="off"
+                value={bulkSmsConfirmPhrase}
+                onChange={(e) => setBulkSmsConfirmPhrase(e.target.value)}
+                placeholder={BULK_SMS_CONFIRM_PHRASE}
+                disabled={bulkSmsSubmitting || !bulkSmsServerAllowed}
+                aria-describedby="bulk-sms-confirm-hint"
+              />
+              <p id="bulk-sms-confirm-hint" className="bulk-sms-confirm-hint">
+                Prevents accidental sends. Case-sensitive: {BULK_SMS_CONFIRM_PHRASE}.
+              </p>
               <div className="export-popup-actions" style={{ marginTop: '16px' }}>
                 <button type="button" className="btn-secondary" onClick={handleCloseBulkSms} disabled={bulkSmsSubmitting}>
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary" disabled={bulkSmsSubmitting || bulkSmsPreviewLoading}>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={
+                    bulkSmsSubmitting ||
+                    bulkSmsPreviewLoading ||
+                    !bulkSmsServerAllowed ||
+                    bulkSmsConfirmPhrase.trim() !== BULK_SMS_CONFIRM_PHRASE
+                  }
+                >
                   {bulkSmsSubmitting ? 'Sending…' : 'Send bulk SMS'}
                 </button>
               </div>

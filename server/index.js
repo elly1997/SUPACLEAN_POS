@@ -123,7 +123,9 @@ app.get('/api/sms-status', (req, res) => {
     hints.push('If SMS still does not send: check Africa\'s Talking account has credit; sender ID may need to be approved for Tanzania.');
     hints.push('Check server logs when you trigger an SMS (e.g. mark order Ready) for the exact API error.');
   }
-  res.json({ configured, provider, hasApiKey, hasUsername, hints });
+  const bulkSmsEnv = String(process.env.BULK_SMS_ENABLED || '').toLowerCase().trim();
+  const bulkSmsEnabled = bulkSmsEnv !== 'false' && bulkSmsEnv !== '0';
+  res.json({ configured, provider, hasApiKey, hasUsername, hints, bulkSmsEnabled });
 });
 
 // Serve uploaded files (item photos, etc.)

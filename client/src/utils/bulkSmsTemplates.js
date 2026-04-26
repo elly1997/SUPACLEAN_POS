@@ -2,22 +2,22 @@
  * Saved bulk SMS templates (browser localStorage, per device/user profile).
  */
 
-const STORAGE_KEY = 'supaclean_bulk_sms_templates_v1';
+const STORAGE_KEY = 'supaclean_bulk_sms_templates_v2';
 
 export const BULK_SMS_TEMPLATE_BODY_MAX = 640;
 
 export const DEFAULT_BULK_SMS_TEMPLATES = [
   {
-    id: 'easter_en',
-    name: 'Happy Easter (English)',
+    id: 'announcement_en',
+    name: 'General notice (English)',
     body:
-      'Happy Easter from SUPACLEAN! Wishing you and your loved ones joy and peace this season. Thank you for choosing us — we value your trust. Warm regards, SUPACLEAN · Arusha, Tanzania.',
+      'SUPACLEAN, Arusha: [Add your short notice here — e.g. hours change or pickup reminder.] Thank you for choosing us.',
   },
   {
-    id: 'easter_bi',
-    name: 'Happy Easter (English + Swahili)',
+    id: 'announcement_bi',
+    name: 'General notice (English + Swahili)',
     body:
-      'Heri ya Pasaka! Happy Easter from SUPACLEAN, Arusha. Tunawatakia furaha na amani pamoja na familia zenu. Asante kwa kuwa nasi. — SUPACLEAN',
+      'SUPACLEAN, Arusha: [English notice here.] — Kiswahili: [Andika hapa taarifa yako mfupi.] Asante kwa kuwa nasi.',
   },
 ];
 

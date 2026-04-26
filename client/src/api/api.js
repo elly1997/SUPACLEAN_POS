@@ -210,6 +210,9 @@ export const sendBulkCustomerSms = (body) =>
 export const getBulkSmsAuditLog = (params = {}) =>
   api.get('/customers/bulk-sms-audit', { params: { limit: params.limit } });
 
+/** SMS provider config + whether bulk customer SMS is allowed (see BULK_SMS_ENABLED on server). */
+export const getSmsStatus = () => api.get('/sms-status');
+
 // Services (offline-first)
 export async function getServices(includeInactive = false) {
   if (isOffline()) {

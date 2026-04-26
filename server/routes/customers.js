@@ -149,6 +149,12 @@ const BULK_SMS_MAX_LEN = 640;
 const BULK_SMS_MAX_RECIPIENTS = 300;
 const BULK_SMS_MIN_LEN = 3;
 
+/** When `BULK_SMS_ENABLED` is `false` or `0`, bulk customer SMS is off; transactional SMS (receipt, ready, reminders) is unchanged. */
+function isBulkSmsEnabled() {
+  const v = String(process.env.BULK_SMS_ENABLED || '').toLowerCase().trim();
+  return v !== 'false' && v !== '0';
+}
+
 /** Same branch scope as GET /customers?light=1 */
 async function fetchCustomersForBulkSms(req) {
   const effectiveBranchId = getEffectiveBranchId(req);
@@ -262,6 +268,13 @@ router.get(
   requireBranchAccess(),
   requirePermission('canManageCustomers'),
   async (req, res) => {
+    if (!isBulkSmsEnabled()) {
+      return res.status(403).json({
+        error:
+          'Bulk SMS is disabled on this server. Set BULK_SMS_ENABLED=true (or remove it) in the server environment to allow it. Order and receipt SMS are not affected.',
+        bulk_sms_enabled: false
+      });
+    }
     try {
       const respectSmsOptOut = req.query.respect_opt_out !== '0' && req.query.respect_opt_out !== 'false';
       const rows = await fetchCustomersForBulkSms(req);
@@ -287,6 +300,13 @@ router.post(
   requireBranchAccess(),
   requirePermission('canManageCustomers'),
   async (req, res) => {
+    if (!isBulkSmsEnabled()) {
+      return res.status(403).json({
+        error:
+          'Bulk SMS is disabled on this server. Set BULK_SMS_ENABLED=true (or remove it) in the server environment to allow it. Order and receipt SMS are not affected.',
+        bulk_sms_enabled: false
+      });
+    }
     const message = typeof req.body.message === 'string' ? req.body.message.trim() : '';
     const respectSmsOptOut = req.body.respect_sms_opt_out !== false && req.body.respect_sms_opt_out !== 0;
     const dryRun = req.body.dry_run === true || req.body.dry_run === 'true';
