@@ -1,0 +1,456 @@
+/**
+ * SUPACLEAN design kit (ui_kits/pos/primitives.jsx) — CSS equivalents for real pages.
+ */
+
+/* ─── Buttons (Button primitive) ─────────────────────────────────── */
+.dk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  border-radius: 12px;
+  font-family: inherit;
+  transition: all 0.4s cubic-bezier(0.36, 0.66, 0.04, 1);
+}
+
+.dk-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.dk-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dk-btn--sm {
+  padding: 8px 16px;
+  font-size: 13px;
+  min-height: 34px;
+}
+
+.dk-btn--md {
+  padding: 12px 20px;
+  font-size: 15px;
+  min-height: 44px;
+}
+
+.dk-btn--primary {
+  background: var(--primary-color);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3), 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.dk-btn--primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.dk-btn--secondary {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 0.5px solid var(--border-color);
+}
+
+.dk-btn--secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+[data-theme="dark"] .dk-btn--secondary {
+  background: rgba(44, 44, 46, 0.9);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.dk-btn--success {
+  background: var(--success-color);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(52, 199, 89, 0.25);
+}
+
+.dk-btn--success:hover:not(:disabled) {
+  background: var(--success-hover);
+}
+
+/* ─── Stat strip (StatStrip primitive) ───────────────────────────── */
+.dk-stat-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  border: 0.5px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 1100px) {
+  .dk-stat-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .dk-stat-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.dk-stat-cell {
+  padding: 10px 16px;
+  border-left: 0.5px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dk-stat-cell:first-child {
+  border-left: none;
+}
+
+.dk-stat-cell__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dk-stat-cell__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dk-stat-cell__label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dk-stat-cell__value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dk-stat-cell__value {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.dk-stat-cell__sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.dk-accent-primary {
+  background: var(--primary-color);
+}
+.dk-accent-success {
+  background: var(--success-color);
+}
+.dk-accent-warning {
+  background: var(--warning-color);
+}
+.dk-accent-danger {
+  background: var(--danger-color);
+}
+.dk-accent-info {
+  background: var(--info-color);
+}
+
+/* ─── Manager / inline CTA bar ───────────────────────────────────── */
+.dk-manager-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  border: 0.5px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+}
+
+.dk-manager-strip__label {
+  font-size: 14px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* ─── Queue list cards (OrderRow primitive) ──────────────────────── */
+.dk-queue-card {
+  border-radius: 16px !important;
+  border: 1px solid var(--border-light) !important;
+  border-left: 5px solid var(--primary-color) !important;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
+}
+
+.dk-queue-card:hover {
+  transform: translateX(4px);
+  box-shadow: var(--shadow-md);
+}
+
+.dk-queue-card.dk-queue-card--ready {
+  border-left-color: var(--success-color) !important;
+}
+
+.dk-queue-card.dk-queue-card--overdue {
+  border-left-color: var(--danger-color) !important;
+  background: rgba(255, 59, 48, 0.05) !important;
+}
+
+[data-theme="dark"] .dk-queue-card.dk-queue-card--overdue {
+  background: rgba(255, 69, 58, 0.12) !important;
+}
+
+/* Receipt chip (ReceiptChip primitive) */
+.dk-receipt-chip {
+  display: inline-block;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.dk-receipt-chip--outline {
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  background: transparent;
+}
+
+.dk-receipt-chip--filled {
+  background: var(--primary-color);
+  color: #fff;
+}
+
+.dk-receipt-chip--overdue {
+  background: var(--danger-color);
+  color: #fff;
+  animation: dk-pulse-soft 2s ease-in-out infinite;
+}
+
+@keyframes dk-pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dk-receipt-chip--overdue {
+    animation: none;
+  }
+}
+
+/* ═══ Unified page chrome (Dashboard / ui_kits pos) ═══ */
+.page-header-modern,
+.expenses-page > .page-header,
+.reports-page > .page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-radius: 16px;
+  box-shadow: var(--shadow-sm);
+  border: 0.5px solid var(--border-color);
+}
+
+[data-theme="dark"] .page-header-modern,
+[data-theme="dark"] .expenses-page > .page-header,
+[data-theme="dark"] .reports-page > .page-header {
+  background: rgba(28, 28, 30, 0.7);
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+}
+
+.page-header-modern h1,
+.expenses-page > .page-header h1,
+.reports-page > .page-header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+  color: var(--text-primary);
+}
+
+.page-header-modern .subtitle,
+.expenses-page > .page-header .subtitle,
+.cash-management-page .page-header .subtitle,
+.reports-page > .page-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.45;
+  max-width: 72ch;
+}
+
+.page-header-modern .header-actions,
+.expenses-page > .page-header .header-actions,
+.cash-management-page .page-header .header-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Frosted main panels (cards, filter bars, tables) */
+.orders-page .orders-filters-section,
+.orders-page .advanced-filters-card,
+.customers-page .filter-section,
+.cash-management-page .cash-summary-table-section,
+.cash-management-page .opening-session-card,
+.cash-management-page .cash-range-section,
+.expenses-page .filter-section,
+.expenses-page .summary-cards .summary-card,
+.expenses-page .expenses-list-card,
+.expenses-page .expense-form-card,
+.new-order-modern .panel-section,
+.collection-page-modern .search-section-modern,
+.customers-page .new-customer-card,
+.price-list-page .tabs,
+.price-list-page .add-service-card,
+.price-list-page .service-edit-card {
+  border-radius: 12px !important;
+  border: 0.5px solid var(--border-color) !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+
+[data-theme="dark"] .orders-page .orders-filters-section,
+[data-theme="dark"] .orders-page .advanced-filters-card,
+[data-theme="dark"] .customers-page .filter-section,
+[data-theme="dark"] .cash-management-page .cash-summary-table-section,
+[data-theme="dark"] .cash-management-page .opening-session-card,
+[data-theme="dark"] .cash-management-page .cash-range-section,
+[data-theme="dark"] .expenses-page .filter-section,
+[data-theme="dark"] .expenses-page .summary-cards .summary-card,
+[data-theme="dark"] .expenses-page .expenses-list-card,
+[data-theme="dark"] .expenses-page .expense-form-card,
+[data-theme="dark"] .new-order-modern .panel-section,
+[data-theme="dark"] .collection-page-modern .search-section-modern,
+[data-theme="dark"] .customers-page .new-customer-card,
+[data-theme="dark"] .price-list-page .tabs,
+[data-theme="dark"] .price-list-page .add-service-card,
+[data-theme="dark"] .price-list-page .service-edit-card {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Orders / Customers list cards — kit OrderRow accent */
+.orders-page .orders-list-card,
+.customers-page .customers-list-card {
+  border-radius: 16px;
+  border-left: 5px solid var(--primary-color);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
+}
+
+.orders-page .orders-list-card:hover,
+.customers-page .customers-list-card:hover {
+  transform: translateX(4px);
+  box-shadow: var(--shadow-md);
+}
+
+.reports-dashboard-header {
+  margin-bottom: 20px;
+  padding: 20px 24px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 0.5px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="dark"] .reports-dashboard-header {
+  background: rgba(28, 28, 30, 0.7);
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Other app pages — same frosted title bar */
+.monthly-billing .mb-header,
+.admin-branches .admin-header,
+.cleaning-services .cs-header,
+.admin-banking .banking-header {
+  margin-bottom: 20px;
+  padding: 20px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 0.5px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.25s ease;
+}
+
+.payroll-page .payroll-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 20px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 0.5px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="dark"] .monthly-billing .mb-header,
+[data-theme="dark"] .admin-branches .admin-header,
+[data-theme="dark"] .cleaning-services .cs-header,
+[data-theme="dark"] .payroll-page .payroll-header,
+[data-theme="dark"] .admin-banking .banking-header {
+  background: rgba(28, 28, 30, 0.7);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.monthly-billing .mb-header h1,
+.admin-branches .admin-header h1,
+.cleaning-services .cs-header h1,
+.payroll-page .payroll-header h1,
+.admin-banking .banking-header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+  color: var(--text-primary);
+}
+
+.payroll-page .payroll-header-text h1 {
+  margin: 0 0 4px;
+}
+
+.monthly-billing .mb-header p,
+.admin-branches .admin-header p,
+.cleaning-services .cs-header p,
+.payroll-page .payroll-header .subtitle,
+.admin-banking .banking-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.45;
+  max-width: 72ch;
+}
+
+.admin-branches .admin-header:hover {
+  box-shadow: var(--shadow-md);
+}

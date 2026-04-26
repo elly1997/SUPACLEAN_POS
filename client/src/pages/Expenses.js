@@ -342,9 +342,9 @@ const Expenses = () => {
           <h1>📝 Expenses</h1>
           <p className="subtitle">Track daily business expenses. Branch managers can add custom categories for their branch below the category field.</p>
         </div>
-        <button 
-          onClick={handleToggleAddForm} 
-          className="btn-primary"
+        <button
+          onClick={handleToggleAddForm}
+          className={`dk-btn dk-btn--md ${showForm ? 'dk-btn--secondary' : 'dk-btn--primary'}`}
           type="button"
         >
           {showForm ? 'Cancel' : '+ Add Expense'}
@@ -374,7 +374,7 @@ const Expenses = () => {
         {canManageCash && (
           <button
             type="button"
-            className="btn-secondary"
+            className="dk-btn dk-btn--secondary dk-btn--md"
             disabled={savingClosing}
             onClick={handleSaveDailyClosing}
             title="Recalculates daily closing and cashflow figures for this date from expenses and sales (skipped if the day is already reconciled)."

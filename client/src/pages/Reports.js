@@ -388,7 +388,7 @@ const Reports = () => {
         </div>
         <div className="reports-error-state">
           <p className="reports-error-message">{loadError}</p>
-          <button type="button" className="btn-primary" onClick={loadReports}>
+          <button type="button" className="dk-btn dk-btn--primary dk-btn--md" onClick={loadReports}>
             Retry
           </button>
         </div>

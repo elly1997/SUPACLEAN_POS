@@ -774,7 +774,8 @@ Phone: ${receiptGroup.customer_phone}
         </div>
         <div className="header-actions">
           <button
-            className="btn-secondary"
+            type="button"
+            className="dk-btn dk-btn--secondary dk-btn--md"
             style={{ marginRight: '8px' }}
             onClick={() => setShowExportPopup(true)}
             disabled={exporting || exportingUncollected}
@@ -782,7 +783,7 @@ Phone: ${receiptGroup.customer_phone}
           >
             {(exporting || exportingUncollected) ? '…' : 'Export'}
           </button>
-          <label className="btn-secondary" style={{ cursor: 'pointer' }} title="CUST ID / receipt encodes the receipt day. Paid = already paid when receipt was printed; items stay Ready until collected. See UPLOAD_STOCK_FORMAT.md">
+          <label className="dk-btn dk-btn--secondary dk-btn--md" style={{ cursor: 'pointer' }} title="CUST ID / receipt encodes the receipt day. Paid = already paid when receipt was printed; items stay Ready until collected. See UPLOAD_STOCK_FORMAT.md">
             📦 Upload Stock Excel
             <input
               type="file"
@@ -945,7 +946,7 @@ Phone: ${receiptGroup.customer_phone}
             const balance = receiptGroup.total_amount - receiptGroup.paid_amount;
             const itemCount = receiptGroup.items.length;
             return (
-              <div key={receiptGroup.receipt_number} className="orders-list-card">
+              <div key={receiptGroup.receipt_number} className="orders-list-card dk-queue-card">
                 <div className="orders-list-card-header">
                   <strong>{formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}</strong>
                   <span

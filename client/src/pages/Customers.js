@@ -622,7 +622,7 @@ const Customers = () => {
           {hasPermission('canManageCustomers') && (
             <>
               <div style={{ position: 'relative' }}>
-                <label className="btn-secondary" style={{ cursor: 'pointer', marginRight: '12px' }} title="Upload Excel file with columns: Name, Phone, Email (optional), Address (optional)">
+                <label className="dk-btn dk-btn--secondary dk-btn--md" style={{ cursor: 'pointer', marginRight: '12px' }} title="Upload Excel file with columns: Name, Phone, Email (optional), Address (optional)">
                   📤 Upload Excel
                   <input
                     type="file"
@@ -632,7 +632,8 @@ const Customers = () => {
                   />
                 </label>
                 <button
-                  className="btn-secondary"
+                  type="button"
+                  className="dk-btn dk-btn--secondary dk-btn--md"
                   style={{ marginRight: '12px' }}
                   onClick={() => setShowExportPopup(true)}
                   disabled={exporting}
@@ -642,7 +643,7 @@ const Customers = () => {
                 </button>
                 <button
                   type="button"
-                  className="btn-secondary"
+                  className="dk-btn dk-btn--secondary dk-btn--md"
                   style={{ marginRight: '12px' }}
                   onClick={handleOpenBulkSms}
                   title="Send SMS to all customers in this branch (e.g. holiday notice)"
@@ -651,7 +652,8 @@ const Customers = () => {
                 </button>
               </div>
               <button
-                className="btn-primary"
+                type="button"
+                className={`dk-btn dk-btn--md ${showNewCustomer ? 'dk-btn--secondary' : 'dk-btn--primary'}`}
                 onClick={() => setShowNewCustomer(!showNewCustomer)}
               >
                 {showNewCustomer ? 'Cancel' : '+ Add New Customer'}
@@ -766,7 +768,7 @@ const Customers = () => {
               {customers.map(customer => {
                 const balance = customer.outstanding_balance || 0;
                 return (
-                  <div key={customer.id} className="customers-list-card">
+                  <div key={customer.id} className="customers-list-card dk-queue-card">
                     <div className="customers-list-card-header">
                       <div className="customer-avatar-table">{(customer.name || '?').charAt(0).toUpperCase()}</div>
                       <strong>{customer.name}</strong>

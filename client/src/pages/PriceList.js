@@ -273,7 +273,8 @@ const PriceList = () => {
         </div>
         {activeTab === 'items' && isAdmin && (
           <button
-            className="btn-primary"
+            type="button"
+            className="dk-btn dk-btn--primary dk-btn--md"
             onClick={() => setShowAddForm(!showAddForm)}
           >
             {showAddForm ? 'Cancel' : '+ Add New Item'}

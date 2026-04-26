@@ -4,22 +4,7 @@
   margin: 0 auto;
 }
 
-.mb-header {
-  margin-bottom: 32px;
-}
-
-.mb-header h1 {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0 0 6px 0;
-}
-
-.mb-header p {
-  font-size: 15px;
-  color: var(--text-secondary);
-  margin: 0;
-}
+/* .mb-header: designKitPage.css */
 
 .mb-loading {
   display: flex;

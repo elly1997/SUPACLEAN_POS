@@ -3,37 +3,7 @@
   padding: 20px;
 }
 
-.page-header-modern {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-  padding: 20px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  border: 0.5px solid var(--border-color);
-}
-
-[data-theme="dark"] .page-header-modern {
-  background: rgba(28, 28, 30, 0.7);
-}
-
-.page-header-modern h1 {
-  font-size: 28px;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.subtitle {
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.header-actions {
-  display: flex;
-  gap: 12px;
-}
+/* Page header: designKitPage.css */
 
 .sync-cache-banner {
   padding: 10px 16px;

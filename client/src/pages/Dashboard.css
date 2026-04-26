@@ -29,8 +29,10 @@
 
 .dashboard-header h1 {
   font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
-  margin-bottom: 4px;
+  margin: 0 0 4px;
 }
 
 .dashboard-header .header-actions {
@@ -428,6 +430,20 @@
 
 [data-theme="dark"] .dashboard-table tbody tr.row-overdue {
   background: rgba(239, 68, 68, 0.12);
+}
+
+/* Design kit: inset status bar on queue tables */
+.ready-queue-card .dashboard-table tbody tr.dk-table-row--accent-success {
+  box-shadow: inset 3px 0 0 var(--success-color);
+}
+
+.ready-queue-card .dashboard-table tbody tr.dk-table-row--accent-danger,
+.ready-queue-card .dashboard-table tbody tr.row-overdue {
+  box-shadow: inset 3px 0 0 var(--danger-color);
+}
+
+.pending-queue-card .dashboard-table tbody tr.dk-table-row--accent-primary {
+  box-shadow: inset 3px 0 0 var(--primary-color);
 }
 
 .dashboard-table .amount-cell {

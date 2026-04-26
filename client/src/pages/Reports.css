@@ -8,18 +8,7 @@
   padding-right: clamp(12px, 2vw, 24px);
 }
 
-/* — Dashboard shell — */
-.reports-dashboard-header {
-  margin-bottom: 20px;
-  padding: 24px 28px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(0, 0, 0, 0.02) 100%);
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-md);
-}
-[data-theme="dark"] .reports-dashboard-header {
-  background: linear-gradient(135deg, rgba(28, 28, 30, 0.95) 0%, rgba(40, 40, 45, 0.6) 100%);
-}
+/* — Dashboard shell (frosted header: designKitPage.css .reports-dashboard-header) — */
 .reports-dashboard-header-inner {
   display: flex;
   flex-wrap: wrap;
