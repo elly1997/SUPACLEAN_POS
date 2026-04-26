@@ -15,7 +15,12 @@
     "fix-receipt-constraint": "node server/utils/fix-receipt-constraint.js",
     "verify-admin": "node server/utils/verifyAdmin.js",
     "migrate-items": "node scripts/run-migration.js",
-    "pre-launch-db": "node scripts/run-pre-launch.js"
+    "pre-launch-db": "node scripts/run-pre-launch.js",
+    "stress:smoke": "k6 run ./load-testing/scenarios/smoke.js",
+    "stress:read": "k6 run ./load-testing/scenarios/read-heavy.js",
+    "stress:write": "k6 run ./load-testing/scenarios/write-heavy.js",
+    "stress:spike": "k6 run ./load-testing/scenarios/spike.js",
+    "stress:soak": "k6 run ./load-testing/scenarios/soak.js"
   },
   "keywords": [
     "pos",

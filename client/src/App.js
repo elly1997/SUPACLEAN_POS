@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
+import LegacyLayout from './components/layout-legacy/Layout';
 import Loader from './components/Loader';
 import Login from './pages/Login';
 import './App.css';
@@ -97,6 +98,11 @@ const ProtectedRoute = ({ children }) => {
   return children;
 };
 
+const legacyPosShell =
+  process.env.REACT_APP_LEGACY_POS_SHELL === '1' ||
+  process.env.REACT_APP_LEGACY_POS_SHELL === 'true';
+const AppLayout = legacyPosShell ? LegacyLayout : Layout;
+
 function App() {
   return (
     <ThemeProvider>
@@ -111,7 +117,7 @@ function App() {
                 path="/*"
                 element={
                   <ProtectedRoute>
-                    <Layout>
+                    <AppLayout>
                       <Routes>
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                         <Route path="/dashboard" element={<Dashboard />} />
@@ -130,7 +136,7 @@ function App() {
                         <Route path="/admin/banking" element={<AdminBanking />} />
                         <Route path="*" element={<Navigate to="/dashboard" replace />} />
                       </Routes>
-                    </Layout>
+                    </AppLayout>
                   </ProtectedRoute>
                 }
               />

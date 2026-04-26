@@ -1,11 +1,15 @@
+/**
+ * Frozen snapshot of the pre–design-system POS shell (same behavior as before).
+ * Use REACT_APP_LEGACY_POS_SHELL=1 in client/.env to load this layout from App.js.
+ */
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import api from '../api/api';
-import { getBranches } from '../api/api';
-import { useTheme } from '../contexts/ThemeContext';
-import { useAuth } from '../contexts/AuthContext';
-import OfflineIndicator from './OfflineIndicator';
-import { isSoundEnabled, setSoundEnabled } from '../utils/sound';
+import api from '../../api/api';
+import { getBranches } from '../../api/api';
+import { useTheme } from '../../contexts/ThemeContext';
+import { useAuth } from '../../contexts/AuthContext';
+import OfflineIndicator from '../OfflineIndicator';
+import { isSoundEnabled, setSoundEnabled } from '../../utils/sound';
 import './Layout.css';
 
 const Layout = ({ children }) => {
@@ -17,7 +21,6 @@ const Layout = ({ children }) => {
   const [soundOn, setSoundOn] = useState(() => isSoundEnabled());
   const { theme, toggleTheme } = useTheme();
   const { user, branch, logout, isAdmin, hasPermission, selectedBranchId, setSelectedBranch } = useAuth();
-  // On back online, OfflineIndicator runs sync; we do not re-verify session here (avoids logout on 401 on Collection/Branches etc.)
   const handleBackOnline = useCallback(() => {}, []);
   const branchId = branch?.id ?? user?.branchId;
   const [availableFeatures, setAvailableFeatures] = useState([]);
@@ -35,9 +38,9 @@ const Layout = ({ children }) => {
     if (branchId) {
       fetchBranchFeatures(branchId);
     } else if (isAdmin) {
-      setAvailableFeatures(['all']); // Admin sees all; no branch feature filter
+      setAvailableFeatures(['all']);
     } else {
-      setAvailableFeatures([]); // Non-admin without branch: no features until loaded
+      setAvailableFeatures([]);
     }
   }, [branchId, isAdmin]);
 
@@ -61,15 +64,12 @@ const Layout = ({ children }) => {
   const fetchBranchFeatures = async (branchId) => {
     try {
       const response = await api.get(`/branches/${branchId}/features`);
-      // Accept both boolean (PostgreSQL) and 1/0 (SQLite) for is_enabled
       const enabledFeatures = (response.data || [])
         .filter(f => f.is_enabled === true || f.is_enabled === 1)
         .map(f => f.feature_key);
-      // Fallback: if branch has no features configured (e.g. legacy branches), grant all so branch users see tabs
       setAvailableFeatures(enabledFeatures.length > 0 ? enabledFeatures : ['all']);
     } catch (error) {
       console.error('Error fetching branch features:', error);
-      // On error for branch users: grant all so they can still use the app
       setAvailableFeatures(branchId ? ['all'] : []);
     }
   };
@@ -86,7 +86,6 @@ const Layout = ({ children }) => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
-  // Base menu items by workflow group
   const menuGroups = [
     {
       label: null,
@@ -238,7 +237,7 @@ const Layout = ({ children }) => {
             {soundOn ? '🔔' : '🔕'}
             <span>Sound {soundOn ? 'On' : 'Off'}</span>
           </button>
-          <button 
+          <button
             className="logout-button"
             onClick={async () => {
               await logout();
@@ -260,7 +259,7 @@ const Layout = ({ children }) => {
             aria-label={desktopSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
             title={desktopSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
           >
-            {desktopSidebarCollapsed ? '›' : '‹'}
+            {desktopSidebarCollapsed ? '»' : '«'}
           </button>
         )}
         <button
@@ -271,7 +270,7 @@ const Layout = ({ children }) => {
         >
           ☰
         </button>
-        <div key={location.pathname} className="content-wrapper pos-shell-screen-enter">
+        <div className="content-wrapper">
           {children}
         </div>
       </main>

@@ -1,4 +1,4 @@
-# SUPACLEAN POS — Offline and Online (Backup & Login)
+o# SUPACLEAN POS — Offline and Online (Backup & Login)
 
 The app supports **offline use** after you log in, and **online** for login and backup/sync.
 
