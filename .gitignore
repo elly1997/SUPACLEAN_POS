@@ -35,3 +35,6 @@ Thumbs.db
 
 # Uploads
 uploads/
+
+# Redundant archive (unpacked source lives in SUPACLEAN Design System/)
+SUPACLEAN Design System.zip

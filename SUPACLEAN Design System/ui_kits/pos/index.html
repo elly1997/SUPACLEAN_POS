@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SUPACLEAN POS — UI Kit</title>
+<link rel="stylesheet" href="../../colors_and_type.css">
+<style>
+  body { margin: 0; background: var(--bg-1); color: var(--text-primary); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+  main { margin-left: 280px; padding: 20px; transition: margin-left 0.4s cubic-bezier(0.36, 0.66, 0.04, 1); min-height: 100vh; }
+  main.collapsed { margin-left: 88px; }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .screen-enter { animation: fadeIn 0.3s cubic-bezier(0.36, 0.66, 0.04, 1); }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(142,142,147,0.3); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(142,142,147,0.5); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="primitives.jsx"></script>
+<script type="text/babel" src="Sidebar.jsx"></script>
+<script type="text/babel" src="LoginScreen.jsx"></script>
+<script type="text/babel" src="Dashboard.jsx"></script>
+<script type="text/babel" src="NewOrder.jsx"></script>
+<script type="text/babel" src="Collection.jsx"></script>
+<script type="text/babel" src="OtherScreens.jsx"></script>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const SCREEN_KEY = 'supaclean_pos_screen';
+const AUTH_KEY   = 'supaclean_pos_auth';
+
+function App() {
+  const [authed, setAuthed]     = useState(() => localStorage.getItem(AUTH_KEY) === '1');
+  const [screen, setScreen]     = useState(() => localStorage.getItem(SCREEN_KEY) || 'dashboard');
+  const [collapsed, setCollapsed] = useState(false);
+  const [toast, setToast]       = useState(null);
+
+  useEffect(() => { localStorage.setItem(SCREEN_KEY, screen); }, [screen]);
+  useEffect(() => { localStorage.setItem(AUTH_KEY, authed ? '1' : '0'); }, [authed]);
+
+  const showToast = (t) => { setToast(t); setTimeout(() => setToast(null), 3000); };
+  const navigate  = (key) => setScreen(key);
+
+  if (!authed) {
+    return <LoginScreen onLogin={() => { setAuthed(true); showToast({ type: 'success', msg: 'Welcome, Admin', sub: 'Central branch · Arusha' }); }} />;
+  }
+
+  const placeholder = (title, icon, msg) => <PlaceholderScreen title={title} icon={icon} message={msg} />;
+
+  let content;
+  switch (screen) {
+    case 'dashboard':  content = <Dashboard onNavigate={navigate} />; break;
+    case 'new-order':  content = <NewOrder onSubmit={() => { showToast({ type: 'success', msg: 'Order saved · SC-00148', sub: 'Receipt sent to printer' }); navigate('dashboard'); }} />; break;
+    case 'collection': content = <Collection onToast={showToast} />; break;
+    case 'orders':     content = <Orders />; break;
+    case 'customers':  content = <Customers />; break;
+    case 'price-list': content = placeholder('Price List',       '💰', 'Manage services and unit prices.'); break;
+    case 'billing':    content = placeholder('Monthly Billing',  '📄', 'Generate statements for contract customers.'); break;
+    case 'cash':       content = placeholder('Cash Management',  '💵', 'Open / close shifts and count the drawer.'); break;
+    case 'expenses':   content = placeholder('Expenses',         '📝', 'Record operating expenses with receipts.'); break;
+    case 'payroll':    content = placeholder('Payroll',          '👨‍💼', 'Salaries, advances and monthly summaries.'); break;
+    case 'reports':    content = placeholder('Reports',          '📈', 'Daily, weekly and monthly performance.'); break;
+    case 'cleaning':   content = placeholder('Cleaning Services','🧹', 'Schedule off-site cleaning jobs.'); break;
+    case 'branches':   content = placeholder('Branches',         '🏢', 'Central, Njiro, Sakina.'); break;
+    case 'banking':    content = placeholder('Banking',          '🏦', 'Reconcile M-Pesa and bank deposits.'); break;
+    default:           content = <Dashboard onNavigate={navigate} />;
+  }
+
+  return (
+    <>
+      <Sidebar current={screen} onNavigate={navigate} collapsed={collapsed} />
+      <main className={collapsed ? 'collapsed' : ''}>
+        <button onClick={() => setCollapsed(c => !c)} style={{
+          position: 'fixed', top: 20, left: (collapsed ? 88 : 280) - 18, zIndex: 20,
+          width: 32, height: 32, borderRadius: '50%',
+          background: 'var(--bg-secondary)', border: '0.5px solid var(--border-color)',
+          cursor: 'pointer', fontSize: 13, fontFamily: 'inherit',
+          boxShadow: 'var(--shadow-sm)',
+          transition: 'left 0.4s cubic-bezier(0.36, 0.66, 0.04, 1)',
+        }}>{collapsed ? '›' : '‹'}</button>
+        <div key={screen} className="screen-enter">{content}</div>
+      </main>
+      <Toast toast={toast} />
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

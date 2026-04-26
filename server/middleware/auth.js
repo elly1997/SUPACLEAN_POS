@@ -1,5 +1,7 @@
 const db = require('../database/query');
 
+const isDev = process.env.NODE_ENV !== 'production';
+
 // Authentication middleware
 function authenticate(req, res, next) {
   const sessionToken = req.headers.authorization?.replace('Bearer ', '');
@@ -8,8 +10,8 @@ function authenticate(req, res, next) {
     return res.status(401).json({ error: 'Authentication required' });
   }
 
-  console.log('Auth middleware: Checking session token');
-  
+  if (isDev) console.log('Auth middleware: Checking session token');
+
   (async () => {
     try {
       const session = await db.get(
@@ -23,11 +25,11 @@ function authenticate(req, res, next) {
       );
 
       if (!session) {
-        console.log('Auth middleware: Invalid or expired session');
+        if (isDev) console.log('Auth middleware: Invalid or expired session');
         return res.status(401).json({ error: 'Invalid or expired session' });
       }
-      
-      console.log('Auth middleware: Session valid for user:', session.username);
+
+      if (isDev) console.log('Auth middleware: Session valid for user:', session.username);
 
       // Prefer users.branch_id so branch managers keep their branch even if session.branch_id is unset
       const resolvedBranchId =
@@ -87,25 +89,27 @@ function requireRole(...allowedRoles) {
 // Branch access check (users can only access their branch's data unless admin)
 function requireBranchAccess() {
   return (req, res, next) => {
-    console.log('requireBranchAccess: Checking access for user:', req.user?.username, 'role:', req.user?.role);
+    if (isDev) {
+      console.log('requireBranchAccess: Checking access for user:', req.user?.username, 'role:', req.user?.role);
+    }
     if (!req.user) {
-      console.log('requireBranchAccess: No user found');
+      if (isDev) console.log('requireBranchAccess: No user found');
       return res.status(401).json({ error: 'Authentication required' });
     }
 
     // Admin can access all branches
     if (req.user.role === 'admin') {
-      console.log('requireBranchAccess: Admin user, allowing access');
+      if (isDev) console.log('requireBranchAccess: Admin user, allowing access');
       return next();
     }
 
     // Other users must have a branch assigned
     if (!req.user.branchId) {
-      console.log('requireBranchAccess: User has no branch assigned');
+      if (isDev) console.log('requireBranchAccess: User has no branch assigned');
       return res.status(403).json({ error: 'No branch assigned' });
     }
 
-    console.log('requireBranchAccess: User has branch, allowing access');
+    if (isDev) console.log('requireBranchAccess: User has branch, allowing access');
     next();
   };
 }
