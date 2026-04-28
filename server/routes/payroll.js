@@ -368,6 +368,8 @@ router.get('/history', requirePermission('canManagePayroll'), async (req, res) =
          COUNT(DISTINCT to_char(pm.computed_at, 'YYYY-MM-DD HH24:MI:SS'))::int AS payroll_runs,
          MAX(pm.computed_at) AS last_run_at,
          COALESCE(SUM(pm.net_salary), 0) AS total_net_salary,
+         COALESCE(SUM(pm.gross_salary + pm.allowances + pm.bonuses), 0) AS total_gross_compensation,
+         COALESCE(SUM(pm.salary_advances), 0) AS total_salary_advances,
          COALESCE(SUM(pm.paye_amount), 0) AS total_paye,
          COALESCE(SUM(pm.nssf_amount), 0) AS total_nssf,
          MAX(pp.status) AS period_status,
@@ -389,12 +391,19 @@ router.get('/history', requirePermission('canManagePayroll'), async (req, res) =
       const completedOn = r.completed_on
         ? String(r.completed_on).slice(0, 10)
         : null;
+      const totalNet = parseMoney(r.total_net_salary);
+      const outstandingNetPay = payrollStatus === 'Open' ? totalNet : 0;
+      const overdueOpen = payrollStatus === 'Open' && String(r.month_key) < currentMonth;
       return {
         ...r,
         payroll_status: payrollStatus,
         completed_on: completedOn,
         salary_statement_status: payrollStatus === 'Closed' ? 'Ready' : 'Draft',
-        bank_transfer_status: payrollStatus === 'Closed' ? 'Ready' : 'Pending'
+        bank_transfer_status: payrollStatus === 'Closed' ? 'Ready' : 'Pending',
+        total_gross_compensation: parseMoney(r.total_gross_compensation),
+        total_salary_advances: parseMoney(r.total_salary_advances),
+        outstanding_net_pay: outstandingNetPay,
+        overdue_open: overdueOpen
       };
     });
     res.json(history);

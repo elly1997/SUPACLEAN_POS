@@ -20,6 +20,31 @@ const monthNow = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
+const formatPayrollMonthLabel = (monthKey) => {
+  if (!monthKey || !/^\d{4}-\d{2}$/.test(String(monthKey))) return monthKey || '—';
+  const [y, m] = String(monthKey).split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleString('en-GB', { month: 'long', year: 'numeric' });
+};
+
+const moneyTzs = (n) => `TSh ${Number(n || 0).toLocaleString()}`;
+
+/** Net still “on the books” as payable while the period is open (matches API when present). */
+const outstandingNetForHistoryRow = (h) => {
+  if (h == null) return 0;
+  if (h.outstanding_net_pay != null && Number.isFinite(Number(h.outstanding_net_pay))) {
+    return Number(h.outstanding_net_pay);
+  }
+  return String(h.payroll_status) === 'Open' ? Number(h.total_net_salary || 0) : 0;
+};
+
+/** Linter-style severity for payroll month cards */
+const payrollHistoryCardLevel = (h) => {
+  if (String(h.payroll_status) !== 'Open') return 'INFO';
+  const overdue = h.overdue_open === true || (h.overdue_open == null && String(h.month_key) < monthNow());
+  if (overdue) return 'ERROR';
+  return 'WARN';
+};
+
 const todayYmd = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -161,6 +186,10 @@ const Payroll = () => {
   const processedEmployees = payroll.length;
   const remainingEmployees = Math.max(0, totalEmployees - processedEmployees);
   const advancesTotal = advances.reduce((sum, a) => sum + Number(a.amount || 0), 0);
+
+  const payrollHistoryOpenOutstanding = useMemo(() => {
+    return payrollHistory.reduce((sum, h) => sum + outstandingNetForHistoryRow(h), 0);
+  }, [payrollHistory]);
 
   const submitEmployee = async (e) => {
     e.preventDefault();
@@ -847,42 +876,120 @@ const Payroll = () => {
               </select>
             </div>
           </div>
+          <p className="payroll-history-intro">
+            Each card summarizes one saved month. <strong>Outstanding pay</strong> is the total net still tied to an{' '}
+            <em>open</em> period (not closed in Data Verification). Closed months show no outstanding balance here.
+          </p>
+          {payrollHistory.length > 0 && (
+            <div className="payroll-history-overview" role="status">
+              <span className="payroll-history-overview-label">Open periods — outstanding net (all months)</span>
+              <span className="payroll-history-overview-value">{moneyTzs(payrollHistoryOpenOutstanding)}</span>
+            </div>
+          )}
           <div
-            className="payroll-table-wrap history-wrap interactive-scroll-region"
+            className="payroll-history-lint-grid interactive-scroll-region"
             tabIndex={0}
-            role="region"
-            aria-label="Payroll history table"
+            role="list"
+            aria-label="Payroll history by month"
             {...tableScrollHandlers}
           >
-            <table className="payroll-table payroll-table--history">
-              <thead>
-                <tr>
-                  <th>Month</th>
-                  <th className="num">Payroll Runs</th>
-                  <th className="num">Processed Employees</th>
-                  <th className="num">Total Net</th>
-                  <th>Payroll Status</th>
-                  <th>Completed on</th>
-                  <th>Salary Statement</th>
-                  <th>Bank Transfer</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payrollHistory.map((h) => (
-                  <tr key={h.month_key}>
-                    <td>{h.month_key}</td>
-                    <td className="num">{Number(h.payroll_runs || 0)}</td>
-                    <td className="num">{Number(h.processed_employees || 0)}</td>
-                    <td className="num">TSh {Number(h.total_net_salary || 0).toLocaleString()}</td>
-                    <td><span className={`payroll-badge ${String(h.payroll_status).toLowerCase()}`}>{h.payroll_status}</span></td>
-                    <td>{h.completed_on || '—'}</td>
-                    <td><span className="payroll-badge approved">{h.salary_statement_status}</span></td>
-                    <td><span className="payroll-badge pending">{h.bank_transfer_status}</span></td>
-                  </tr>
-                ))}
-                {payrollHistory.length === 0 && <tr><td colSpan={8}>No payroll history yet — save payroll in Data Verification to create a month.</td></tr>}
-              </tbody>
-            </table>
+            {payrollHistory.map((h) => {
+              const level = payrollHistoryCardLevel(h);
+              const levelClass = level === 'ERROR' ? 'error' : level === 'WARN' ? 'warn' : 'info';
+              const outstanding = outstandingNetForHistoryRow(h);
+              const totalNet = Number(h.total_net_salary || 0);
+              const gross = Number(h.total_gross_compensation ?? 0);
+              const adv = Number(h.total_salary_advances ?? 0);
+              const nssf = Number(h.total_nssf || 0);
+              const paye = Number(h.total_paye || 0);
+              const selected = selectedHistoryMonth === h.month_key;
+              const title =
+                h.payroll_status === 'Open'
+                  ? h.overdue_open
+                    ? 'Payroll period open — past month'
+                    : 'Payroll period open'
+                  : 'Payroll period closed';
+              const detailParts = [
+                `${moneyTzs(gross)} gross (incl. allowances & bonuses)`,
+                `${moneyTzs(adv)} salary advances (in saved lines)`,
+                `${moneyTzs(nssf)} NSSF (employee)`,
+                `${moneyTzs(paye)} PAYE`,
+                `${moneyTzs(totalNet)} total net on file`,
+                `${Number(h.processed_employees || 0)} employees · ${Number(h.payroll_runs || 0)} save run(s)`
+              ];
+              const remediation =
+                h.payroll_status === 'Open'
+                  ? 'Close the month in Data Verification after salaries are paid and statements are final.'
+                  : 'Use the actions below to export statements or bank transfer for this month.';
+              return (
+                <article
+                  key={h.month_key}
+                  role="listitem"
+                  className={`payroll-lint-card payroll-lint-card--${levelClass} ${selected ? 'is-selected' : ''}`}
+                  onClick={() => setSelectedHistoryMonth(h.month_key)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedHistoryMonth(h.month_key);
+                    }
+                  }}
+                  tabIndex={0}
+                >
+                  <header className="payroll-lint-card-head">
+                    <span className={`payroll-lint-level payroll-lint-level--${levelClass}`}>{level}</span>
+                    <span className="payroll-lint-facing">PAYROLL</span>
+                  </header>
+                  <h4 className="payroll-lint-name">payroll_month_{h.month_key}</h4>
+                  <p className="payroll-lint-title">{title}</p>
+                  <p className="payroll-lint-detail">{detailParts.join(' · ')}</p>
+                  <div className="payroll-lint-outstanding" aria-label="Outstanding net pay for this month">
+                    <span className="payroll-lint-outstanding-label">Outstanding pay (net)</span>
+                    <span className={`payroll-lint-outstanding-value ${outstanding > 0 ? 'has-balance' : ''}`}>
+                      {moneyTzs(outstanding)}
+                    </span>
+                  </div>
+                  <dl className="payroll-lint-metadata">
+                    <div>
+                      <dt>month_key</dt>
+                      <dd>{h.month_key}</dd>
+                    </div>
+                    <div>
+                      <dt>display</dt>
+                      <dd>{formatPayrollMonthLabel(h.month_key)}</dd>
+                    </div>
+                    <div>
+                      <dt>status</dt>
+                      <dd>
+                        <span className={`payroll-badge ${String(h.payroll_status).toLowerCase()}`}>{h.payroll_status}</span>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>completed_on</dt>
+                      <dd>{h.completed_on || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>statement</dt>
+                      <dd>
+                        <span className="payroll-badge approved">{h.salary_statement_status}</span>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>bank_transfer</dt>
+                      <dd>
+                        <span className="payroll-badge pending">{h.bank_transfer_status}</span>
+                      </dd>
+                    </div>
+                  </dl>
+                  <p className="payroll-lint-remediation">{remediation}</p>
+                  {selected && <p className="payroll-lint-selected-hint">Selected for exports below.</p>}
+                </article>
+              );
+            })}
+            {payrollHistory.length === 0 && (
+              <p className="payroll-history-empty">
+                No payroll history yet — save payroll in Data Verification to create a month.
+              </p>
+            )}
           </div>
           <div className="payroll-action-bar">
             <button type="button" className="payroll-action-btn statement" onClick={handleSalaryStatement}>Salary Statement</button>
