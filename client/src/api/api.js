@@ -40,12 +40,8 @@ api.interceptors.response.use(
       /Network Error|Failed to fetch|timeout|ETIMEDOUT/i.test(error.message || ''));
     const method = error.config?.method?.toUpperCase();
     const isMutation = method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
-    const reqUrl = String(error.config?.url || '');
-    // Never queue bulk SMS: it can take minutes (throttled sends) and looks like a network
-    // timeout at 15s — replaying later would resend the same announcement without a fresh confirm.
-    const isBulkSmsPost = method === 'POST' && reqUrl.includes('/customers/bulk-sms');
     // Queue mutations that failed due to network so they can sync when back online
-    if (isNetworkError && isMutation && error.config?.url && !isBulkSmsPost) {
+    if (isNetworkError && isMutation && error.config?.url) {
       error.queuedForSync = true;
       try {
         await addToQueue(method, error.config.url, error.config.data ?? null);
@@ -197,20 +193,7 @@ export const uploadCustomersExcel = (formData) => api.post('/customers/upload-ex
 });
 export const sendBalanceReminder = (customerId, channels = ['sms']) => api.post(`/customers/${customerId}/send-balance-reminder`, { channels });
 
-/** Preview recipient counts for bulk SMS (branch-scoped like customer list). */
-export const getBulkSmsPreview = (params = {}) =>
-  api.get('/customers/bulk-sms-preview', { params });
-
-/** Send bulk SMS to laundry customers. body: { message, respect_sms_opt_out?, dry_run? } */
-// Long timeout: server sends sequentially with ~75ms gaps (up to 300 recipients) plus provider latency.
-export const sendBulkCustomerSms = (body) =>
-  api.post('/customers/bulk-sms', body, { timeout: 180000 });
-
-/** Admin: recent bulk SMS audit rows. params: { limit?: number } (max 100) */
-export const getBulkSmsAuditLog = (params = {}) =>
-  api.get('/customers/bulk-sms-audit', { params: { limit: params.limit } });
-
-/** SMS provider config + whether bulk customer SMS is allowed (see BULK_SMS_ENABLED on server). */
+/** SMS provider config and setup hints. */
 export const getSmsStatus = () => api.get('/sms-status');
 
 // Services (offline-first)
