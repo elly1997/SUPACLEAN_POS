@@ -97,6 +97,7 @@ router.get('/', async (req, res) => {
            COALESCE(SUM(CASE 
              WHEN o.id IS NOT NULL 
              AND o.status != 'collected' 
+             AND COALESCE(o.is_voided, FALSE) = FALSE
              AND (o.total_amount - COALESCE(o.paid_amount, 0)) > 0
              AND ${branchCondition}
              THEN (o.total_amount - o.paid_amount) 
@@ -105,6 +106,7 @@ router.get('/', async (req, res) => {
     FROM customers c
     LEFT JOIN orders o ON c.id = o.customer_id 
       AND o.status != 'collected' 
+      AND COALESCE(o.is_voided, FALSE) = FALSE
       AND (o.total_amount - COALESCE(o.paid_amount, 0)) > 0
       ${branchFilter.clause}
   `;
@@ -473,6 +475,7 @@ router.get('/:id/orders', async (req, res) => {
          GROUP BY ro.receipt_number, ro.customer_id
        ) tx ON tx.receipt_number = o.receipt_number AND tx.customer_id = o.customer_id
        WHERE o.customer_id = ?
+       AND COALESCE(o.is_voided, FALSE) = FALSE
        ORDER BY o.order_date DESC`,
       [id]
     );

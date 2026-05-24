@@ -309,6 +309,8 @@ export const updateOrderStatus = (id, status) => api.put(`/orders/${id}/status`,
 export const updateEstimatedCollectionDate = (id, estimated_collection_date) => api.put(`/orders/${id}/estimated-collection-date`, { estimated_collection_date });
 export const collectOrder = (receiptNumber, paymentData = {}) => api.post(`/orders/collect/${receiptNumber}`, paymentData);
 export const receivePayment = (orderId, paymentData) => api.post(`/orders/${orderId}/receive-payment`, paymentData);
+export const voidOrderReceipt = (receiptNumber, data = {}) =>
+  api.post(`/orders/receipt/${encodeURIComponent(receiptNumber)}/void`, data);
 export async function getCollectionQueue(params = {}) {
   if (isOffline()) {
     try {

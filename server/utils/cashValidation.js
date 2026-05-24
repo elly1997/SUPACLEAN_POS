@@ -4,6 +4,7 @@
  */
 
 const db = require('../database/query');
+const { sqlActiveOrdersOnly, sqlActiveTransactionsOnly } = require('./orderVoidFilter');
 
 /**
  * Validate cash balance for a date
@@ -19,7 +20,8 @@ async function validateCashBalance(date, expectedCashInHand) {
        FROM transactions
        WHERE DATE(transaction_date) = ?
        AND payment_method = 'cash'
-       AND transaction_type = 'payment_received'`,
+       AND transaction_type = 'payment_received'
+       ${sqlActiveTransactionsOnly()}`,
       [date]
     );
     
@@ -58,6 +60,7 @@ async function calculateBookSales(date, branchId = null) {
            SELECT o.receipt_number, o.branch_id
            FROM orders o
            WHERE DATE(o.order_date) = ?::date
+           ${sqlActiveOrdersOnly('o')}
            GROUP BY o.receipt_number, o.branch_id
            HAVING BOOL_AND(o.payment_status = 'paid_full' AND o.payment_method = 'cash')
          )
@@ -67,6 +70,7 @@ async function calculateBookSales(date, branchId = null) {
          WHERE DATE(t.transaction_date) = ?::date
            AND t.transaction_type = 'payment_received'
            AND t.payment_method = 'cash'
+           ${sqlActiveTransactionsOnly('t')}
            AND (
              t.order_id IS NULL OR o.id IS NULL
              OR NOT EXISTS (
@@ -85,6 +89,7 @@ async function calculateBookSales(date, branchId = null) {
          FROM orders o
          WHERE DATE(o.order_date) = ?::date
            AND (o.branch_id = ? OR o.branch_id IS NULL)
+           ${sqlActiveOrdersOnly('o')}
          GROUP BY o.receipt_number, o.branch_id
          HAVING BOOL_AND(o.payment_status = 'paid_full' AND o.payment_method = 'cash')
        )
@@ -94,6 +99,7 @@ async function calculateBookSales(date, branchId = null) {
        WHERE DATE(t.transaction_date) = ?::date
          AND t.transaction_type = 'payment_received'
          AND t.payment_method = 'cash'
+         ${sqlActiveTransactionsOnly('t')}
          AND (t.branch_id = ? OR t.branch_id IS NULL)
          AND (
            t.order_id IS NULL OR o.id IS NULL
@@ -131,7 +137,7 @@ async function calculateMobileMoneyReceived(date, branchId = null) {
        FROM transactions
        WHERE DATE(transaction_date) = ?
        AND transaction_type = 'payment_received'
-       AND payment_method = 'mobile_money'` + branchClause,
+       AND payment_method = 'mobile_money'` + branchClause + sqlActiveTransactionsOnly(),
       params
     );
     return parseFloat(row?.total || 0);
@@ -160,7 +166,7 @@ async function calculateCardReceived(date, branchId = null) {
        FROM transactions
        WHERE DATE(transaction_date) = ?
        AND transaction_type = 'payment_received'
-       AND payment_method = 'card'` + branchClause,
+       AND payment_method = 'card'` + branchClause + sqlActiveTransactionsOnly(),
       params
     );
     return parseFloat(row?.total || 0);
@@ -189,7 +195,7 @@ async function calculateBankReceived(date, branchId = null) {
        FROM transactions
        WHERE DATE(transaction_date) = ?
        AND transaction_type = 'payment_received'
-       AND (payment_method = 'bank' OR payment_method = 'bank_transfer')` + branchClause,
+       AND (payment_method = 'bank' OR payment_method = 'bank_transfer')` + branchClause + sqlActiveTransactionsOnly(),
       params
     );
     return parseFloat(row?.total || 0);
@@ -209,6 +215,7 @@ async function getPaymentHistory(orderId) {
       `SELECT * FROM transactions
        WHERE order_id = ?
        AND transaction_type = 'payment_received'
+       ${sqlActiveTransactionsOnly()}
        ORDER BY transaction_date ASC`,
       [orderId]
     );
@@ -240,6 +247,7 @@ async function listCashSalesOrdersForDate(date, branchId) {
        AND o.payment_method = 'cash'
        AND o.paid_amount > 0
        AND o.branch_id = ?
+       ${sqlActiveOrdersOnly('o')}
      GROUP BY o.branch_id, o.receipt_number
      ORDER BY MAX(o.order_date) DESC, MIN(o.id) DESC`,
     [date, branchId]
@@ -257,6 +265,7 @@ async function listBookSalesCashTransactionsForDate(date, branchId) {
          SELECT o.receipt_number, o.branch_id
          FROM orders o
          WHERE DATE(o.order_date) = ?::date
+         ${sqlActiveOrdersOnly('o')}
          GROUP BY o.receipt_number, o.branch_id
          HAVING BOOL_AND(o.payment_status = 'paid_full' AND o.payment_method = 'cash')
        )
@@ -269,6 +278,7 @@ async function listBookSalesCashTransactionsForDate(date, branchId) {
        WHERE DATE(t.transaction_date) = ?::date
          AND t.transaction_type = 'payment_received'
          AND t.payment_method = 'cash'
+         ${sqlActiveTransactionsOnly('t')}
          AND (
            t.order_id IS NULL OR o.id IS NULL
            OR NOT EXISTS (
@@ -288,6 +298,7 @@ async function listBookSalesCashTransactionsForDate(date, branchId) {
        FROM orders o
        WHERE DATE(o.order_date) = ?::date
          AND (o.branch_id = ? OR o.branch_id IS NULL)
+         ${sqlActiveOrdersOnly('o')}
        GROUP BY o.receipt_number, o.branch_id
        HAVING BOOL_AND(o.payment_status = 'paid_full' AND o.payment_method = 'cash')
      )
@@ -300,6 +311,7 @@ async function listBookSalesCashTransactionsForDate(date, branchId) {
      WHERE DATE(t.transaction_date) = ?::date
        AND t.transaction_type = 'payment_received'
        AND t.payment_method = 'cash'
+       ${sqlActiveTransactionsOnly('t')}
        AND (t.branch_id = ? OR t.branch_id IS NULL)
        AND (
          t.order_id IS NULL OR o.id IS NULL

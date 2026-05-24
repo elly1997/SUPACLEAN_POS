@@ -49,6 +49,7 @@ async function checkDuplicatePayment(orderId, amount, timestamp) {
      WHERE order_id = $1
      AND amount = $2
      AND transaction_type = 'payment_received'
+     AND COALESCE(is_voided, FALSE) = FALSE
      AND transaction_date >= $3::timestamp - INTERVAL '1 minute'
      AND transaction_date <= $3::timestamp + INTERVAL '1 minute'`,
     [orderId, amount, timestamp]
@@ -66,7 +67,8 @@ async function getTotalPaymentsForOrder(orderId) {
     `SELECT COALESCE(SUM(amount), 0) AS total
      FROM transactions
      WHERE order_id = $1
-     AND transaction_type = 'payment_received'`,
+     AND transaction_type = 'payment_received'
+     AND COALESCE(is_voided, FALSE) = FALSE`,
     [orderId]
   );
   return parseFloat(row?.total || 0);

@@ -259,6 +259,7 @@ function initializeTables() {
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     full_name TEXT NOT NULL,
+    email TEXT,
     branch_id INTEGER,
     role TEXT NOT NULL,
     is_active INTEGER DEFAULT 1,
@@ -407,6 +408,18 @@ function migrateDatabase() {
       if (!columnNames.includes('collected_at_branch_id')) {
         migrations.push("ALTER TABLE orders ADD COLUMN collected_at_branch_id INTEGER");
       }
+      if (!columnNames.includes('is_voided')) {
+        migrations.push('ALTER TABLE orders ADD COLUMN is_voided INTEGER DEFAULT 0');
+      }
+      if (!columnNames.includes('void_reason')) {
+        migrations.push('ALTER TABLE orders ADD COLUMN void_reason TEXT');
+      }
+      if (!columnNames.includes('voided_by')) {
+        migrations.push('ALTER TABLE orders ADD COLUMN voided_by TEXT');
+      }
+      if (!columnNames.includes('voided_at')) {
+        migrations.push('ALTER TABLE orders ADD COLUMN voided_at DATETIME');
+      }
       
       // Check and create loyalty tables if they don't exist
       db.run(`CREATE TABLE IF NOT EXISTS loyalty_points (
@@ -452,6 +465,17 @@ function migrateDatabase() {
           if (!notifNames.includes('dedupe_key')) {
             db.run('ALTER TABLE notifications ADD COLUMN dedupe_key TEXT', (alterErr) => {
               if (!alterErr) console.log('✅ Added dedupe_key column to notifications');
+            });
+          }
+        }
+      });
+
+      db.all("PRAGMA table_info(users)", [], (userColErr, userCols) => {
+        if (!userColErr && userCols) {
+          const names = userCols.map((c) => c.name);
+          if (!names.includes('email')) {
+            db.run('ALTER TABLE users ADD COLUMN email TEXT', (alterErr) => {
+              if (!alterErr) console.log('✅ Added email column to users (SQLite)');
             });
           }
         }
@@ -543,6 +567,18 @@ function migrateDatabase() {
                 console.log('✅ Added branch_id column to transactions');
               }
             });
+          }
+          if (!transColumnNames.includes('is_voided')) {
+            db.run('ALTER TABLE transactions ADD COLUMN is_voided INTEGER DEFAULT 0');
+          }
+          if (!transColumnNames.includes('void_reason')) {
+            db.run('ALTER TABLE transactions ADD COLUMN void_reason TEXT');
+          }
+          if (!transColumnNames.includes('voided_by')) {
+            db.run('ALTER TABLE transactions ADD COLUMN voided_by TEXT');
+          }
+          if (!transColumnNames.includes('voided_at')) {
+            db.run('ALTER TABLE transactions ADD COLUMN voided_at DATETIME');
           }
         }
       });

@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../database/query');
 const { authenticate, requireBranchAccess } = require('../middleware/auth');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
+const { sqlActiveTransactionsOnly } = require('../utils/orderVoidFilter');
 
 // Get all transactions
 router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
@@ -15,6 +16,7 @@ router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
     LEFT JOIN orders o ON t.order_id = o.id
     LEFT JOIN customers c ON o.customer_id = c.id
     WHERE 1=1
+    ${sqlActiveTransactionsOnly('t')}
     ${branchFilter.clause}
   `;
   let params = [...branchFilter.params];

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, receivePayment, sendCollectionReminder } from '../api/api';
+import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, receivePayment, sendCollectionReminder, voidOrderReceipt } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
@@ -33,7 +33,7 @@ const ORDERS_EXPORT_COLUMNS = [
 const Orders = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
-  const { branch, selectedBranchId } = useAuth();
+  const { branch, selectedBranchId, hasPermission } = useAuth();
   const [listView, setListView] = useListViewPreference();
   const [orders, setOrders] = useState([]);
   const [filter, setFilter] = useState('all');
@@ -63,6 +63,7 @@ const Orders = () => {
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [exportingUncollected, setExportingUncollected] = useState(false);
+  const [voidingReceipt, setVoidingReceipt] = useState(null);
   const [showExportPopup, setShowExportPopup] = useState(false);
   const ordersSearchInputRef = useRef(null);
   const tableScrollHandlers = useHorizontalScrollRegion();
@@ -329,6 +330,60 @@ const Orders = () => {
     }
   };
 
+  const handleVoidReceipt = async (receiptGroup, options = {}) => {
+    const { acknowledgeReconciledDay = false, voidReason: presetReason = null } = options;
+    let reason = presetReason;
+    if (!reason) {
+      reason = window.prompt(
+        'Reason for voiding this receipt (incorrect entry, duplicate, etc.):',
+        'Incorrect receipt logged'
+      );
+      if (reason == null) return;
+      if (!reason.trim()) {
+        showToast('A void reason is required', 'error');
+        return;
+      }
+    }
+    if (!acknowledgeReconciledDay && !window.confirm(
+      `Void receipt ${formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}?\n\nThis will reverse all payments and remove it from cash totals. This cannot be undone.`
+    )) {
+      return;
+    }
+
+    setVoidingReceipt(receiptGroup.receipt_number);
+    try {
+      const res = await voidOrderReceipt(receiptGroup.receipt_number, {
+        void_reason: reason.trim(),
+        acknowledge_reconciled_day: acknowledgeReconciledDay
+      });
+      const days = res?.data?.reconciled_days_refreshed;
+      if (Array.isArray(days) && days.length) {
+        showToast('Receipt voided; reconciled daily summary was recalculated for the affected date(s).', 'success');
+      } else {
+        showToast(res?.data?.message || 'Receipt voided successfully', 'success');
+      }
+      loadOrders(false);
+    } catch (error) {
+      const status = error.response?.status;
+      const msg = error.response?.data?.error || error.message;
+      const code = error.response?.data?.code;
+      if (status === 409 && code === 'reconciled_day') {
+        if (
+          !window.confirm(
+            'This receipt is on a reconciled day. Voiding will recalculate the locked daily summary and refresh later pending days. Continue?'
+          )
+        ) {
+          return;
+        }
+        await handleVoidReceipt(receiptGroup, { acknowledgeReconciledDay: true, voidReason: reason.trim() });
+        return;
+      }
+      showToast('Error voiding receipt: ' + msg, 'error');
+    } finally {
+      setVoidingReceipt(null);
+    }
+  };
+
   const formatDateTime = (dateString) => {
     if (!dateString) return 'Not set';
     const date = new Date(dateString);
@@ -347,6 +402,7 @@ const Orders = () => {
       case 'processing': return '#3b82f6';
       case 'ready': return '#10b981';
       case 'collected': return '#6b7280';
+      case 'voided': return '#dc2626';
       default: return '#6b7280';
     }
   };
@@ -613,10 +669,15 @@ Phone: ${receiptGroup.customer_phone}
       grouped[receiptNum].total_amount += parseFloat(order.total_amount) || 0;
       grouped[receiptNum].paid_amount += parseFloat(order.paid_amount) || 0;
       grouped[receiptNum].order_ids.push(order.id);
-      
+      if (order.is_voided) {
+        grouped[receiptNum].is_voided = true;
+      }
+
       // Determine overall status (if all ready, show ready; if any pending, show pending; etc.)
       const statuses = grouped[receiptNum].items.map(o => o.status);
-      if (statuses.every(s => s === 'ready')) {
+      if (grouped[receiptNum].is_voided || statuses.every(s => s === 'voided')) {
+        grouped[receiptNum].status = 'voided';
+      } else if (statuses.every(s => s === 'ready')) {
         grouped[receiptNum].status = 'ready';
       } else if (statuses.some(s => s === 'pending')) {
         grouped[receiptNum].status = 'pending';
@@ -729,6 +790,7 @@ Phone: ${receiptGroup.customer_phone}
 
   // Get consolidated orders
   const consolidatedOrders = groupOrdersByReceipt(orders);
+  const canManageOrders = hasPermission('canManageOrders');
 
   // Helper to get receipt group for a receipt number
   const getReceiptGroup = (receiptNumber) => {
@@ -824,7 +886,7 @@ Phone: ${receiptGroup.customer_phone}
           )}
         </div>
         <div className="orders-filters">
-          {['all', 'pending', 'ready', 'collected'].map(status => (
+          {['all', 'pending', 'ready', 'collected', 'voided'].map(status => (
               <button
               key={status}
               className={`filter-btn ${filter === status ? 'active' : ''}`}
@@ -964,16 +1026,26 @@ Phone: ${receiptGroup.customer_phone}
                   <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Est: {formatDateTime(receiptGroup.estimated_collection_date)}</p>
                 </div>
                 <div className="orders-list-card-actions">
-                  {receiptGroup.status === 'pending' || receiptGroup.status === 'processing' ? (
+                  {!receiptGroup.is_voided && (receiptGroup.status === 'pending' || receiptGroup.status === 'processing') ? (
                     <button className="btn-small btn-success" onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}>Mark Ready</button>
-                  ) : receiptGroup.status === 'ready' ? (
+                  ) : !receiptGroup.is_voided && receiptGroup.status === 'ready' ? (
                     <>
                       <button className="btn-small btn-warning" onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'collected')} disabled={balance > 0} title={balance > 0 ? 'Pay first' : 'Collect'}>Collect</button>
                       <button className="btn-small btn-secondary" onClick={() => receiptGroup.items.forEach(item => handleSendReminder(item.id))} disabled={sendingReminder !== null}>{sendingReminder ? '⏳' : '📱 Remind'}</button>
                     </>
                   ) : null}
-                  {balance > 0 && (
+                  {!receiptGroup.is_voided && balance > 0 && (
                     <button className="btn-small btn-primary" onClick={() => { setSelectedOrderForPayment({ ...receiptGroup.items[0], total_amount: receiptGroup.total_amount, paid_amount: receiptGroup.paid_amount }); setPaymentAmount(balance.toString()); setPaymentDate(todayYmd()); setShowReceivePaymentModal(true); }}>💰 Pay</button>
+                  )}
+                  {canManageOrders && !receiptGroup.is_voided && (
+                    <button
+                      className="btn-small btn-danger"
+                      onClick={() => handleVoidReceipt(receiptGroup)}
+                      disabled={voidingReceipt === receiptGroup.receipt_number}
+                      title="Void receipt and reverse all payments"
+                    >
+                      {voidingReceipt === receiptGroup.receipt_number ? '⏳ Voiding…' : 'Void'}
+                    </button>
                   )}
                   <button className="btn-small btn-secondary" onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}>View</button>
                 </div>
@@ -1152,7 +1224,7 @@ Phone: ${receiptGroup.customer_phone}
                       </td>
                       <td>
                         <div className="action-buttons">
-                          {receiptGroup.status === 'pending' && (
+                          {!receiptGroup.is_voided && receiptGroup.status === 'pending' && (
                             <button
                               className="btn-small btn-success"
                               onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}
@@ -1161,7 +1233,7 @@ Phone: ${receiptGroup.customer_phone}
                               ✓ Mark as Ready
                             </button>
                           )}
-                          {receiptGroup.status === 'processing' && (
+                          {!receiptGroup.is_voided && receiptGroup.status === 'processing' && (
                             <button
                               className="btn-small btn-success"
                               onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}
@@ -1170,7 +1242,7 @@ Phone: ${receiptGroup.customer_phone}
                               Ready All
                             </button>
                           )}
-                          {receiptGroup.status === 'ready' && (
+                          {!receiptGroup.is_voided && receiptGroup.status === 'ready' && (
                             <>
                               <button
                                 className="btn-small btn-warning"
@@ -1195,7 +1267,7 @@ Phone: ${receiptGroup.customer_phone}
                               </button>
                             </>
                           )}
-                          {balance > 0 && (
+                          {!receiptGroup.is_voided && balance > 0 && (
                             <button
                               className="btn-small btn-primary"
                               onClick={() => {
@@ -1212,6 +1284,17 @@ Phone: ${receiptGroup.customer_phone}
                               style={{ marginTop: '4px' }}
                             >
                               💰 Pay
+                            </button>
+                          )}
+                          {canManageOrders && !receiptGroup.is_voided && (
+                            <button
+                              className="btn-small btn-danger"
+                              onClick={() => handleVoidReceipt(receiptGroup)}
+                              disabled={voidingReceipt === receiptGroup.receipt_number}
+                              style={{ marginTop: '4px' }}
+                              title="Void receipt and reverse all payments"
+                            >
+                              {voidingReceipt === receiptGroup.receipt_number ? '⏳ Voiding…' : 'Void Receipt'}
                             </button>
                           )}
                           <button

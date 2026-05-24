@@ -14,6 +14,8 @@ const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter
 const { validatePayment } = require('../utils/paymentValidation');
 const { recordPaymentTransaction, logPaymentChange } = require('../utils/paymentTransactions');
 const { checkDuplicatePayment } = require('../utils/paymentTransactions');
+const { voidReceiptByNumber } = require('../utils/orderVoid');
+const { sqlActiveOrdersOnly } = require('../utils/orderVoidFilter');
 const cashManagement = require('./cashManagement');
 const { assertNotFutureBusinessDate, getBusinessTodayYmd } = require('../utils/businessDate');
 const multer = require('multer');
@@ -93,7 +95,8 @@ router.get('/', requireBranchAccess(), async (req, res) => {
     payment_status,
     limit: limitParam,
     offset: offsetParam,
-    page
+    page,
+    include_voided
   } = req.query;
   
   const branchFilter = getBranchFilter(req, 'o');
@@ -110,14 +113,21 @@ router.get('/', requireBranchAccess(), async (req, res) => {
   `;
   let params = [...branchFilter.params];
 
-  if (status) {
-    // "pending" tab shows both pending and processing (one in-progress tab)
-    if (status === 'pending') {
-      query += ' AND (o.status = ? OR o.status = ?)';
-      params.push('pending', 'processing');
-    } else {
-      query += ' AND o.status = ?';
-      params.push(status);
+  if (status === 'voided') {
+    query += ' AND COALESCE(o.is_voided, FALSE) = TRUE';
+  } else {
+    if (include_voided !== 'true') {
+      query += ` ${sqlActiveOrdersOnly('o')}`;
+    }
+    if (status) {
+      // "pending" tab shows both pending and processing (one in-progress tab)
+      if (status === 'pending') {
+        query += ' AND (o.status = ? OR o.status = ?)';
+        params.push('pending', 'processing');
+      } else {
+        query += ' AND o.status = ?';
+        params.push(status);
+      }
     }
   }
 
@@ -210,6 +220,7 @@ router.get('/dashboard-stats', requireBranchAccess(), async (req, res) => {
       COUNT(*) AS total_items
     FROM orders o
     WHERE 1=1
+    ${sqlActiveOrdersOnly('o')}
     ${branchFilter.clause}
   `;
 
@@ -251,6 +262,7 @@ router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
     JOIN customers c ON o.customer_id = c.id
     LEFT JOIN branches b ON o.branch_id = b.id
     WHERE o.status = 'ready'
+    ${sqlActiveOrdersOnly('o')}
     ${branchFilter.clause}
   `;
   
@@ -371,6 +383,34 @@ router.get('/receipt/:receiptNumber', requireBranchAccess(), async (req, res) =>
   } catch (err) {
     console.error('Error fetching order by receipt:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Void entire receipt — reverses payments, loyalty, and removes from cash totals (managers/admins)
+router.post('/receipt/:receiptNumber/void', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+  const { receiptNumber } = req.params;
+  const branchFilter = getBranchFilter(req, 'o');
+  const acknowledgeReconciledDay = req.body?.acknowledge_reconciled_day === true
+    || req.body?.acknowledge_reconciled_day === 'true'
+    || req.body?.acknowledge_reconciled_day === 1
+    || req.body?.acknowledge_reconciled_day === '1';
+
+  try {
+    const result = await voidReceiptByNumber(receiptNumber, {
+      voidReason: req.body?.void_reason || 'Voided by user',
+      voidedBy: req.user?.fullName || req.user?.username || 'User',
+      acknowledgeReconciledDay,
+      branchFilterClause: branchFilter.clause,
+      branchFilterParams: branchFilter.params
+    });
+    res.json(result);
+  } catch (err) {
+    if (err.status === 409 && err.code === 'reconciled_day') {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
+    const status = err.status || 500;
+    console.error('Error voiding receipt:', err);
+    res.status(status).json({ error: err.message || 'Failed to void receipt' });
   }
 });
 
@@ -862,17 +902,20 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
     // Verify user has access: match by branch, or allow orders with null branch_id (legacy) and assign to current branch
     const branchFilter = getBranchFilter(req, 'o');
     let order = await db.get(
-      `SELECT o.id, o.total_amount, o.paid_amount, o.branch_id FROM orders o WHERE o.id = ? ${branchFilter.clause}`,
+      `SELECT o.id, o.total_amount, o.paid_amount, o.branch_id, o.is_voided FROM orders o WHERE o.id = ? ${branchFilter.clause}`,
       [id, ...branchFilter.params]
     );
     if (!order && (branchFilter.clause || branchFilter.params?.length)) {
-      order = await db.get('SELECT id, total_amount, paid_amount, branch_id FROM orders WHERE id = ?', [id]);
+      order = await db.get('SELECT id, total_amount, paid_amount, branch_id, is_voided FROM orders WHERE id = ?', [id]);
       if (order && order.branch_id != null) {
         return res.status(403).json({ error: 'Order belongs to another branch. You can only update orders for your branch.' });
       }
     }
     if (!order) {
       return res.status(404).json({ error: 'Order not found or access denied' });
+    }
+    if (order.is_voided) {
+      return res.status(400).json({ error: 'Cannot update a voided order' });
     }
 
     // Cannot mark as collected without payment
@@ -1071,6 +1114,10 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
       return res.status(404).json({ error: 'Receipt not found' });
     }
 
+    if (allOrders.some((o) => o.is_voided)) {
+      return res.status(400).json({ error: 'This receipt has been voided and cannot be collected' });
+    }
+
     // Check if any order is already collected
     const alreadyCollected = allOrders.some(o => o.status === 'collected');
     if (alreadyCollected) {
@@ -1254,6 +1301,9 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
     
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
+    }
+    if (order.is_voided) {
+      return res.status(400).json({ error: 'Cannot receive payment for a voided receipt' });
     }
 
     // Load ALL orders for this receipt so we validate and apply at receipt level (single receipt = all items)

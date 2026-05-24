@@ -175,6 +175,7 @@ async function computeAndPersistDailySummary(date, branchId, force = false) {
     AND payment_method = 'cash'
     AND paid_amount > 0
     AND branch_id = ?
+    AND COALESCE(is_voided, FALSE) = FALSE
   `, [day, branchId]);
   const cashSales = num(cashSalesRow[0]?.cash_sales);
 
@@ -458,6 +459,7 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
         const cashSalesRow = await db.all(`
           SELECT SUM(paid_amount) as cash_sales FROM orders
           WHERE DATE(order_date) = ? AND payment_status = 'paid_full' AND payment_method = 'cash' AND paid_amount > 0 AND branch_id = ?
+          AND COALESCE(is_voided, FALSE) = FALSE
         `, [today, bid]);
     const cashSales = num(cashSalesRow[0]?.cash_sales);
         const { calculateBookSales } = require('../utils/cashValidation');
@@ -495,6 +497,7 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
       AND payment_method = 'cash'
       AND paid_amount > 0
       AND branch_id = ?
+      AND COALESCE(is_voided, FALSE) = FALSE
     `, [today, branchId]);
         const cashSales = num(cashSalesRow[0]?.cash_sales);
     const { calculateBookSales } = require('../utils/cashValidation');
@@ -676,6 +679,7 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
       AND payment_method = 'cash'
       AND paid_amount > 0
       AND branch_id = ?
+      AND COALESCE(is_voided, FALSE) = FALSE
     `, [today, branchId]);
     
     const cashSales = num(cashSalesRow[0]?.cash_sales);
