@@ -311,6 +311,7 @@ export const collectOrder = (receiptNumber, paymentData = {}) => api.post(`/orde
 export const receivePayment = (orderId, paymentData) => api.post(`/orders/${orderId}/receive-payment`, paymentData);
 export const voidOrderReceipt = (receiptNumber, data = {}) =>
   api.post(`/orders/receipt/${encodeURIComponent(receiptNumber)}/void`, data);
+export const archiveOldOrders = (data = {}) => api.post('/orders/archive-old', data);
 export async function getCollectionQueue(params = {}) {
   if (isOffline()) {
     try {

@@ -71,6 +71,7 @@ require('./database/ensurePayrollSchema');
 require('./database/ensureExpenseCategoriesSchema');
 require('./database/ensureCleaningSchema');
 require('./database/ensureOrderVoidSchema');
+require('./database/ensureOrderArchiveSchema');
 
 // Routes - with error handling
 try {

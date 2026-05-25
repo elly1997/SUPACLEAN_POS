@@ -9,6 +9,8 @@ import Loader from '../components/Loader';
 import { formatReceiptForDisplay } from '../utils/receiptId';
 import './Dashboard.css';
 
+const DASHBOARD_LIST_LIMIT = 100;
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
@@ -20,7 +22,6 @@ const Dashboard = () => {
   const [monthIncome, setMonthIncome] = useState(0);
   const [orderStats, setOrderStats] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
-  const [readyOrders, setReadyOrders] = useState([]);
   const [readyQueue, setReadyQueue] = useState([]); // Collection queue (grouped by receipt)
   const [loading, setLoading] = useState(true);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
@@ -64,14 +65,13 @@ const Dashboard = () => {
       const readyCustomer = readySearchTerm.trim() || undefined;
       const pendingCustomer = pendingSearchTerm.trim() || undefined;
       const monthStart = `${today.slice(0, 7)}-01`;
-      const [summaryRes, statsRes, pendingRes, readyRes, queueRes] = await Promise.all([
+      const [summaryRes, statsRes, pendingRes, queueRes, monthRes] = await Promise.all([
         getTodayCashSummary(),
         getOrderDashboardStats(),
-        getOrders({ status: 'pending', limit: 500, ...(pendingCustomer && { customer: pendingCustomer }) }),
-        getOrders({ status: 'ready', limit: 500, ...(readyCustomer && { customer: readyCustomer }) }),
-        getCollectionQueue({ limit: 500, ...(readyCustomer && { customer: readyCustomer }) })
+        getOrders({ status: 'pending', limit: DASHBOARD_LIST_LIMIT, ...(pendingCustomer && { customer: pendingCustomer }) }),
+        getCollectionQueue({ limit: DASHBOARD_LIST_LIMIT, ...(readyCustomer && { customer: readyCustomer }) }),
+        getCashSummaryRange(monthStart, today)
       ]);
-      const monthRes = await getCashSummaryRange(monthStart, today);
       const monthTotal = (Array.isArray(monthRes?.data) ? monthRes.data : []).reduce((acc, row) => (
         acc + (Number(row.cash_sales || 0) + Number(row.book_sales || 0) + Number(row.card_sales || 0) + Number(row.mobile_money_sales || 0))
       ), 0);
@@ -80,9 +80,8 @@ const Dashboard = () => {
       setMonthIncome(monthTotal);
       setOrderStats(statsRes.data || null);
       setPendingOrders(pendingRes.data || []);
-      setReadyOrders(readyRes.data || []);
       setReadyQueue(queueRes.data || []);
-      const synced = [summaryRes, pendingRes, readyRes, queueRes].find((r) => r.fromCache && r.syncedAt);
+      const synced = [summaryRes, pendingRes, queueRes].find((r) => r.fromCache && r.syncedAt);
       if (synced) setLastSyncedAt(synced.syncedAt); else setLastSyncedAt(null);
     } catch (error) {
       console.error('Error loading dashboard:', error);
@@ -92,20 +91,19 @@ const Dashboard = () => {
       }
       // Set empty arrays on error to prevent crashes
       setPendingOrders([]);
-      setReadyOrders([]);
       setReadyQueue([]);
       setOrderStats(null);
       setMonthIncome(0);
     } finally {
       setLoading(false);
     }
-  }, [today, readySearchTerm, pendingSearchTerm, selectedBranchId]);
+  }, [today, readySearchTerm, pendingSearchTerm, showToast]);
 
   useEffect(() => {
     loadDashboardData();
     const interval = setInterval(loadDashboardData, 30000); // Refresh every 30 seconds
     return () => clearInterval(interval);
-  }, [loadDashboardData]);
+  }, [loadDashboardData, selectedBranchId]);
 
   // Debounce search terms so we don't refetch on every keystroke
   useEffect(() => {
@@ -153,17 +151,6 @@ const Dashboard = () => {
   };
 
   const groupedPending = groupPendingByReceipt(pendingOrders);
-
-  const handleOrderStatusUpdate = async (orderId, newStatus) => {
-    try {
-      await updateOrderStatus(orderId, newStatus);
-      showToast(`Order marked as ${newStatus}`, 'success');
-      loadDashboardData();
-    } catch (error) {
-      const msg = error.response?.data?.error || error.message || 'Error updating order';
-      showToast(msg, 'error');
-    }
-  };
 
   // Update status for entire receipt (all line items) so one click = one receipt
   const handleReceiptStatusUpdate = async (receiptGroup, newStatus) => {

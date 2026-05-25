@@ -75,6 +75,13 @@ function initializeTables() {
     ready_date DATETIME,
     collected_date DATETIME,
     created_by TEXT,
+    is_voided INTEGER DEFAULT 0,
+    void_reason TEXT,
+    voided_by TEXT,
+    voided_at DATETIME,
+    archived_at DATETIME,
+    archived_by TEXT,
+    archive_reason TEXT,
     FOREIGN KEY (customer_id) REFERENCES customers(id),
     FOREIGN KEY (service_id) REFERENCES services(id)
   )`);
@@ -361,6 +368,12 @@ function createIndexes() {
     if (!err && columns.some(col => col.name === 'branch_id')) {
       db.run('CREATE INDEX IF NOT EXISTS idx_orders_branch_id ON orders(branch_id)');
     }
+    if (!err && columns.some(col => col.name === 'archived_at')) {
+      db.run('CREATE INDEX IF NOT EXISTS idx_orders_archived_at ON orders(archived_at)');
+      if (columns.some(col => col.name === 'status') && columns.some(col => col.name === 'branch_id')) {
+        db.run('CREATE INDEX IF NOT EXISTS idx_orders_branch_archived_status ON orders(branch_id, archived_at, status)');
+      }
+    }
   });
   
   console.log('✅ Database indexes created');
@@ -419,6 +432,15 @@ function migrateDatabase() {
       }
       if (!columnNames.includes('voided_at')) {
         migrations.push('ALTER TABLE orders ADD COLUMN voided_at DATETIME');
+      }
+      if (!columnNames.includes('archived_at')) {
+        migrations.push('ALTER TABLE orders ADD COLUMN archived_at DATETIME');
+      }
+      if (!columnNames.includes('archived_by')) {
+        migrations.push('ALTER TABLE orders ADD COLUMN archived_by TEXT');
+      }
+      if (!columnNames.includes('archive_reason')) {
+        migrations.push('ALTER TABLE orders ADD COLUMN archive_reason TEXT');
       }
       
       // Check and create loyalty tables if they don't exist

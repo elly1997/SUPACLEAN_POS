@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, receivePayment, sendCollectionReminder, voidOrderReceipt } from '../api/api';
+import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, receivePayment, sendCollectionReminder, voidOrderReceipt, archiveOldOrders } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
@@ -33,7 +33,7 @@ const ORDERS_EXPORT_COLUMNS = [
 const Orders = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
-  const { branch, selectedBranchId, hasPermission } = useAuth();
+  const { branch, selectedBranchId, hasPermission, isAdmin } = useAuth();
   const [listView, setListView] = useListViewPreference();
   const [orders, setOrders] = useState([]);
   const [filter, setFilter] = useState('all');
@@ -64,6 +64,7 @@ const Orders = () => {
   const [exporting, setExporting] = useState(false);
   const [exportingUncollected, setExportingUncollected] = useState(false);
   const [voidingReceipt, setVoidingReceipt] = useState(null);
+  const [archivingOldOrders, setArchivingOldOrders] = useState(false);
   const [showExportPopup, setShowExportPopup] = useState(false);
   const ordersSearchInputRef = useRef(null);
   const tableScrollHandlers = useHorizontalScrollRegion();
@@ -90,6 +91,7 @@ const Orders = () => {
       const params = { limit: ORDERS_PAGE_SIZE, offset };
       if (selectedBranchId) params.branch_id = selectedBranchId;
       if (statusFilter !== 'all') params.status = statusFilter;
+      if (statusFilter === 'archived') params.archived = 'true';
       if (f.customer) params.customer = f.customer;
       if (f.dateFrom) params.date_from = f.dateFrom;
       if (f.dateTo) params.date_to = f.dateTo;
@@ -403,6 +405,7 @@ const Orders = () => {
       case 'ready': return '#10b981';
       case 'collected': return '#6b7280';
       case 'voided': return '#dc2626';
+      case 'archived': return '#64748b';
       default: return '#6b7280';
     }
   };
@@ -672,10 +675,16 @@ Phone: ${receiptGroup.customer_phone}
       if (order.is_voided) {
         grouped[receiptNum].is_voided = true;
       }
+      if (order.archived_at) {
+        grouped[receiptNum].is_archived = true;
+        grouped[receiptNum].archived_at = order.archived_at;
+      }
 
       // Determine overall status (if all ready, show ready; if any pending, show pending; etc.)
       const statuses = grouped[receiptNum].items.map(o => o.status);
-      if (grouped[receiptNum].is_voided || statuses.every(s => s === 'voided')) {
+      if (grouped[receiptNum].is_archived) {
+        grouped[receiptNum].status = 'archived';
+      } else if (grouped[receiptNum].is_voided || statuses.every(s => s === 'voided')) {
         grouped[receiptNum].status = 'voided';
       } else if (statuses.every(s => s === 'ready')) {
         grouped[receiptNum].status = 'ready';
@@ -763,6 +772,42 @@ Phone: ${receiptGroup.customer_phone}
     }
   };
 
+  const handleArchiveOldOrders = async () => {
+    const monthsText = window.prompt('Archive collected/voided receipts older than how many months?', '7');
+    if (monthsText == null) return;
+    const months = Number(monthsText);
+    if (!Number.isFinite(months) || months < 1) {
+      showToast('Enter a valid number of months.', 'error');
+      return;
+    }
+
+    setArchivingOldOrders(true);
+    try {
+      const preview = await archiveOldOrders({ months, dry_run: true });
+      const receipts = Number(preview?.data?.receipts_matched || 0);
+      const items = Number(preview?.data?.items_matched || 0);
+      if (receipts === 0) {
+        showToast(`No completed receipts older than ${months} month(s) to archive.`, 'info');
+        return;
+      }
+      if (!window.confirm(
+        `Archive ${receipts.toLocaleString()} receipt(s) / ${items.toLocaleString()} item(s) older than ${months} month(s)?\n\nThey will leave active Orders, Dashboard and Collection views, but remain searchable in Archived.`
+      )) {
+        return;
+      }
+      const res = await archiveOldOrders({
+        months,
+        archive_reason: `Admin archived completed receipts older than ${months} months`
+      });
+      showToast(res?.data?.message || 'Old completed receipts archived', 'success');
+      loadOrders(false);
+    } catch (error) {
+      showToast('Archive failed: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setArchivingOldOrders(false);
+    }
+  };
+
   const handleExportUncollectedStock = async (format) => {
     setExportingUncollected(true);
     try {
@@ -791,11 +836,6 @@ Phone: ${receiptGroup.customer_phone}
   // Get consolidated orders
   const consolidatedOrders = groupOrdersByReceipt(orders);
   const canManageOrders = hasPermission('canManageOrders');
-
-  // Helper to get receipt group for a receipt number
-  const getReceiptGroup = (receiptNumber) => {
-    return consolidatedOrders.find(r => r.receipt_number === receiptNumber);
-  };
 
   return (
     <div className="orders-page">
@@ -832,9 +872,24 @@ Phone: ${receiptGroup.customer_phone}
       <div className="page-header-modern">
         <div>
           <h1>Orders</h1>
-          <p className="subtitle">View and manage all orders</p>
+          <p className="subtitle">
+            {filter === 'archived'
+              ? 'Viewing archived receipts kept for history and audit'
+              : 'View and manage all active orders'}
+          </p>
         </div>
         <div className="header-actions">
+          {isAdmin && (
+            <button
+              type="button"
+              className="dk-btn dk-btn--secondary dk-btn--md"
+              onClick={handleArchiveOldOrders}
+              disabled={archivingOldOrders}
+              title="Soft-archive old collected/voided receipts so active screens stay fast"
+            >
+              {archivingOldOrders ? 'Archiving…' : 'Archive Old'}
+            </button>
+          )}
           <button
             type="button"
             className="dk-btn dk-btn--secondary dk-btn--md"
@@ -886,7 +941,7 @@ Phone: ${receiptGroup.customer_phone}
           )}
         </div>
         <div className="orders-filters">
-          {['all', 'pending', 'ready', 'collected', 'voided'].map(status => (
+          {['all', 'pending', 'ready', 'collected', 'voided', 'archived'].map(status => (
               <button
               key={status}
               className={`filter-btn ${filter === status ? 'active' : ''}`}
@@ -1026,18 +1081,18 @@ Phone: ${receiptGroup.customer_phone}
                   <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Est: {formatDateTime(receiptGroup.estimated_collection_date)}</p>
                 </div>
                 <div className="orders-list-card-actions">
-                  {!receiptGroup.is_voided && (receiptGroup.status === 'pending' || receiptGroup.status === 'processing') ? (
+                  {!receiptGroup.is_archived && !receiptGroup.is_voided && (receiptGroup.status === 'pending' || receiptGroup.status === 'processing') ? (
                     <button className="btn-small btn-success" onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}>Mark Ready</button>
-                  ) : !receiptGroup.is_voided && receiptGroup.status === 'ready' ? (
+                  ) : !receiptGroup.is_archived && !receiptGroup.is_voided && receiptGroup.status === 'ready' ? (
                     <>
                       <button className="btn-small btn-warning" onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'collected')} disabled={balance > 0} title={balance > 0 ? 'Pay first' : 'Collect'}>Collect</button>
                       <button className="btn-small btn-secondary" onClick={() => receiptGroup.items.forEach(item => handleSendReminder(item.id))} disabled={sendingReminder !== null}>{sendingReminder ? '⏳' : '📱 Remind'}</button>
                     </>
                   ) : null}
-                  {!receiptGroup.is_voided && balance > 0 && (
+                  {!receiptGroup.is_archived && !receiptGroup.is_voided && balance > 0 && (
                     <button className="btn-small btn-primary" onClick={() => { setSelectedOrderForPayment({ ...receiptGroup.items[0], total_amount: receiptGroup.total_amount, paid_amount: receiptGroup.paid_amount }); setPaymentAmount(balance.toString()); setPaymentDate(todayYmd()); setShowReceivePaymentModal(true); }}>💰 Pay</button>
                   )}
-                  {canManageOrders && !receiptGroup.is_voided && (
+                  {canManageOrders && !receiptGroup.is_archived && !receiptGroup.is_voided && (
                     <button
                       className="btn-small btn-danger"
                       onClick={() => handleVoidReceipt(receiptGroup)}
@@ -1047,7 +1102,9 @@ Phone: ${receiptGroup.customer_phone}
                       {voidingReceipt === receiptGroup.receipt_number ? '⏳ Voiding…' : 'Void'}
                     </button>
                   )}
-                  <button className="btn-small btn-secondary" onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}>View</button>
+                  {!receiptGroup.is_archived && (
+                    <button className="btn-small btn-secondary" onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}>View</button>
+                  )}
                 </div>
               </div>
             );
@@ -1224,7 +1281,7 @@ Phone: ${receiptGroup.customer_phone}
                       </td>
                       <td>
                         <div className="action-buttons">
-                          {!receiptGroup.is_voided && receiptGroup.status === 'pending' && (
+                          {!receiptGroup.is_archived && !receiptGroup.is_voided && receiptGroup.status === 'pending' && (
                             <button
                               className="btn-small btn-success"
                               onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}
@@ -1233,7 +1290,7 @@ Phone: ${receiptGroup.customer_phone}
                               ✓ Mark as Ready
                             </button>
                           )}
-                          {!receiptGroup.is_voided && receiptGroup.status === 'processing' && (
+                          {!receiptGroup.is_archived && !receiptGroup.is_voided && receiptGroup.status === 'processing' && (
                             <button
                               className="btn-small btn-success"
                               onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}
@@ -1242,7 +1299,7 @@ Phone: ${receiptGroup.customer_phone}
                               Ready All
                             </button>
                           )}
-                          {!receiptGroup.is_voided && receiptGroup.status === 'ready' && (
+                          {!receiptGroup.is_archived && !receiptGroup.is_voided && receiptGroup.status === 'ready' && (
                             <>
                               <button
                                 className="btn-small btn-warning"
@@ -1267,7 +1324,7 @@ Phone: ${receiptGroup.customer_phone}
                               </button>
                             </>
                           )}
-                          {!receiptGroup.is_voided && balance > 0 && (
+                          {!receiptGroup.is_archived && !receiptGroup.is_voided && balance > 0 && (
                             <button
                               className="btn-small btn-primary"
                               onClick={() => {
@@ -1286,7 +1343,7 @@ Phone: ${receiptGroup.customer_phone}
                               💰 Pay
                             </button>
                           )}
-                          {canManageOrders && !receiptGroup.is_voided && (
+                          {canManageOrders && !receiptGroup.is_archived && !receiptGroup.is_voided && (
                             <button
                               className="btn-small btn-danger"
                               onClick={() => handleVoidReceipt(receiptGroup)}
@@ -1326,7 +1383,7 @@ Phone: ${receiptGroup.customer_phone}
                         <td style={{ fontSize: '13px' }}>TSh {item.total_amount.toLocaleString()}</td>
                         <td>
                           <div className="action-buttons">
-                            {(item.status === 'pending' || item.status === 'processing') && (
+                            {!item.archived_at && (item.status === 'pending' || item.status === 'processing') && (
                               <>
                                 {item.status === 'pending' && (
                                   <button
@@ -1346,7 +1403,7 @@ Phone: ${receiptGroup.customer_phone}
                                 )}
                               </>
                             )}
-                            {item.status === 'ready' && (
+                            {!item.archived_at && item.status === 'ready' && (
                               <button
                                 className="btn-small btn-warning"
                                 onClick={() => handleStatusUpdate(item.id, 'collected')}

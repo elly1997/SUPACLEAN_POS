@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/useToast';
 import {
@@ -8,6 +8,7 @@ import {
   deleteBankAccount,
 } from '../api/api';
 import Loader from '../components/Loader';
+import { Button, EmptyState, PageHeader, StatusBadge, SurfaceCard } from '../components/ui';
 import './AdminBanking.css';
 
 const AdminBanking = () => {
@@ -19,15 +20,7 @@ const AdminBanking = () => {
   const [editingAccount, setEditingAccount] = useState(null);
   const [form, setForm] = useState({ name: '', account_number: '', is_active: true });
 
-  useEffect(() => {
-    if (!isAdmin) {
-      showToast('Access denied. Admin privileges required.', 'error');
-      return;
-    }
-    loadAccounts();
-  }, [isAdmin, showToast]);
-
-  const loadAccounts = async () => {
+  const loadAccounts = useCallback(async () => {
     try {
       setLoading(true);
       const res = await getBankAccounts();
@@ -38,7 +31,15 @@ const AdminBanking = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [showToast]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      showToast('Access denied. Admin privileges required.', 'error');
+      return;
+    }
+    loadAccounts();
+  }, [isAdmin, loadAccounts, showToast]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -105,7 +106,10 @@ const AdminBanking = () => {
   if (!isAdmin) {
     return (
       <div className="admin-banking">
-        <p className="error-message">Access denied. Admin only.</p>
+        <EmptyState
+          title="Access denied"
+          description="Admin privileges are required to manage bank accounts."
+        />
       </div>
     );
   }
@@ -113,20 +117,18 @@ const AdminBanking = () => {
   return (
     <div className="admin-banking">
       <ToastContainer />
-      <div className="banking-header">
-        <h1>🏦 Banking</h1>
-        <p>Manage bank accounts. These appear in the dropdown when recording deposits in Cash Management.</p>
-      </div>
-
-      <div className="banking-actions">
-        <button type="button" className="dk-btn dk-btn--primary dk-btn--md" onClick={() => { setEditingAccount(null); setForm({ name: '', account_number: '', is_active: true }); setShowForm(true); }}>
-          + Add Bank Account
-        </button>
-      </div>
+      <PageHeader
+        title="Banking"
+        subtitle="Manage bank accounts. These appear in the dropdown when recording deposits in Cash Management."
+        actions={(
+          <Button variant="primary" onClick={() => { setEditingAccount(null); setForm({ name: '', account_number: '', is_active: true }); setShowForm(true); }}>
+            + Add Bank Account
+          </Button>
+        )}
+      />
 
       {showForm && (
-        <div className="banking-form-card">
-          <h2>{editingAccount ? 'Edit Bank Account' : 'New Bank Account'}</h2>
+        <SurfaceCard className="banking-form-card" title={editingAccount ? 'Edit Bank Account' : 'New Bank Account'}>
           <form onSubmit={handleSubmit}>
             <div className="form-group">
               <label>Bank / Account Name *</label>
@@ -160,19 +162,21 @@ const AdminBanking = () => {
               </div>
             )}
             <div className="form-actions">
-              <button type="submit" className="btn-primary">{editingAccount ? 'Update' : 'Add'}</button>
-              <button type="button" className="btn-secondary" onClick={handleCancelForm}>Cancel</button>
+              <Button type="submit" variant="primary">{editingAccount ? 'Update' : 'Add'}</Button>
+              <Button variant="secondary" onClick={handleCancelForm}>Cancel</Button>
             </div>
           </form>
-        </div>
+        </SurfaceCard>
       )}
 
-      <div className="banking-list-card">
-        <h2>Bank Accounts</h2>
+      <SurfaceCard className="banking-list-card" title="Bank Accounts">
         {loading ? (
           <Loader message="Loading…" fullPage={false} />
         ) : accounts.length === 0 ? (
-          <p className="empty-state">No bank accounts yet. Add one so they appear when recording deposits.</p>
+          <EmptyState
+            title="No bank accounts yet"
+            description="Add one so it appears when recording deposits."
+          />
         ) : (
           <ul className="bank-accounts-list">
             {accounts.map((acc) => (
@@ -180,17 +184,17 @@ const AdminBanking = () => {
                 <div className="account-info">
                   <strong>{acc.name}</strong>
                   {acc.account_number && <span className="account-number">{acc.account_number}</span>}
-                  {(acc.is_active === false || acc.is_active === 0) && <span className="badge inactive-badge">Inactive</span>}
+                  {(acc.is_active === false || acc.is_active === 0) && <StatusBadge tone="neutral">Inactive</StatusBadge>}
                 </div>
                 <div className="account-actions">
-                  <button type="button" className="btn-small btn-secondary" onClick={() => handleEdit(acc)}>Edit</button>
-                  <button type="button" className="btn-small btn-danger" onClick={() => handleDelete(acc)}>Delete</button>
+                  <Button size="sm" variant="secondary" onClick={() => handleEdit(acc)}>Edit</Button>
+                  <Button size="sm" variant="danger" onClick={() => handleDelete(acc)}>Delete</Button>
                 </div>
               </li>
             ))}
           </ul>
         )}
-      </div>
+      </SurfaceCard>
     </div>
   );
 };

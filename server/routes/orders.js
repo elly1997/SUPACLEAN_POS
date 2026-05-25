@@ -15,7 +15,7 @@ const { validatePayment } = require('../utils/paymentValidation');
 const { recordPaymentTransaction, logPaymentChange } = require('../utils/paymentTransactions');
 const { checkDuplicatePayment } = require('../utils/paymentTransactions');
 const { voidReceiptByNumber } = require('../utils/orderVoid');
-const { sqlActiveOrdersOnly } = require('../utils/orderVoidFilter');
+const { sqlActiveOrdersOnly, sqlUnarchivedOrdersOnly } = require('../utils/orderVoidFilter');
 const cashManagement = require('./cashManagement');
 const { assertNotFutureBusinessDate, getBusinessTodayYmd } = require('../utils/businessDate');
 const multer = require('multer');
@@ -96,7 +96,8 @@ router.get('/', requireBranchAccess(), async (req, res) => {
     limit: limitParam,
     offset: offsetParam,
     page,
-    include_voided
+    include_voided,
+    archived
   } = req.query;
   
   const branchFilter = getBranchFilter(req, 'o');
@@ -113,9 +114,15 @@ router.get('/', requireBranchAccess(), async (req, res) => {
   `;
   let params = [...branchFilter.params];
 
-  if (status === 'voided') {
+  const archivedOnly = archived === 'true' || status === 'archived';
+
+  if (archivedOnly) {
+    query += ' AND o.archived_at IS NOT NULL';
+  } else if (status === 'voided') {
     query += ' AND COALESCE(o.is_voided, FALSE) = TRUE';
+    query += ` ${sqlUnarchivedOrdersOnly('o')}`;
   } else {
+    query += ` ${sqlUnarchivedOrdersOnly('o')}`;
     if (include_voided !== 'true') {
       query += ` ${sqlActiveOrdersOnly('o')}`;
     }
@@ -221,6 +228,7 @@ router.get('/dashboard-stats', requireBranchAccess(), async (req, res) => {
     FROM orders o
     WHERE 1=1
     ${sqlActiveOrdersOnly('o')}
+    ${sqlUnarchivedOrdersOnly('o')}
     ${branchFilter.clause}
   `;
 
@@ -235,6 +243,68 @@ router.get('/dashboard-stats', requireBranchAccess(), async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching order dashboard stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Archive completed historical orders so active operational screens stay fast.
+// This is a soft archive: records remain available for audit/history and cash summaries.
+router.post('/archive-old', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admins can run order archive maintenance.' });
+  }
+
+  const monthsRaw = Number(req.body?.months ?? 7);
+  const months = Number.isFinite(monthsRaw) ? Math.max(1, Math.min(120, Math.round(monthsRaw))) : 7;
+  const dryRun = req.body?.dry_run === true || req.body?.dry_run === 'true';
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - months);
+  const cutoffIso = cutoff.toISOString();
+  const branchFilter = getBranchFilter(req);
+  const archiveReason = req.body?.archive_reason || `Auto-archived completed orders older than ${months} months`;
+  const archivedBy = req.user?.fullName || req.user?.username || 'Admin';
+
+  const whereClause = `
+    archived_at IS NULL
+    AND (
+      status = 'collected'
+      OR status = 'voided'
+      OR COALESCE(is_voided, FALSE) = TRUE
+    )
+    AND COALESCE(collected_date, voided_at, order_date) < ?
+    ${branchFilter.clause}
+  `;
+  const whereParams = [cutoffIso, ...branchFilter.params];
+
+  try {
+    const summary = await db.get(
+      `SELECT COUNT(*) AS items, COUNT(DISTINCT UPPER(receipt_number)) AS receipts
+       FROM orders
+       WHERE ${whereClause}`,
+      whereParams
+    );
+
+    if (!dryRun) {
+      await db.run(
+        `UPDATE orders
+         SET archived_at = CURRENT_TIMESTAMP,
+             archived_by = ?,
+             archive_reason = ?
+         WHERE ${whereClause}`,
+        [archivedBy, archiveReason, ...whereParams]
+      );
+    }
+
+    res.json({
+      message: dryRun ? 'Archive preview completed' : 'Old completed orders archived successfully',
+      dry_run: dryRun,
+      cutoff_date: cutoffIso.slice(0, 10),
+      months,
+      receipts_matched: Number(summary?.receipts || 0),
+      items_matched: Number(summary?.items || 0)
+    });
+  } catch (err) {
+    console.error('Error archiving old orders:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -263,6 +333,7 @@ router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
     LEFT JOIN branches b ON o.branch_id = b.id
     WHERE o.status = 'ready'
     ${sqlActiveOrdersOnly('o')}
+    ${sqlUnarchivedOrdersOnly('o')}
     ${branchFilter.clause}
   `;
   
@@ -902,11 +973,11 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
     // Verify user has access: match by branch, or allow orders with null branch_id (legacy) and assign to current branch
     const branchFilter = getBranchFilter(req, 'o');
     let order = await db.get(
-      `SELECT o.id, o.total_amount, o.paid_amount, o.branch_id, o.is_voided FROM orders o WHERE o.id = ? ${branchFilter.clause}`,
+      `SELECT o.id, o.total_amount, o.paid_amount, o.branch_id, o.is_voided, o.archived_at FROM orders o WHERE o.id = ? ${branchFilter.clause}`,
       [id, ...branchFilter.params]
     );
     if (!order && (branchFilter.clause || branchFilter.params?.length)) {
-      order = await db.get('SELECT id, total_amount, paid_amount, branch_id, is_voided FROM orders WHERE id = ?', [id]);
+      order = await db.get('SELECT id, total_amount, paid_amount, branch_id, is_voided, archived_at FROM orders WHERE id = ?', [id]);
       if (order && order.branch_id != null) {
         return res.status(403).json({ error: 'Order belongs to another branch. You can only update orders for your branch.' });
       }
@@ -916,6 +987,9 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
     }
     if (order.is_voided) {
       return res.status(400).json({ error: 'Cannot update a voided order' });
+    }
+    if (order.archived_at) {
+      return res.status(400).json({ error: 'Cannot update an archived order' });
     }
 
     // Cannot mark as collected without payment
@@ -1062,12 +1136,18 @@ router.put('/:id/estimated-collection-date', requireBranchAccess(), requirePermi
     // Verify user has access to this order
     const branchFilter = getBranchFilter(req, 'o');
     const order = await db.get(
-      `SELECT id FROM orders WHERE id = ? ${branchFilter.clause}`,
+      `SELECT o.id, o.is_voided, o.archived_at FROM orders o WHERE o.id = ? ${branchFilter.clause}`,
       [id, ...branchFilter.params]
     );
     
     if (!order) {
       return res.status(404).json({ error: 'Order not found or access denied' });
+    }
+    if (order.is_voided) {
+      return res.status(400).json({ error: 'Cannot update a voided order' });
+    }
+    if (order.archived_at) {
+      return res.status(400).json({ error: 'Cannot update an archived order' });
     }
 
     const result = await db.run(
@@ -1116,6 +1196,9 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
 
     if (allOrders.some((o) => o.is_voided)) {
       return res.status(400).json({ error: 'This receipt has been voided and cannot be collected' });
+    }
+    if (allOrders.some((o) => o.archived_at)) {
+      return res.status(400).json({ error: 'This receipt has been archived and cannot be collected' });
     }
 
     // Check if any order is already collected
@@ -1305,12 +1388,18 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
     if (order.is_voided) {
       return res.status(400).json({ error: 'Cannot receive payment for a voided receipt' });
     }
+    if (order.archived_at) {
+      return res.status(400).json({ error: 'Cannot receive payment for an archived receipt' });
+    }
 
     // Load ALL orders for this receipt so we validate and apply at receipt level (single receipt = all items)
     const allOrders = await db.all(
       `SELECT o.* FROM orders o WHERE o.receipt_number = ? ${branchFilter.clause} ORDER BY o.id`,
       [order.receipt_number, ...branchFilter.params]
     );
+    if (allOrders.some((o) => o.archived_at)) {
+      return res.status(400).json({ error: 'Cannot receive payment for an archived receipt' });
+    }
 
     const receiptTotal = roundFigure(allOrders.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0));
     const receiptPaid = roundFigure(allOrders.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0));
