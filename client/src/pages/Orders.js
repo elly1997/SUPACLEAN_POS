@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, receivePayment, sendCollectionReminder, voidOrderReceipt, archiveOldOrders } from '../api/api';
+import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, updateOrderCustomerPhone, receivePayment, sendCollectionReminder, voidOrderReceipt, archiveOldOrders } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
@@ -10,6 +10,7 @@ import Loader from '../components/Loader';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import { formatCustomerReceiptId, formatReceiptForDisplay } from '../utils/receiptId';
+import { isMissingCustomerPhone, formatCustomerPhoneDisplay } from '../utils/customerPhone';
 import './Orders.css';
 
 const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
@@ -41,6 +42,8 @@ const Orders = () => {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [editingDate, setEditingDate] = useState(null); // { orderId: number, value: string }
+  const [editingPhone, setEditingPhone] = useState(null); // { customerId, receiptNumber, value }
+  const [savingPhone, setSavingPhone] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showReceivePaymentModal, setShowReceivePaymentModal] = useState(false);
   const [selectedOrderForPayment, setSelectedOrderForPayment] = useState(null);
@@ -228,6 +231,101 @@ const Orders = () => {
     setEditingDate(null);
   };
 
+  const handleStartEditPhone = (customerId, receiptNumber) => {
+    setEditingPhone({ customerId, receiptNumber, value: '' });
+  };
+
+  const handleCancelEditPhone = () => {
+    setEditingPhone(null);
+  };
+
+  const handleSaveCustomerPhone = async () => {
+    if (!editingPhone?.customerId) return;
+    const trimmed = String(editingPhone.value || '').trim();
+    if (!trimmed) {
+      showToast('Enter a phone number', 'error');
+      return;
+    }
+    setSavingPhone(true);
+    try {
+      await updateOrderCustomerPhone(editingPhone.customerId, trimmed);
+      setOrders((prev) =>
+        prev.map((order) =>
+          order.customer_id === editingPhone.customerId
+            ? { ...order, customer_phone: trimmed }
+            : order
+        )
+      );
+      setEditingPhone(null);
+      showToast('Customer phone saved', 'success');
+    } catch (error) {
+      showToast('Error saving phone: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+
+  const renderCustomerPhoneCell = (receiptGroup) => {
+    const phoneMissing = isMissingCustomerPhone(receiptGroup.customer_phone);
+    const isEditing =
+      editingPhone &&
+      String(editingPhone.customerId) === String(receiptGroup.customer_id);
+
+    if (isEditing) {
+      return (
+        <div className="date-edit-controls" style={{ marginTop: '4px' }}>
+          <input
+            type="tel"
+            value={editingPhone.value}
+            onChange={(e) => setEditingPhone({ ...editingPhone, value: e.target.value })}
+            placeholder="Phone number"
+            className="date-edit-input"
+            autoFocus
+            disabled={savingPhone}
+          />
+          <div className="date-edit-buttons">
+            <button
+              type="button"
+              className="btn-small btn-success"
+              onClick={handleSaveCustomerPhone}
+              disabled={savingPhone}
+              title="Save phone"
+            >
+              {savingPhone ? '…' : '✓'}
+            </button>
+            <button
+              type="button"
+              className="btn-small btn-secondary"
+              onClick={handleCancelEditPhone}
+              disabled={savingPhone}
+              title="Cancel"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (phoneMissing) {
+      return hasPermission('canManageOrders') ? (
+        <button
+          type="button"
+          className="btn-small btn-secondary"
+          style={{ marginTop: '4px', fontSize: '11px' }}
+          onClick={() => handleStartEditPhone(receiptGroup.customer_id, receiptGroup.receipt_number)}
+          title="Add customer phone number"
+        >
+          + Add phone
+        </button>
+      ) : (
+        <span className="text-muted" style={{ fontSize: '12px' }}>No phone</span>
+      );
+    }
+
+    return <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)' }}>{receiptGroup.customer_phone}</span>;
+  };
+
   const handleReceivePaymentSubmit = async (e) => {
     e.preventDefault();
     if (!selectedOrderForPayment) return;
@@ -303,13 +401,30 @@ const Orders = () => {
     try {
       showToast('Uploading and processing stock file...', 'info');
       const res = await uploadStockExcel(formData);
-      showToast(`Successfully imported ${res.data.imported} orders! ${res.data.skipped > 0 ? `${res.data.skipped} skipped.` : ''}`, 'success');
-      if (res.data.errors && res.data.errors.length > 0) {
-        console.warn('Import errors:', res.data.errors);
+      const { imported = 0, skipped = 0, imported_without_phone: withoutPhone = 0, errors = [], message } = res.data || {};
+      const phoneNote =
+        withoutPhone > 0 ? ` ${withoutPhone} order(s) have no phone — add numbers on this screen.` : '';
+      const baseMsg =
+        message ||
+        `Imported ${imported} order(s).${skipped > 0 ? ` ${skipped} row(s) skipped.` : ''}${phoneNote}`;
+      const hasRowErrors = errors.length > 0;
+      showToast(baseMsg, imported > 0 ? (hasRowErrors || skipped > 0 ? 'warning' : 'success') : 'warning');
+      if (hasRowErrors) {
+        console.warn('Import row errors:', errors);
       }
-      loadOrders(false);
+      if (imported > 0) loadOrders(false);
     } catch (error) {
-      showToast('Error uploading file: ' + (error.response?.data?.error || error.message), 'error');
+      const data = error.response?.data;
+      if (data?.imported > 0) {
+        loadOrders(false);
+        showToast(
+          data.message || `Imported ${data.imported} order(s), but some rows failed.`,
+          'warning'
+        );
+        if (data.errors?.length) console.warn('Import errors:', data.errors);
+      } else {
+        showToast('Error uploading file: ' + (data?.error || error.message), 'error');
+      }
     } finally {
       // Reset file input
       e.target.value = '';
@@ -439,8 +554,9 @@ const Orders = () => {
       const branchLabel = firstOrder?.branch_name || (branch?.id === firstOrder?.branch_id ? branch?.name : null) || (firstOrder?.branch_id ? `Branch ID ${firstOrder.branch_id}` : null) || 'Arusha';
       const branchLine = (firstOrder?.branch_name || firstOrder?.branch_id) ? `Branch: ${branchLabel}\n` : '';
 
+      const displayPhone = formatCustomerPhoneDisplay(receiptGroup.customer_phone);
       const headerText = useCompact
-        ? `SUPACLEAN | ${branchLabel}\nReceipt: ${customerReceiptId} | ${dateStr}\n${estimatedCollectionDate}${receiptGroup.customer_name} | ${receiptGroup.customer_phone}\n`
+        ? `SUPACLEAN | ${branchLabel}\nReceipt: ${customerReceiptId} | ${dateStr}\n${estimatedCollectionDate}${receiptGroup.customer_name}${displayPhone !== 'No phone' ? ` | ${displayPhone}` : ''}\n`
         : `
 ═══════════════════════════════════
    Laundry & Dry Cleaning
@@ -451,8 +567,7 @@ Receipt No: ${customerReceiptId}
 ${branchLine}Date: ${dateStr}
 ${estimatedCollectionDate}
 Customer: ${receiptGroup.customer_name}
-Phone: ${receiptGroup.customer_phone}
-───────────────────────────────────
+${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}───────────────────────────────────
 `;
       const brandTitle = useCompact ? null : 'SUPACLEAN';
 
@@ -655,6 +770,7 @@ Phone: ${receiptGroup.customer_phone}
       if (!grouped[receiptNum]) {
         grouped[receiptNum] = {
           receipt_number: receiptNum,
+          customer_id: order.customer_id,
           customer_name: order.customer_name,
           customer_phone: order.customer_phone,
           order_date: order.order_date,
@@ -725,7 +841,7 @@ Phone: ${receiptGroup.customer_phone}
         branch_name: first?.branch_name ?? '',
         receipt_number: g.receipt_number ?? '',
         customer_name: g.customer_name ?? '',
-        customer_phone: g.customer_phone ?? '',
+        customer_phone: formatCustomerPhoneDisplay(g.customer_phone),
         total_amount: roundMoney(g.total_amount || 0),
         paid_amount: roundMoney(g.paid_amount || 0),
         outstanding,
@@ -900,7 +1016,7 @@ Phone: ${receiptGroup.customer_phone}
           >
             {(exporting || exportingUncollected) ? '…' : 'Export'}
           </button>
-          <label className="dk-btn dk-btn--secondary dk-btn--md" style={{ cursor: 'pointer' }} title="CUST ID / receipt encodes the receipt day. Paid = already paid when receipt was printed; items stay Ready until collected. See UPLOAD_STOCK_FORMAT.md">
+          <label className="dk-btn dk-btn--secondary dk-btn--md" style={{ cursor: 'pointer' }} title="CUST ID / receipt encodes the receipt day. Phone is optional — add missing numbers later on this screen. Paid = already paid when receipt was printed; items stay Ready until collected.">
             📦 Upload Stock Excel
             <input
               type="file"
@@ -1075,7 +1191,7 @@ Phone: ${receiptGroup.customer_phone}
                 </div>
                 <div className="orders-list-card-body">
                   <p><strong>{receiptGroup.customer_name}</strong></p>
-                  <p className="text-muted">{receiptGroup.customer_phone}</p>
+                  {renderCustomerPhoneCell(receiptGroup)}
                   <p>{itemCount} line(s) · TSh {receiptGroup.total_amount.toLocaleString()}</p>
                   <p>{balance > 0 ? <span style={{ color: 'var(--warning-color)', fontWeight: 'bold' }}>Balance TSh {balance.toLocaleString()}</span> : <span style={{ color: 'var(--success-color)' }}>Paid</span>}</p>
                   <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Est: {formatDateTime(receiptGroup.estimated_collection_date)}</p>
@@ -1173,7 +1289,7 @@ Phone: ${receiptGroup.customer_phone}
                       <td>
                         <div>
                           <strong>{receiptGroup.customer_name}</strong>
-                          <span>{receiptGroup.customer_phone}</span>
+                          {renderCustomerPhoneCell(receiptGroup)}
                         </div>
                       </td>
                       <td>
@@ -1316,8 +1432,12 @@ Phone: ${receiptGroup.customer_phone}
                                     handleSendReminder(item.id);
                                   });
                                 }}
-                                disabled={sendingReminder !== null}
-                                title="Send collection reminder"
+                                disabled={sendingReminder !== null || isMissingCustomerPhone(receiptGroup.customer_phone)}
+                                title={
+                                  isMissingCustomerPhone(receiptGroup.customer_phone)
+                                    ? 'Add a customer phone number first'
+                                    : 'Send collection reminder'
+                                }
                                 style={{ marginTop: '4px' }}
                               >
                                 {sendingReminder ? '⏳ Sending...' : '📱 Remind'}

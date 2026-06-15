@@ -18,6 +18,7 @@ const { voidReceiptByNumber } = require('../utils/orderVoid');
 const { sqlActiveOrdersOnly, sqlUnarchivedOrdersOnly } = require('../utils/orderVoidFilter');
 const cashManagement = require('./cashManagement');
 const { assertNotFutureBusinessDate, getBusinessTodayYmd } = require('../utils/businessDate');
+const { generatePlaceholderPhone, isPlaceholderPhone, normalizePhoneDigits, sanitizeImportPhone, resolveInsertId } = require('../utils/customerPhone');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 const fs = require('fs');
@@ -514,7 +515,7 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), a
     const customerPhone = first.customer_phone;
     const smsEnabled = first.sms_notifications_enabled !== 0;
 
-    if (!customerPhone) {
+    if (!customerPhone || isPlaceholderPhone(customerPhone)) {
       return res.status(400).json({ error: 'Customer has no phone number for SMS' });
     }
     if (!smsEnabled) {
@@ -1052,7 +1053,7 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
           // Check if customer has SMS notifications enabled (default to true if null)
           const smsEnabled = orderWithCustomer.sms_notifications_enabled !== 0;
           
-          if (smsEnabled && orderWithCustomer.customer_phone) {
+          if (smsEnabled && orderWithCustomer.customer_phone && !isPlaceholderPhone(orderWithCustomer.customer_phone)) {
             // Send one ready notification per receipt (not per item)
             const otherReadyItems = await db.get(
               `SELECT id
@@ -1541,6 +1542,57 @@ function addUtcDaysToOrderIso(orderDateIso, daysToAdd) {
   return d.toISOString();
 }
 
+// Add or update customer phone from Orders screen (managers with canManageOrders)
+router.patch('/customer/:customerId/phone', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+  const { customerId } = req.params;
+  const { phone } = req.body;
+
+  if (!phone || !String(phone).trim()) {
+    return res.status(400).json({ error: 'Phone number is required' });
+  }
+
+  const trimmedPhone = String(phone).trim();
+  if (isPlaceholderPhone(trimmedPhone)) {
+    return res.status(400).json({ error: 'Enter a valid phone number' });
+  }
+
+  try {
+    const customer = await db.get('SELECT id, name, phone FROM customers WHERE id = ?', [customerId]);
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
+    const normalized = normalizePhoneDigits(trimmedPhone);
+    const existing = await db.get(
+      `SELECT id FROM customers
+       WHERE id != ?
+         AND (
+           phone = ?
+           OR phone = ?
+           OR TRIM(phone) = ?
+           OR REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') = ?
+         )
+       LIMIT 1`,
+      [customerId, trimmedPhone, normalized, trimmedPhone, normalized.replace(/\D/g, '')]
+    );
+    if (existing) {
+      return res.status(400).json({ error: 'Phone number already in use by another customer' });
+    }
+
+    await db.run(
+      'UPDATE customers SET phone = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [trimmedPhone, customerId]
+    );
+
+    res.json({ message: 'Phone updated successfully', customer_id: Number(customerId), phone: trimmedPhone });
+  } catch (err) {
+    if (err.message && (err.message.includes('UNIQUE') || err.message.includes('customers_phone_key'))) {
+      return res.status(400).json({ error: 'Phone number already in use by another customer' });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Upload Excel file and import stock/orders
 router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('canManageOrders'), upload.single('file'), async (req, res) => {
   if (!req.file) {
@@ -1642,6 +1694,7 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
 
   let imported = 0;
   let skipped = 0;
+  let importedWithoutPhone = 0;
   const errors = [];
   let missingRequiredRows = 0;
   let processed = 0;
@@ -1658,15 +1711,21 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
     const payload = {
       imported,
       skipped,
+      imported_without_phone: importedWithoutPhone,
       total: data.length,
+      missing_required_rows: missingRequiredRows,
       errors: errors.slice(0, 20) // Limit errors to first 20
     };
 
-    if (missingRequiredRows > 0) {
+    if (imported === 0 && missingRequiredRows > 0) {
       return res.status(400).json({
-        error: `Upload failed for ${missingRequiredRows} row(s): missing required id/receipt or customer name`,
+        error: `Upload failed: ${missingRequiredRows} row(s) missing required id/receipt or customer name`,
         ...payload
       });
+    }
+
+    if (missingRequiredRows > 0 || skipped > 0) {
+      payload.message = `Imported ${imported} order(s)${importedWithoutPhone ? ` (${importedWithoutPhone} without phone — add numbers on Orders)` : ''}. ${skipped} row(s) skipped.`;
     }
 
     res.json(payload);
@@ -1725,7 +1784,7 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
           'Full Name'
         ) || ''
       ).trim();
-      const phone = String(
+      const phone = sanitizeImportPhone(
         getVal(
           'phone',
           'Phone',
@@ -1737,8 +1796,8 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
           'PHONE NO',
           'Phone No',
           'Phone number'
-        ) || ''
-      ).trim();
+        )
+      );
       const amountRaw = getVal(
         'amount',
         'Amount',
@@ -1811,19 +1870,24 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
         paymentStatus = isPaid ? 'paid_full' : 'not_paid';
       }
 
-      // Find or create customer
+      // Find or create customer (phone optional — can be added later on Orders screen)
       try {
-        let customer = await db.get('SELECT id FROM customers WHERE LOWER(name) = LOWER(?)', [customerName]);
+        let customer = await db.get('SELECT id, phone FROM customers WHERE LOWER(name) = LOWER(?)', [customerName]);
         let customerId = customer ? customer.id : null;
+        let customerPhoneAfter = phone || (customer ? customer.phone : '');
 
-        // If customer not found and phone is provided, create customer
-        if (!customerId && phone) {
+        if (!customerId) {
+          const phoneToStore = phone || generatePlaceholderPhone();
+          customerPhoneAfter = phoneToStore;
           try {
             const result = await db.run(
-              'INSERT INTO customers (name, phone) VALUES (?, ?) RETURNING id',
-              [customerName, phone]
+              'INSERT INTO customers (name, phone, primary_branch_id) VALUES (?, ?, ?) RETURNING id',
+              [customerName, phoneToStore, branchId]
             );
-            customerId = result.lastID;
+            customerId = resolveInsertId(result);
+            if (!customerId) {
+              throw new Error('Could not read new customer id from database');
+            }
           } catch (insertErr) {
             errors.push(`Row ${index + 2}: Error creating customer - ${insertErr.message}`);
             skipped++;
@@ -1834,8 +1898,37 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
             }
             continue;
           }
-        } else if (!customerId) {
-          errors.push(`Row ${index + 2}: Customer "${customerName}" not found and no phone provided`);
+        } else if (phone && isPlaceholderPhone(customer.phone)) {
+          try {
+            const normalized = normalizePhoneDigits(phone);
+            const phoneTaken = await db.get(
+              `SELECT id FROM customers
+               WHERE id != ?
+                 AND (
+                   phone = ?
+                   OR phone = ?
+                   OR TRIM(phone) = ?
+                 )
+               LIMIT 1`,
+              [customerId, phone, normalized, phone]
+            );
+            if (!phoneTaken) {
+              await db.run(
+                'UPDATE customers SET phone = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [phone, customerId]
+              );
+              customerPhoneAfter = phone;
+            }
+          } catch (updateErr) {
+            // Non-fatal: order can still import with placeholder phone
+            console.warn(`Row ${index + 2}: Could not update placeholder phone - ${updateErr.message}`);
+          }
+        } else if (customer) {
+          customerPhoneAfter = customer.phone;
+        }
+
+        if (!customerId) {
+          errors.push(`Row ${index + 2}: Could not resolve customer for "${customerName}"`);
           skipped++;
           processed++;
           if (processed === data.length) {
@@ -1895,6 +1988,7 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
           
           processed++;
           imported++;
+          if (isPlaceholderPhone(customerPhoneAfter)) importedWithoutPhone++;
 
         } catch (insertErr) {
           processed++;
@@ -1981,7 +2075,7 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
       return res.status(400).json({ error: 'SMS notifications are disabled for this customer' });
     }
     
-    if (!order.customer_phone) {
+    if (!order.customer_phone || isPlaceholderPhone(order.customer_phone)) {
       return res.status(400).json({ error: 'Customer phone number not available' });
     }
     

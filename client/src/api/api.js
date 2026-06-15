@@ -344,6 +344,8 @@ export const uploadStockExcel = (formData) =>
     },
     timeout: 300000 // 5 minutes
   });
+export const updateOrderCustomerPhone = (customerId, phone) =>
+  api.patch(`/orders/customer/${customerId}/phone`, { phone });
 export const getOrderItemPhotos = (orderId) => api.get('/order-item-photos', { params: { order_id: orderId } });
 export const uploadOrderItemPhoto = (orderId, file, caption) => {
   const fd = new FormData();
