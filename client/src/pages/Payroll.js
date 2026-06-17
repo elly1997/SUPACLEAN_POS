@@ -6,6 +6,7 @@ import {
   getPayrollHistory,
   getSavedMonthlyPayroll,
   getSalaryAdvances,
+  getBranchFeatures,
   reopenPayrollMonth,
   saveMonthlyPayroll,
   updatePayrollEmployee
@@ -66,11 +67,14 @@ const clampRate = (v, fallback = 10) => {
   return Math.max(0, Math.min(100, n));
 };
 
+const isFeatureEnabled = (value) => value === true || value === 1 || value === '1' || value === 't';
+
 const Payroll = () => {
-  const { hasPermission } = useAuth();
+  const { hasPermission, isAdmin, user, branch } = useAuth();
   const { showToast, ToastContainer } = useToast();
   const canManagePayroll = hasPermission('canManagePayroll');
   const canRecordAdvances = hasPermission('canRecordSalaryAdvances');
+  const [payrollFeatureEnabled, setPayrollFeatureEnabled] = useState(isAdmin ? true : null);
   const [activeStep, setActiveStep] = useState(canManagePayroll ? 'verification' : 'inputs');
   const [monthKey, setMonthKey] = useState(monthNow());
   const [employees, setEmployees] = useState([]);
@@ -136,7 +140,7 @@ const Payroll = () => {
   };
 
   const load = async () => {
-    if (!canManagePayroll && !canRecordAdvances) return;
+    if (!payrollFeatureEnabled || (!canManagePayroll && !canRecordAdvances)) return;
     setLoading(true);
     try {
       const calls = [];
@@ -168,8 +172,33 @@ const Payroll = () => {
   };
 
   useEffect(() => {
+    if (isAdmin) {
+      setPayrollFeatureEnabled(true);
+      return;
+    }
+    const branchId = user?.branchId ?? branch?.id;
+    if (!branchId) {
+      setPayrollFeatureEnabled(false);
+      return;
+    }
+    let cancelled = false;
+    getBranchFeatures(branchId)
+      .then((res) => {
+        if (cancelled) return;
+        const enabled = (res.data || []).some(
+          (f) => f.feature_key === 'payroll' && isFeatureEnabled(f.is_enabled)
+        );
+        setPayrollFeatureEnabled(enabled);
+      })
+      .catch(() => {
+        if (!cancelled) setPayrollFeatureEnabled(false);
+      });
+    return () => { cancelled = true; };
+  }, [isAdmin, user?.branchId, branch?.id]);
+
+  useEffect(() => {
     load();
-  }, [monthKey, canManagePayroll, canRecordAdvances]);
+  }, [monthKey, canManagePayroll, canRecordAdvances, payrollFeatureEnabled]);
 
   const employeeOptions = useMemo(() => employees.map((e) => ({ id: e.id, name: e.full_name })), [employees]);
   const filteredEmployees = useMemo(() => {
@@ -511,6 +540,19 @@ const Payroll = () => {
     if (!el) return;
     el.scrollBy({ left: delta, behavior: 'smooth' });
   };
+
+  if (payrollFeatureEnabled === null) {
+    return <div className="page-card"><h2>Payroll</h2><p>Loading…</p></div>;
+  }
+
+  if (!payrollFeatureEnabled) {
+    return (
+      <div className="page-card">
+        <h2>Payroll</h2>
+        <p>Payroll is not enabled for your branch. Ask an administrator to enable it under Admin → Branches → Privileges.</p>
+      </div>
+    );
+  }
 
   if (!canManagePayroll && !canRecordAdvances) {
     return <div className="page-card"><h2>Payroll</h2><p>You do not have payroll access.</p></div>;

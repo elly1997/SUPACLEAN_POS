@@ -68,8 +68,11 @@ const AdminBranches = () => {
     { key: 'reports_basic', label: 'Basic Reports', description: 'View sales and transaction reports' },
     { key: 'bank_deposits', label: 'Bank Deposits', description: 'Record bank deposits' },
     { key: 'service_management', label: 'Service Management', description: 'Manage services and items' },
-    { key: 'cleaning_services', label: 'Cleaning Services', description: 'Quotations, invoices, payments and expenses for cleaning (independent from laundry)' }
+    { key: 'cleaning_services', label: 'Cleaning Services', description: 'Quotations, invoices, payments and expenses for cleaning (independent from laundry)' },
+    { key: 'payroll', label: 'Payroll', description: 'Staff payroll, salary advances, payslips and payroll reports' }
   ];
+
+  const isFeatureEnabled = (value) => value === true || value === 1 || value === '1' || value === 't';
 
   useEffect(() => {
     if (!isAdmin) {
@@ -310,7 +313,7 @@ const AdminBranches = () => {
       // Create a map of all features with their enabled status
       const featuresMap = {};
       features.forEach(f => {
-        featuresMap[f.feature_key] = f.is_enabled;
+        featuresMap[f.feature_key] = isFeatureEnabled(f.is_enabled);
       });
       
       // Merge with available features to ensure all are shown
@@ -912,7 +915,7 @@ const AdminBranches = () => {
               <div className="features-list">
                 {availableFeatures.map(feature => {
                   const featureState = branchFeatures.find(f => f.feature_key === feature.key);
-                  const isEnabled = featureState?.is_enabled || false;
+                  const isEnabled = isFeatureEnabled(featureState?.is_enabled);
                   
                   return (
                     <div key={feature.key} className="feature-item">

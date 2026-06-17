@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
-const { authenticate, requireBranchAccess } = require('../middleware/auth');
+const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
-router.use(authenticate, requireBranchAccess());
+router.use(authenticate, requireBranchAccess(), requireBranchFeature('payroll'));
 
 function monthKeyOrNow(v) {
   if (v && /^\d{4}-\d{2}$/.test(String(v))) return String(v);

@@ -172,7 +172,9 @@ async function setDefaultFeatures(branchId, branchType) {
         { feature_key: 'order_processing', is_enabled: false },
         { feature_key: 'expenses', is_enabled: false },
         { feature_key: 'bank_deposits', is_enabled: false },
-        { feature_key: 'service_management', is_enabled: false }
+        { feature_key: 'service_management', is_enabled: false },
+        { feature_key: 'cleaning_services', is_enabled: false },
+        { feature_key: 'payroll', is_enabled: false }
       ]
     : [
         { feature_key: 'new_order', is_enabled: true },
@@ -184,7 +186,9 @@ async function setDefaultFeatures(branchId, branchType) {
         { feature_key: 'order_processing', is_enabled: true },
         { feature_key: 'expenses', is_enabled: true },
         { feature_key: 'bank_deposits', is_enabled: true },
-        { feature_key: 'service_management', is_enabled: true }
+        { feature_key: 'service_management', is_enabled: true },
+        { feature_key: 'cleaning_services', is_enabled: false },
+        { feature_key: 'payroll', is_enabled: true }
       ];
 
   for (const feature of defaultFeatures) {

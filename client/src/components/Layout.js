@@ -20,6 +20,8 @@ const Layout = ({ children }) => {
   // On back online, OfflineIndicator runs sync; we do not re-verify session here (avoids logout on 401 on Collection/Branches etc.)
   const handleBackOnline = useCallback(() => {}, []);
   const branchId = branch?.id ?? user?.branchId;
+  const featureBranchId = isAdmin ? (selectedBranchId ?? null) : branchId;
+  const adminViewsAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
   const [availableFeatures, setAvailableFeatures] = useState([]);
   const [branches, setBranches] = useState([]);
 
@@ -32,14 +34,14 @@ const Layout = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    if (branchId) {
-      fetchBranchFeatures(branchId);
-    } else if (isAdmin) {
-      setAvailableFeatures(['all']); // Admin sees all; no branch feature filter
+    if (featureBranchId) {
+      fetchBranchFeatures(featureBranchId);
+    } else if (adminViewsAllBranches) {
+      setAvailableFeatures(['all']);
     } else {
-      setAvailableFeatures([]); // Non-admin without branch: no features until loaded
+      setAvailableFeatures([]);
     }
-  }, [branchId, isAdmin]);
+  }, [featureBranchId, adminViewsAllBranches]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -75,7 +77,7 @@ const Layout = ({ children }) => {
   };
 
   const hasFeature = (featureKeyOrKeys) => {
-    if (isAdmin || availableFeatures.includes('all')) return true;
+    if (adminViewsAllBranches || availableFeatures.includes('all')) return true;
     if (Array.isArray(featureKeyOrKeys)) {
       return featureKeyOrKeys.some(key => availableFeatures.includes(key));
     }
@@ -115,7 +117,7 @@ const Layout = ({ children }) => {
       items: [
         { path: '/cash-management', label: 'Cash Management', icon: '💵', permission: 'canManageCash', feature: 'cash_management' },
         { path: '/expenses', label: 'Expenses', icon: '📝', permission: 'canManageExpenses', feature: 'expenses' },
-        { path: '/payroll', label: 'Payroll', icon: '👨‍💼', permission: ['canManagePayroll', 'canRecordSalaryAdvances'], feature: null },
+        { path: '/payroll', label: 'Payroll', icon: '👨‍💼', permission: ['canManagePayroll', 'canRecordSalaryAdvances'], feature: 'payroll' },
         { path: '/reports', label: 'Reports', icon: '📈', permission: 'canViewReports', feature: 'reports_basic' },
       ]
     },
@@ -134,7 +136,7 @@ const Layout = ({ children }) => {
   };
 
   const filterItem = (item) => {
-    if (isAdmin) return true;
+    if (item.feature === 'admin') return isAdmin;
     if (item.feature && !hasFeature(item.feature)) return false;
     if (item.permission && !hasAnyPermission(item.permission)) return false;
     return true;
