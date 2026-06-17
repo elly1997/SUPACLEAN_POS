@@ -28,7 +28,6 @@ const AdminBranches = () => {
   const [branchForm, setBranchForm] = useState({
     name: '',
     code: '',
-    receipt_prefix: '',
     branch_type: 'collection',
     address: '',
     phone: '',
@@ -189,7 +188,6 @@ const AdminBranches = () => {
     setBranchForm({
       name: branch.name || '',
       code: branch.code || '',
-      receipt_prefix: branch.receipt_prefix || '',
       branch_type: branch.branch_type || 'collection',
       address: branch.address || '',
       phone: branch.phone || '',
@@ -203,7 +201,6 @@ const AdminBranches = () => {
     setBranchForm({
       name: '',
       code: '',
-      receipt_prefix: '',
       branch_type: 'collection',
       address: '',
       phone: '',
@@ -444,19 +441,9 @@ const AdminBranches = () => {
                       value={branchForm.code}
                       onChange={(e) => setBranchForm({ ...branchForm, code: e.target.value.toUpperCase() })}
                       required
-                      placeholder="e.g., AR02"
+                      placeholder="e.g., UH, MN, GR"
                     />
-                  </div>
-                  <div className="form-group">
-                    <label>Receipt prefix</label>
-                    <input
-                      type="text"
-                      value={branchForm.receipt_prefix}
-                      onChange={(e) => setBranchForm({ ...branchForm, receipt_prefix: e.target.value.toUpperCase().slice(0, 6) })}
-                      placeholder="e.g., UH for UHURU, MN for MOSHONO"
-                      maxLength={6}
-                    />
-                    <small className="form-hint">Shown on customer receipts (e.g. UH 1-17-6). Each branch has its own daily sequence.</small>
+                    <small className="form-hint">Used on receipts as the branch prefix (e.g. UH 1-17-6). Each branch has its own daily sequence.</small>
                   </div>
                   <div className="form-group">
                     <label>Type *</label>

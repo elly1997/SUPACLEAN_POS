@@ -10,7 +10,7 @@ function parseReceiptNumber(receiptNumber) {
     .trim()
     .replace(/\s*\(\d{2}\)\s*$/, '')
     .trim();
-  const prefixed = strippedYear.match(/^([A-Za-z]{2,6})\s+(\d+)-(\d{1,2})-(\d{1,2})$/);
+  const prefixed = strippedYear.match(/^([A-Za-z0-9]{2,10})\s+(\d+)-(\d{1,2})-(\d{1,2})$/);
   if (prefixed) {
     return {
       prefix: prefixed[1].toUpperCase(),
@@ -45,17 +45,10 @@ function buildPrefixedReceiptNumber(prefix, sequence, day, month) {
 async function getBranchReceiptPrefix(branchId) {
   if (branchId == null || branchId === '') return null;
   try {
-    const row = await db.get(
-      'SELECT receipt_prefix, code, name FROM branches WHERE id = ?',
-      [branchId]
-    );
+    const row = await db.get('SELECT code, name FROM branches WHERE id = ?', [branchId]);
     if (!row) return null;
-    const explicit = String(row.receipt_prefix || '').trim();
-    if (explicit) return explicit.toUpperCase();
     const code = String(row.code || '').trim();
-    if (code.length >= 2 && code.length <= 4 && /^[A-Za-z0-9]+$/.test(code)) {
-      return code.toUpperCase();
-    }
+    if (code) return code.toUpperCase();
     const letters = String(row.name || '').replace(/[^A-Za-z]/g, '');
     return (letters.slice(0, 2) || 'BR').toUpperCase();
   } catch (e) {
@@ -192,7 +185,7 @@ function formatCustomerReceiptId(receiptNumber, itemCount = null, branchPrefix =
   let base = String(receiptNumber || '')
     .replace(/\s*\(\d{2}\)\s*$/, '')
     .trim();
-  const alreadyPrefixed = /^[A-Za-z]{2,6}\s+\d/.test(base);
+  const alreadyPrefixed = /^[A-Za-z0-9]{2,10}\s+\d/.test(base);
   if (!alreadyPrefixed && branchPrefix) {
     const p = String(branchPrefix).trim().toUpperCase();
     if (p) base = `${p} ${base}`;
@@ -204,7 +197,7 @@ function formatCustomerReceiptId(receiptNumber, itemCount = null, branchPrefix =
 
 function formatBranchReceiptLine(order) {
   const name = order?.branch_name;
-  const prefix = order?.branch_receipt_prefix || order?.branch_code;
+  const prefix = order?.branch_code;
   if (name && prefix) return `Branch: ${name} (${prefix})\n`;
   if (name) return `Branch: ${name}\n`;
   if (prefix) return `Branch ID: ${prefix}\n`;
@@ -256,7 +249,7 @@ async function generateReceiptQRCode(order, customer, service) {
         ? moment(order.estimated_collection_date).format('DD/MM/YYYY HH:mm')
         : '',
       branch: order.branch_name || null,
-      branchPrefix: order.branch_receipt_prefix || order.branch_code || null,
+      branchPrefix: order.branch_code || null,
     };
     const qrString = JSON.stringify(qrData);
     const qrCodeDataURL = await QRCode.toDataURL(qrString, {
@@ -288,7 +281,7 @@ async function formatReceiptAsync(order, customer, service) {
   const displayReceiptNo = formatCustomerReceiptId(
     order.receipt_number,
     null,
-    order.branch_receipt_prefix || order.branch_code
+    order.branch_code
   );
   const receipt = {
     text: `
@@ -333,7 +326,7 @@ function formatReceipt(order, customer, service) {
   const displayReceiptNo = formatCustomerReceiptId(
     order.receipt_number,
     null,
-    order.branch_receipt_prefix || order.branch_code
+    order.branch_code
   );
   const receipt = `
 ═══════════════════════════════════

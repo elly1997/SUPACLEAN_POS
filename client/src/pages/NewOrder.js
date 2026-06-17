@@ -824,7 +824,7 @@ const NewOrder = () => {
     const customerReceiptId = formatCustomerReceiptId(
       firstOrder?.receipt_number,
       totalReceiptItems,
-      firstOrder?.branch_receipt_prefix || firstOrder?.branch_code || branch?.receipt_prefix || branch?.code
+      firstOrder?.branch_code || branch?.code
     );
     const branchLabel =
       firstOrder?.branch_name ||
@@ -836,7 +836,6 @@ const NewOrder = () => {
         branch_name: branch?.name,
         branch_id: effectiveBranchId,
         branch_code: branch?.code,
-        branch_receipt_prefix: branch?.receipt_prefix,
       }
     );
 

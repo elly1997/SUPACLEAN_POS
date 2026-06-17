@@ -552,7 +552,7 @@ const Orders = () => {
       const customerReceiptId = formatCustomerReceiptId(
         receiptGroup.receipt_number,
         totalReceiptItems,
-        receiptGroup.branch_receipt_prefix || receiptGroup.branch_code
+        receiptGroup.branch_code
       );
       const firstOrder = receiptOrders[0];
       const branchLabel =
@@ -784,7 +784,6 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           branch_id: order.branch_id,
           branch_name: order.branch_name,
           branch_code: order.branch_code,
-          branch_receipt_prefix: order.branch_receipt_prefix,
           order_date: order.order_date,
           estimated_collection_date: order.estimated_collection_date,
           items: [],

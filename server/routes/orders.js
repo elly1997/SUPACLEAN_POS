@@ -115,8 +115,7 @@ router.get('/', requireBranchAccess(), async (req, res) => {
   let query = `
     SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
            b.name as branch_name,
-           b.code as branch_code,
-           b.receipt_prefix as branch_receipt_prefix
+           b.code as branch_code
     FROM orders o
     JOIN services s ON o.service_id = s.id
     JOIN customers c ON o.customer_id = c.id
@@ -331,7 +330,6 @@ router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
     SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
            b.name as branch_name,
            b.code as branch_code,
-           b.receipt_prefix as branch_receipt_prefix,
            CASE 
              WHEN o.estimated_collection_date IS NOT NULL AND o.estimated_collection_date < CURRENT_TIMESTAMP THEN 1
              ELSE 0
@@ -436,8 +434,7 @@ router.get('/receipt/:receiptNumber', requireBranchAccess(), async (req, res) =>
               c.name as customer_name, c.phone as customer_phone, c.email as customer_email,
               i.name as item_name, i.category as item_category,
               b.name as branch_name,
-              b.code as branch_code,
-              b.receipt_prefix as branch_receipt_prefix
+              b.code as branch_code
        FROM orders o
        JOIN services s ON o.service_id = s.id
        JOIN customers c ON o.customer_id = c.id
@@ -511,7 +508,7 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), a
       `SELECT o.*, s.name as service_name,
               c.id as customer_id, c.name as customer_name, c.phone as customer_phone,
               c.sms_notifications_enabled,
-              b.receipt_prefix as branch_receipt_prefix, b.code as branch_code
+              b.code as branch_code
        FROM orders o
        JOIN services s ON o.service_id = s.id
        JOIN customers c ON o.customer_id = c.id
@@ -555,7 +552,7 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), a
     const customerReceiptId = formatCustomerReceiptId(
       receiptNumber,
       totalReceiptItems,
-      first.branch_receipt_prefix || first.branch_code
+      first.branch_code
     );
     const message = generateOrderReceiptSms(
       customerReceiptId,
@@ -608,8 +605,7 @@ router.get('/search/customer', requireBranchAccess(), async (req, res) => {
     SELECT o.*, s.name as service_name, s.description as service_description,
            c.name as customer_name, c.phone as customer_phone, c.email as customer_email,
            b.name as branch_name,
-           b.code as branch_code,
-           b.receipt_prefix as branch_receipt_prefix
+           b.code as branch_code
     FROM orders o
     JOIN services s ON o.service_id = s.id
     JOIN customers c ON o.customer_id = c.id
@@ -879,14 +875,12 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
           const customer = await db.get('SELECT * FROM customers WHERE id = ?', [customer_id]);
           let branchName = null;
           let branchCode = null;
-          let branchReceiptPrefix = null;
           if (branchId) {
             const branchRow = await db
-              .get('SELECT name, code, receipt_prefix FROM branches WHERE id = ?', [branchId])
+              .get('SELECT name, code FROM branches WHERE id = ?', [branchId])
               .catch(() => null);
             branchName = branchRow?.name || null;
             branchCode = branchRow?.code || null;
-            branchReceiptPrefix = branchRow?.receipt_prefix || null;
           }
           const order = {
             id: orderId,
@@ -894,7 +888,6 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
             branch_id: branchId,
             branch_name: branchName,
             branch_code: branchCode,
-            branch_receipt_prefix: branchReceiptPrefix,
             customer_id,
             service_id,
             quantity: quantity || 1,

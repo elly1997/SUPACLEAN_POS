@@ -7,7 +7,7 @@ export function receiptQuantityTotal(ordersOrItems) {
 function branchPrefixFromContext(branchPrefix, ordersOrItems) {
   if (branchPrefix) return branchPrefix;
   const items = Array.isArray(ordersOrItems) ? ordersOrItems : [];
-  return items[0]?.branch_receipt_prefix || items[0]?.branch_code || null;
+  return items[0]?.branch_code || null;
 }
 
 /**
@@ -18,7 +18,7 @@ export function formatCustomerReceiptId(receiptNumber, itemCount = null, branchP
   let base = String(receiptNumber || '')
     .replace(/\s*\(\d{2}\)\s*$/, '')
     .trim();
-  const alreadyPrefixed = /^[A-Za-z]{2,6}\s+\d/.test(base);
+  const alreadyPrefixed = /^[A-Za-z0-9]{2,10}\s+\d/.test(base);
   if (!alreadyPrefixed && branchPrefix) {
     const p = String(branchPrefix).trim().toUpperCase();
     if (p) base = `${p} ${base}`;
@@ -37,7 +37,7 @@ export function formatReceiptForDisplay(receiptNumber, ordersOrItems, branchPref
 /** Branch line for printed receipts. */
 export function formatBranchReceiptLine(orderOrGroup) {
   const name = orderOrGroup?.branch_name;
-  const prefix = orderOrGroup?.branch_receipt_prefix || orderOrGroup?.branch_code;
+  const prefix = orderOrGroup?.branch_code;
   if (name && prefix) return `Branch: ${name} (${prefix})\n`;
   if (name) return `Branch: ${name}\n`;
   if (prefix) return `Branch ID: ${prefix}\n`;

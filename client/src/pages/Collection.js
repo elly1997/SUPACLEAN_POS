@@ -626,7 +626,7 @@ const Collection = () => {
     const customerReceiptId = formatCustomerReceiptId(
       mainOrder.receipt_number,
       totalReceiptItems,
-      mainOrder.branch_receipt_prefix || mainOrder.branch_code
+      mainOrder.branch_code
     );
     const branchLabel =
       mainOrder.branch_name ||
