@@ -9,7 +9,7 @@ import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
-import { formatCustomerReceiptId, formatReceiptForDisplay } from '../utils/receiptId';
+import { formatCustomerReceiptId, formatReceiptForDisplay, formatBranchReceiptLine } from '../utils/receiptId';
 import { isMissingCustomerPhone, formatCustomerPhoneDisplay } from '../utils/customerPhone';
 import './Orders.css';
 
@@ -549,10 +549,18 @@ const Orders = () => {
 
       const useCompact = receiptOrders.length > RECEIPT_COMPACT_THRESHOLD;
       const totalReceiptItems = receiptOrders.reduce((sum, order) => sum + (parseFloat(order?.quantity) || 1), 0);
-      const customerReceiptId = formatCustomerReceiptId(receiptGroup.receipt_number, totalReceiptItems);
+      const customerReceiptId = formatCustomerReceiptId(
+        receiptGroup.receipt_number,
+        totalReceiptItems,
+        receiptGroup.branch_receipt_prefix || receiptGroup.branch_code
+      );
       const firstOrder = receiptOrders[0];
-      const branchLabel = firstOrder?.branch_name || (branch?.id === firstOrder?.branch_id ? branch?.name : null) || (firstOrder?.branch_id ? `Branch ID ${firstOrder.branch_id}` : null) || 'Arusha';
-      const branchLine = (firstOrder?.branch_name || firstOrder?.branch_id) ? `Branch: ${branchLabel}\n` : '';
+      const branchLabel =
+        firstOrder?.branch_name ||
+        (branch?.id === firstOrder?.branch_id ? branch?.name : null) ||
+        (firstOrder?.branch_id ? `Branch ID ${firstOrder.branch_id}` : null) ||
+        'Arusha';
+      const branchLine = formatBranchReceiptLine(receiptGroup);
 
       const displayPhone = formatCustomerPhoneDisplay(receiptGroup.customer_phone);
       const headerText = useCompact
@@ -773,6 +781,10 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           customer_id: order.customer_id,
           customer_name: order.customer_name,
           customer_phone: order.customer_phone,
+          branch_id: order.branch_id,
+          branch_name: order.branch_name,
+          branch_code: order.branch_code,
+          branch_receipt_prefix: order.branch_receipt_prefix,
           order_date: order.order_date,
           estimated_collection_date: order.estimated_collection_date,
           items: [],

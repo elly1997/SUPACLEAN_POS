@@ -60,7 +60,7 @@ router.get('/:id', authenticate, async (req, res) => {
 
 // Create new branch (admin only)
 router.post('/', authenticate, requireRole('admin'), async (req, res) => {
-  const { name, code, branch_type, address, phone, manager_name } = req.body;
+  const { name, code, branch_type, address, phone, manager_name, receipt_prefix } = req.body;
 
   if (!name || !code || !branch_type) {
     return res.status(400).json({ error: 'Name, code, and branch_type are required' });
@@ -72,8 +72,8 @@ router.post('/', authenticate, requireRole('admin'), async (req, res) => {
 
   try {
     const result = await db.run(
-      'INSERT INTO branches (name, code, branch_type, address, phone, manager_name) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-      [name, code, branch_type, address || null, phone || null, manager_name || null]
+      'INSERT INTO branches (name, code, branch_type, address, phone, manager_name, receipt_prefix) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+      [name, code, branch_type, address || null, phone || null, manager_name || null, receipt_prefix ? String(receipt_prefix).trim().toUpperCase() : null]
     );
 
     const branchId = result.lastID;
@@ -100,12 +100,12 @@ router.post('/', authenticate, requireRole('admin'), async (req, res) => {
 // Update branch (admin only)
 router.put('/:id', authenticate, requireRole('admin'), async (req, res) => {
   const { id } = req.params;
-  const { name, code, branch_type, address, phone, manager_name, is_active } = req.body;
+  const { name, code, branch_type, address, phone, manager_name, is_active, receipt_prefix } = req.body;
 
   try {
     const result = await db.run(
-      'UPDATE branches SET name = $1, code = $2, branch_type = $3, address = $4, phone = $5, manager_name = $6, is_active = $7, updated_at = CURRENT_TIMESTAMP WHERE id = $8',
-      [name, code, branch_type, address, phone, manager_name, is_active !== undefined ? is_active : true, id]
+      'UPDATE branches SET name = $1, code = $2, branch_type = $3, address = $4, phone = $5, manager_name = $6, is_active = $7, receipt_prefix = $8, updated_at = CURRENT_TIMESTAMP WHERE id = $9',
+      [name, code, branch_type, address, phone, manager_name, is_active !== undefined ? is_active : true, receipt_prefix ? String(receipt_prefix).trim().toUpperCase() : null, id]
     );
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Branch not found' });

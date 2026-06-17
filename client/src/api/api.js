@@ -299,9 +299,12 @@ export const searchOrdersByCustomer = (params = {}) => api.get('/orders/search/c
 export const getReceiptQRCode = (receiptNumber) => api.get(`/orders/receipt/${receiptNumber}/qrcode`);
 export const getOrder = (id) => api.get(`/orders/${id}`);
 export const getOrderByReceipt = (receiptNumber) => api.get(`/orders/receipt/${receiptNumber}`);
-export const generateReceiptNumber = (forDate = null) =>
+export const generateReceiptNumber = (forDate = null, branchId = null) =>
   api.get('/orders/generate-receipt-number', {
-    params: forDate ? { for_date: forDate } : undefined
+    params: {
+      ...(forDate ? { for_date: forDate } : {}),
+      ...(branchId != null && branchId !== '' ? { branch_id: branchId } : {}),
+    },
   });
 export const createOrder = (data) => api.post('/orders', data);
 export const sendReceiptSms = (receiptNumber) => api.post(`/orders/receipt/${encodeURIComponent(receiptNumber)}/send-receipt-sms`);

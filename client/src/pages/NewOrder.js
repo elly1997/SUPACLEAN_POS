@@ -3,7 +3,7 @@ import { getServices, getItems, getCustomers, createCustomer, createOrder, getCu
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
-import { formatCustomerReceiptId } from '../utils/receiptId';
+import { formatCustomerReceiptId, formatBranchReceiptLine } from '../utils/receiptId';
 import { playSuccessSound } from '../utils/sound';
 import './NewOrder.css';
 
@@ -652,7 +652,7 @@ const NewOrder = () => {
       let sharedReceiptNumber = trimmedManualReceipt || null;
       if (!sharedReceiptNumber) {
         try {
-          const receiptRes = await generateReceiptNumber(selectedOrderDate.toISOString());
+          const receiptRes = await generateReceiptNumber(selectedOrderDate.toISOString(), effectiveBranchId);
           sharedReceiptNumber = receiptRes.data.receipt_number;
         } catch (error) {
           console.error('Error generating receipt number:', error);
@@ -730,7 +730,7 @@ const NewOrder = () => {
             orderPayload._retryAttempted = true;
             // Generate a new receipt number and update for remaining items
             try {
-              const newReceiptRes = await generateReceiptNumber(selectedOrderDate.toISOString());
+              const newReceiptRes = await generateReceiptNumber(selectedOrderDate.toISOString(), effectiveBranchId);
               sharedReceiptNumber = newReceiptRes.data.receipt_number;
               // Update receipt number for all remaining items
               for (let j = i; j < orderItems.length; j++) {
@@ -820,9 +820,25 @@ const NewOrder = () => {
 
     const useCompact = receipts.length > RECEIPT_COMPACT_THRESHOLD;
     const totalReceiptItems = receipts.reduce((sum, r) => sum + (parseFloat(r?.order?.quantity) || 1), 0);
-    const customerReceiptId = formatCustomerReceiptId(receipts[0]?.order?.receipt_number, totalReceiptItems);
-    const branchLabel = receipts[0]?.order?.branch_name || (branch?.id === receipts[0]?.order?.branch_id ? branch?.name : null) || (receipts[0]?.order?.branch_id ? `Branch ID ${receipts[0].order.branch_id}` : null) || 'Arusha';
-    const branchLine = (receipts[0]?.order?.branch_name || receipts[0]?.order?.branch_id) ? `Branch: ${branchLabel}\n` : '';
+    const firstOrder = receipts[0]?.order;
+    const customerReceiptId = formatCustomerReceiptId(
+      firstOrder?.receipt_number,
+      totalReceiptItems,
+      firstOrder?.branch_receipt_prefix || firstOrder?.branch_code || branch?.receipt_prefix || branch?.code
+    );
+    const branchLabel =
+      firstOrder?.branch_name ||
+      (branch?.id === firstOrder?.branch_id ? branch?.name : null) ||
+      (firstOrder?.branch_id ? `Branch ID ${firstOrder.branch_id}` : null) ||
+      'Arusha';
+    const branchLine = formatBranchReceiptLine(
+      firstOrder || {
+        branch_name: branch?.name,
+        branch_id: effectiveBranchId,
+        branch_code: branch?.code,
+        branch_receipt_prefix: branch?.receipt_prefix,
+      }
+    );
 
     const headerText = useCompact
       ? `SUPACLEAN | ${branchLabel}\nReceipt: ${customerReceiptId} | ${dateStr}\n${estimatedCollectionDate}${customer.name} | ${customer.phone}\n`

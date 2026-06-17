@@ -1,7 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
-const { generateReceiptNumber, calculateTotal, formatReceipt, formatReceiptAsync, generateReceiptQRCode, formatCustomerReceiptId } = require('../utils/receipt');
+const {
+  generateReceiptNumber,
+  calculateTotal,
+  formatReceipt,
+  formatReceiptAsync,
+  generateReceiptQRCode,
+  formatCustomerReceiptId,
+  parseReceiptNumber,
+  normalizeReceiptNumberForBranch,
+} = require('../utils/receipt');
 const {
   generateOrderReceiptSms,
   generateCollectionReminder,
@@ -105,7 +114,9 @@ router.get('/', requireBranchAccess(), async (req, res) => {
   
   let query = `
     SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
-           b.name as branch_name
+           b.name as branch_name,
+           b.code as branch_code,
+           b.receipt_prefix as branch_receipt_prefix
     FROM orders o
     JOIN services s ON o.service_id = s.id
     JOIN customers c ON o.customer_id = c.id
@@ -319,6 +330,8 @@ router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
   let query = `
     SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
            b.name as branch_name,
+           b.code as branch_code,
+           b.receipt_prefix as branch_receipt_prefix,
            CASE 
              WHEN o.estimated_collection_date IS NOT NULL AND o.estimated_collection_date < CURRENT_TIMESTAMP THEN 1
              ELSE 0
@@ -422,7 +435,9 @@ router.get('/receipt/:receiptNumber', requireBranchAccess(), async (req, res) =>
       `SELECT o.*, s.name as service_name, s.description as service_description,
               c.name as customer_name, c.phone as customer_phone, c.email as customer_email,
               i.name as item_name, i.category as item_category,
-              b.name as branch_name
+              b.name as branch_name,
+              b.code as branch_code,
+              b.receipt_prefix as branch_receipt_prefix
        FROM orders o
        JOIN services s ON o.service_id = s.id
        JOIN customers c ON o.customer_id = c.id
@@ -495,10 +510,12 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), a
     const allOrders = await db.all(
       `SELECT o.*, s.name as service_name,
               c.id as customer_id, c.name as customer_name, c.phone as customer_phone,
-              c.sms_notifications_enabled
+              c.sms_notifications_enabled,
+              b.receipt_prefix as branch_receipt_prefix, b.code as branch_code
        FROM orders o
        JOIN services s ON o.service_id = s.id
        JOIN customers c ON o.customer_id = c.id
+       LEFT JOIN branches b ON o.branch_id = b.id
        WHERE UPPER(o.receipt_number) = UPPER(?)
        ${branchFilter.clause}
        ORDER BY o.id`,
@@ -535,7 +552,11 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), a
 
     const estimatedDate = first.estimated_collection_date || null;
     const totalReceiptItems = allOrders.reduce((sum, row) => sum + (parseFloat(row.quantity) || 1), 0);
-    const customerReceiptId = formatCustomerReceiptId(receiptNumber, totalReceiptItems);
+    const customerReceiptId = formatCustomerReceiptId(
+      receiptNumber,
+      totalReceiptItems,
+      first.branch_receipt_prefix || first.branch_code
+    );
     const message = generateOrderReceiptSms(
       customerReceiptId,
       customerName,
@@ -586,7 +607,9 @@ router.get('/search/customer', requireBranchAccess(), async (req, res) => {
   let query = `
     SELECT o.*, s.name as service_name, s.description as service_description,
            c.name as customer_name, c.phone as customer_phone, c.email as customer_email,
-           b.name as branch_name
+           b.name as branch_name,
+           b.code as branch_code,
+           b.receipt_prefix as branch_receipt_prefix
     FROM orders o
     JOIN services s ON o.service_id = s.id
     JOIN customers c ON o.customer_id = c.id
@@ -623,14 +646,21 @@ router.get('/search/customer', requireBranchAccess(), async (req, res) => {
 });
 
 // Generate receipt number endpoint (for batch orders)
-router.get('/generate-receipt-number', async (req, res) => {
+router.get('/generate-receipt-number', requireBranchAccess(), async (req, res) => {
   try {
-    const { for_date } = req.query;
+    const { for_date, branch_id: branchIdParam } = req.query;
     const targetDate = for_date ? new Date(for_date) : new Date();
     if (Number.isNaN(targetDate.getTime())) {
       return res.status(400).json({ error: 'Invalid for_date. Use ISO date/time format.' });
     }
-    const receipt_number = await generateReceiptNumberPromise(targetDate);
+    const branchId =
+      branchIdParam != null && String(branchIdParam).trim() !== ''
+        ? parseInt(branchIdParam, 10)
+        : getEffectiveBranchId(req);
+    if (branchId == null) {
+      return res.status(400).json({ error: 'Select a branch to generate a receipt number' });
+    }
+    const receipt_number = await generateReceiptNumberPromise(targetDate, branchId);
     res.json({ receipt_number });
   } catch (err) {
     return res.status(500).json({ error: 'Error generating receipt number' });
@@ -684,9 +714,9 @@ router.get('/receipt/:receiptNumber/qrcode', async (req, res) => {
 });
 
 // Helper function to generate receipt number (uses async version directly)
-async function generateReceiptNumberPromise(targetDate = new Date()) {
+async function generateReceiptNumberPromise(targetDate = new Date(), branchId = null) {
   const { generateReceiptNumberAsync } = require('../utils/receipt');
-  return generateReceiptNumberAsync(targetDate);
+  return generateReceiptNumberAsync(targetDate, branchId);
 }
 
 // Create new order (cashiers, managers, and admins can create)
@@ -764,6 +794,11 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
 
     // Helper function to create order (with retry logic)
     const createOrder = async (receiptNumberToUse = null, retryCount = 0) => {
+      const orderBranchId =
+        req.user.role === 'admin'
+          ? branch_id || req.user?.branchId || null
+          : req.user?.branchId || null;
+
       // Use provided total_amount if available (for items with custom pricing), otherwise calculate it
       let final_total_amount = total_amount;
       if (final_total_amount === undefined || final_total_amount === null) {
@@ -793,9 +828,7 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
         // Insert order
         // For admins: use branch_id from request body if provided, otherwise use user's branchId
         // For regular users: use their branchId (requireBranchAccess ensures they have one)
-        const branchId = req.user.role === 'admin' 
-          ? (branch_id || req.user?.branchId || null)
-          : (req.user?.branchId || null);
+        const branchId = orderBranchId;
         
         console.log('Creating order with branchId:', branchId, 'for user:', req.user.username, 'role:', req.user.role);
         
@@ -845,15 +878,23 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
           // Get customer details for receipt
           const customer = await db.get('SELECT * FROM customers WHERE id = ?', [customer_id]);
           let branchName = null;
+          let branchCode = null;
+          let branchReceiptPrefix = null;
           if (branchId) {
-            const branchRow = await db.get('SELECT name FROM branches WHERE id = ?', [branchId]).catch(() => null);
+            const branchRow = await db
+              .get('SELECT name, code, receipt_prefix FROM branches WHERE id = ?', [branchId])
+              .catch(() => null);
             branchName = branchRow?.name || null;
+            branchCode = branchRow?.code || null;
+            branchReceiptPrefix = branchRow?.receipt_prefix || null;
           }
           const order = {
             id: orderId,
             receipt_number: finalReceiptNumber,
             branch_id: branchId,
             branch_name: branchName,
+            branch_code: branchCode,
+            branch_receipt_prefix: branchReceiptPrefix,
             customer_id,
             service_id,
             quantity: quantity || 1,
@@ -908,7 +949,7 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
             console.log(`Duplicate receipt number detected: ${finalReceiptNumber}. Retrying (attempt ${retryCount + 1}/5)...`);
             // Retry with a new receipt number
             try {
-              const newReceiptNumber = await generateReceiptNumberPromise(parsedOrderDate);
+              const newReceiptNumber = await generateReceiptNumberPromise(parsedOrderDate, orderBranchId);
               console.log(`Generated new receipt number for retry: ${newReceiptNumber}`);
               return createOrder(newReceiptNumber, retryCount + 1);
             } catch (receiptErr) {
@@ -944,7 +985,7 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
       } else {
         // Generate receipt number based on requested order date (for backdated orders)
         try {
-          const generatedReceiptNumber = await generateReceiptNumberPromise(parsedOrderDate);
+          const generatedReceiptNumber = await generateReceiptNumberPromise(parsedOrderDate, orderBranchId);
           await insertOrder(generatedReceiptNumber);
         } catch (receiptErr) {
           return res.status(500).json({ error: 'Error generating receipt number: ' + receiptErr.message });
@@ -1486,7 +1527,8 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
  * - Compact: {seq}-{DD}-{MM} e.g. 9-7-12 → 7 Dec (year inferred so cash reports stay sane)
  */
 function deriveOrderDateFromReceiptId(receiptId) {
-  const raw = String(receiptId || '').trim();
+  const parsed = parseReceiptNumber(receiptId);
+  const raw = parsed.core || String(receiptId || '').trim();
   if (!raw) return null;
   const withYear = raw.match(/^(\d+)-(\d{1,2})-(\d{1,2})\s*\((\d{2})\)\s*$/);
   if (withYear) {
@@ -1849,6 +1891,18 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
         if (processed === data.length) { sendResponse(); }
         continue;
       }
+
+      const normReceipt = await normalizeReceiptNumberForBranch(receiptId, branchId);
+      if (!normReceipt.ok) {
+        errors.push(`Row ${index + 2}: ${normReceipt.error}`);
+        skipped++;
+        processed++;
+        if (processed === data.length) {
+          sendResponse();
+        }
+        continue;
+      }
+      receiptId = normReceipt.receiptNumber;
 
       const finalTotalAmount = amount > 0 ? amount : 0;
       let paidAmount = 0;
