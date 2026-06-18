@@ -9,7 +9,10 @@ const {
   generateReceiptQRCode,
   formatCustomerReceiptId,
   parseReceiptNumber,
-  normalizeReceiptNumberForBranch,
+  getBranchReceiptPrefix,
+  buildPrefixedReceiptNumber,
+  allocateBranchReceiptSequence,
+  generateReceiptNumberAsync,
 } = require('../utils/receipt');
 const {
   generateOrderReceiptSms,
@@ -714,6 +717,241 @@ async function generateReceiptNumberPromise(targetDate = new Date(), branchId = 
   const { generateReceiptNumberAsync } = require('../utils/receipt');
   return generateReceiptNumberAsync(targetDate, branchId);
 }
+
+/**
+ * Create a multi-line receipt in one atomic request (one receipt number, all items).
+ * Prevents duplicate lines and wrong totals when several cashiers work at once.
+ */
+router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {
+  const moment = require('moment');
+  const client = await db.getPool().connect();
+  try {
+    const {
+      customer_id,
+      items,
+      order_date,
+      estimated_collection_date,
+      payment_status,
+      payment_method,
+      created_by,
+      branch_id,
+      receipt_number: manualReceipt,
+    } = req.body;
+
+    if (!customer_id) {
+      return res.status(400).json({ error: 'customer_id is required' });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items must be a non-empty array' });
+    }
+
+    const parsedOrderDate = order_date ? new Date(order_date) : new Date();
+    if (Number.isNaN(parsedOrderDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid order_date. Use ISO date/time format.' });
+    }
+    if (!assertNotFutureBusinessDate(parsedOrderDate, res, 'order_date')) {
+      return;
+    }
+    const finalOrderDateIso = parsedOrderDate.toISOString();
+    const day = String(parsedOrderDate.getDate()).padStart(2, '0');
+    const month = String(parsedOrderDate.getMonth() + 1).padStart(2, '0');
+    const dateStr = moment(parsedOrderDate).format('YYYY-MM-DD');
+
+    const orderBranchId =
+      req.user.role === 'admin'
+        ? branch_id || req.user?.branchId || null
+        : req.user?.branchId || null;
+
+    const customer = await db.get('SELECT * FROM customers WHERE id = ?', [customer_id]);
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
+    let branchName = null;
+    let branchCode = null;
+    if (orderBranchId) {
+      const branchRow = await db.get('SELECT name, code FROM branches WHERE id = ?', [orderBranchId]).catch(() => null);
+      branchName = branchRow?.name || null;
+      branchCode = branchRow?.code || null;
+    }
+
+    await client.query('BEGIN');
+
+    const trimmedManual = String(manualReceipt || '').trim();
+    let sharedReceiptNumber = trimmedManual || null;
+    if (!sharedReceiptNumber) {
+      const prefix = orderBranchId != null ? await getBranchReceiptPrefix(orderBranchId) : null;
+      const sequence = await allocateBranchReceiptSequence(
+        orderBranchId,
+        prefix,
+        day,
+        month,
+        dateStr,
+        client
+      );
+      sharedReceiptNumber =
+        prefix && orderBranchId != null
+          ? buildPrefixedReceiptNumber(prefix, sequence, day, month)
+          : `${sequence}-${day}-${month}`;
+    }
+
+    const results = [];
+    for (const line of items) {
+      const service_id = line.service_id;
+      if (!service_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Each item requires service_id' });
+      }
+
+      const serviceResult = await client.query('SELECT * FROM services WHERE id = $1', [service_id]);
+      const service = serviceResult.rows[0];
+      if (!service) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: `Service not found: ${service_id}` });
+      }
+
+      let expressMultiplier = line.express_surcharge_multiplier || 0;
+      const delivery_type = line.delivery_type || 'standard';
+      if (delivery_type && !expressMultiplier) {
+        const settingsResult = await client.query(
+          `SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('express_same_day_multiplier', 'express_next_day_multiplier')`
+        );
+        const settings = settingsResult.rows || [];
+        if (delivery_type === 'same_day') {
+          const setting = settings.find((s) => s.setting_key === 'express_same_day_multiplier');
+          expressMultiplier = setting ? parseFloat(setting.setting_value) : 2;
+        } else if (delivery_type === 'next_day') {
+          const setting = settings.find((s) => s.setting_key === 'express_next_day_multiplier');
+          expressMultiplier = setting ? parseFloat(setting.setting_value) : 3;
+        }
+      }
+
+      let final_total_amount = line.total_amount;
+      if (final_total_amount === undefined || final_total_amount === null) {
+        final_total_amount = calculateTotal(
+          service,
+          line.quantity || 1,
+          line.weight_kg || 0,
+          delivery_type,
+          expressMultiplier
+        );
+      } else {
+        final_total_amount = parseFloat(final_total_amount) || 0;
+      }
+
+      const linePaid = line.paid_amount !== undefined ? parseFloat(line.paid_amount) || 0 : 0;
+      const linePaymentStatus = line.payment_status || payment_status || 'not_paid';
+      const linePaymentMethod = line.payment_method || payment_method || 'cash';
+
+      const validation = validatePayment(
+        {
+          paid_amount: linePaid,
+          payment_status: linePaymentStatus,
+          payment_method: linePaymentMethod,
+        },
+        final_total_amount
+      );
+      if (!validation.valid) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: validation.error });
+      }
+
+      const insertResult = await client.query(
+        `INSERT INTO orders (
+          receipt_number, customer_id, service_id, quantity, weight_kg, color, garment_type,
+          special_instructions, delivery_type, express_surcharge_multiplier, total_amount,
+          paid_amount, payment_status, payment_method, created_by, order_date,
+          estimated_collection_date, branch_id
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        RETURNING id`,
+        [
+          sharedReceiptNumber,
+          customer_id,
+          service_id,
+          line.quantity || 1,
+          line.weight_kg || null,
+          line.color || null,
+          line.garment_type || null,
+          line.special_instructions || null,
+          delivery_type,
+          expressMultiplier,
+          final_total_amount,
+          linePaid,
+          linePaymentStatus,
+          linePaymentMethod,
+          created_by || null,
+          finalOrderDateIso,
+          estimated_collection_date || null,
+          orderBranchId,
+        ]
+      );
+
+      const orderId = insertResult.rows[0].id;
+      const order = {
+        id: orderId,
+        receipt_number: sharedReceiptNumber,
+        branch_id: orderBranchId,
+        branch_name: branchName,
+        branch_code: branchCode,
+        customer_id,
+        service_id,
+        quantity: line.quantity || 1,
+        weight_kg: line.weight_kg || null,
+        color: line.color || null,
+        garment_type: line.garment_type || null,
+        special_instructions: line.special_instructions || null,
+        delivery_type,
+        express_surcharge_multiplier: expressMultiplier,
+        total_amount: final_total_amount,
+        paid_amount: linePaid,
+        payment_status: linePaymentStatus,
+        payment_method: linePaymentMethod,
+        status: 'pending',
+        order_date: finalOrderDateIso,
+        estimated_collection_date: estimated_collection_date || null,
+      };
+
+      if (linePaid > 0 && linePaymentStatus === 'advance') {
+        recordPaymentTransaction(order, linePaid, linePaymentMethod, created_by || 'System').catch((err) => {
+          console.error('Error recording payment transaction (batch):', err);
+        });
+      }
+
+      logPaymentChange({
+        order_id: orderId,
+        action: 'created',
+        new_payment_status: linePaymentStatus,
+        new_paid_amount: linePaid,
+        new_payment_method: linePaymentMethod,
+        changed_by: created_by || 'System',
+        notes: 'Order created (batch)',
+      }).catch((err) => {
+        console.error('Error logging payment change (batch):', err);
+      });
+
+      results.push({
+        order,
+        receipt: formatReceipt(order, customer, service),
+        customer,
+        service,
+      });
+    }
+
+    await client.query('COMMIT');
+    res.json({
+      receipt_number: sharedReceiptNumber,
+      items: results,
+    });
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {}
+    console.error('POST /api/orders/batch error:', err);
+    res.status(500).json({ error: err.message || 'Failed to create batch order' });
+  } finally {
+    client.release();
+  }
+});
 
 // Create new order (cashiers, managers, and admins can create)
 router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {

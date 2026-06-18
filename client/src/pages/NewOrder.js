@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { getServices, getItems, getCustomers, createCustomer, createOrder, getCustomerOrders, getSettings, generateReceiptNumber, sendReceiptSms } from '../api/api';
+import { getServices, getItems, getCustomers, createCustomer, createOrderBatch, getCustomerOrders, getSettings, sendReceiptSms } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
@@ -173,6 +173,7 @@ const NewOrder = () => {
   const [itemSearchTerm, setItemSearchTerm] = useState('');
   const searchInputRef = useRef(null);
   const itemSearchInputRef = useRef(null);
+  const isSubmittingRef = useRef(false);
 
   // Define all callbacks before using them in useEffect hooks
   const loadServices = useCallback(async () => {
@@ -490,21 +491,25 @@ const NewOrder = () => {
   }, [services, itemSearchTerm]);
 
   const handleServiceClick = (service) => {
-    // Check if this service already exists in cart (same service, same delivery type, no weight or same weight)
-    const existingItemIndex = orderItems.findIndex(
-      item => item.service_id === service.id && 
-      item.delivery_type === defaultDeliveryType &&
-      (!service.price_per_kg || (item.weight_kg === '' || (!item.weight_kg && !service.price_per_kg > 0)))
-    );
+    if (loading || isSubmittingRef.current) return;
+    setOrderItems((prev) => {
+      const existingItemIndex = prev.findIndex(
+        (item) =>
+          item.service_id === service.id &&
+          item.delivery_type === defaultDeliveryType &&
+          (!service.price_per_kg || item.weight_kg === '' || (!item.weight_kg && !(service.price_per_kg > 0)))
+      );
 
-    if (existingItemIndex >= 0) {
-      // Increment quantity of existing item
-      const updatedItems = [...orderItems];
-      updatedItems[existingItemIndex].quantity += 1;
-      setOrderItems(updatedItems);
-      showToast(`${service.name} quantity increased`, 'success');
-    } else {
-      // Express service type forces same-day delivery; price 2x is applied in calculateTotal
+      if (existingItemIndex >= 0) {
+        const updatedItems = [...prev];
+        updatedItems[existingItemIndex] = {
+          ...updatedItems[existingItemIndex],
+          quantity: updatedItems[existingItemIndex].quantity + 1,
+        };
+        showToast(`${service.name} quantity increased`, 'success');
+        return updatedItems;
+      }
+
       const deliveryType = selectedServiceType === 'express' ? 'same_day' : defaultDeliveryType;
       let expressMultiplier = 0;
       if (selectedServiceType !== 'express' && deliveryType === 'same_day') {
@@ -514,7 +519,7 @@ const NewOrder = () => {
       }
 
       const newItem = {
-        id: Date.now(),
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         service_id: service.id,
         service_name: service.name,
         service_type: selectedServiceType,
@@ -525,13 +530,13 @@ const NewOrder = () => {
         delivery_type: deliveryType,
         express_surcharge_multiplier: expressMultiplier,
         manual_line_total: '',
-        manual_price_enabled: false
+        manual_price_enabled: false,
       };
-      
-      setOrderItems([...orderItems, newItem]);
+
       pushRecent('service', service.id);
       showToast(`${service.name} added to order`, 'success');
-    }
+      return [...prev, newItem];
+    });
   };
 
   const handleUpdateItem = useCallback((itemId, updates) => {
@@ -622,6 +627,8 @@ const NewOrder = () => {
   };
 
   const handleConfirmOrderSubmit = async () => {
+    if (isSubmittingRef.current || loading) return;
+    isSubmittingRef.current = true;
     setShowConfirmOrderModal(false);
     setLoading(true);
     try {
@@ -648,21 +655,7 @@ const NewOrder = () => {
         throw new Error('Manual receipt ID is required for backdated orders.');
       }
 
-      // Generate receipt number once for all items in this order (unless cashier entered one)
-      let sharedReceiptNumber = trimmedManualReceipt || null;
-      if (!sharedReceiptNumber) {
-        try {
-          const receiptRes = await generateReceiptNumber(selectedOrderDate.toISOString(), effectiveBranchId);
-          sharedReceiptNumber = receiptRes.data.receipt_number;
-        } catch (error) {
-          console.error('Error generating receipt number:', error);
-          throw new Error('Failed to generate receipt number: ' + (error.response?.data?.error || error.message || 'Network Error'));
-        }
-      }
-      
-      // Create order for each item (all sharing the same receipt number)
-      // Process sequentially to avoid race conditions
-      const receipts = [];
+      // Allocate receipt number and insert all lines in one server request
       const preDiscountLineTotals = orderItems.map((item) => {
         const service = services.find((s) => s.id === item.service_id);
         return Math.max(0, calculateLineTotal(item, service));
@@ -682,19 +675,15 @@ const NewOrder = () => {
           }
         }
       }
-      for (let i = 0; i < orderItems.length; i++) {
-        const item = orderItems[i];
+      const batchItems = orderItems.map((item, i) => {
         const itemTotal = lineTotals[i];
-
-        // Distribute payment proportionally if multiple items
-        const itemPayment = orderItems.length > 1 
-          ? (payableTotal > 0 ? (paidAmount * (itemTotal / payableTotal)) : 0)
-          : paidAmount;
-
-        const orderPayload = {
-          customer_id: selectedCustomer.id,
+        const itemPayment =
+          orderItems.length > 1
+            ? (payableTotal > 0 ? paidAmount * (itemTotal / payableTotal) : 0)
+            : paidAmount;
+        return {
           service_id: item.service_id || (services[0]?.id || 1),
-          quantity: parseInt(item.quantity),
+          quantity: parseInt(item.quantity, 10),
           weight_kg: item.weight_kg ? parseFloat(item.weight_kg) : null,
           color: item.color || null,
           garment_type: item.item_name || item.service_name || null,
@@ -705,53 +694,25 @@ const NewOrder = () => {
           paid_amount: itemPayment,
           payment_status: orderData.payment_status,
           payment_method: orderData.payment_method,
-          created_by: 'Cashier',
-          receipt_number: sharedReceiptNumber,
-          order_date: selectedOrderDate.toISOString(),
-          estimated_collection_date: estimatedCollectionDate ? new Date(estimatedCollectionDate).toISOString() : null,
-          ...(effectiveBranchId ? { branch_id: effectiveBranchId } : {})
         };
-        
-        try {
-          const res = await createOrder(orderPayload);
-          receipts.push(res.data);
-          // Brief delay between orders to avoid race conditions (only if multiple items)
-          if (i < orderItems.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 50));
-          }
-        } catch (error) {
-          // If error is about duplicate receipt number, generate a new one and retry
-          // BUT only retry once to prevent infinite loops
-          const errorMessage = error.response?.data?.error || error.message || '';
-          if ((errorMessage.includes('UNIQUE constraint failed') || errorMessage.includes('SQLITE_CONSTRAINT')) && 
-              (errorMessage.includes('receipt_number') || errorMessage.includes('receipt')) &&
-              !orderPayload._retryAttempted) { // Add a flag to prevent infinite retries
-            // Mark that we've tried to retry
-            orderPayload._retryAttempted = true;
-            // Generate a new receipt number and update for remaining items
-            try {
-              const newReceiptRes = await generateReceiptNumber(selectedOrderDate.toISOString(), effectiveBranchId);
-              sharedReceiptNumber = newReceiptRes.data.receipt_number;
-              // Update receipt number for all remaining items
-              for (let j = i; j < orderItems.length; j++) {
-                // This will be used for subsequent items
-              }
-              // Retry this item with new receipt number
-              orderPayload.receipt_number = sharedReceiptNumber;
-              const retryRes = await createOrder(orderPayload);
-              receipts.push(retryRes.data);
-            } catch (retryError) {
-              console.error('Retry failed:', retryError);
-              throw retryError; // Re-throw if retry also fails
-            }
-          } else {
-            throw error; // Re-throw if it's a different error or already retried
-          }
-        }
-      }
+      });
+
+      const batchRes = await createOrderBatch({
+        customer_id: selectedCustomer.id,
+        items: batchItems,
+        order_date: selectedOrderDate.toISOString(),
+        estimated_collection_date: estimatedCollectionDate ? new Date(estimatedCollectionDate).toISOString() : null,
+        payment_status: orderData.payment_status,
+        payment_method: orderData.payment_method,
+        created_by: 'Cashier',
+        receipt_number: trimmedManualReceipt || undefined,
+        ...(effectiveBranchId ? { branch_id: effectiveBranchId } : {}),
+      });
+
+      const receipts = batchRes.data?.items || [];
 
       if (receipts.length > 0) {
-        const receiptNumberForSms = receipts[0].order.receipt_number;
+        const receiptNumberForSms = batchRes.data?.receipt_number || receipts[0].order.receipt_number;
         // Receipt SMS is built on the server from the receipt number — do not tie it to print success.
         const queueReceiptSms = () => {
           sendReceiptSms(receiptNumberForSms).catch((err) => {
@@ -800,6 +761,7 @@ const NewOrder = () => {
       showToast('Error creating order: ' + detailedError, 'error');
     } finally {
       setLoading(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -1136,21 +1098,24 @@ Phone: ${customer.phone}
   };
 
   const handleItemClick = (item) => {
-    // Check if this item already exists in cart (same item, same delivery type)
-    const existingItemIndex = orderItems.findIndex(
-      orderItem => orderItem.item_id === item.id && 
-      orderItem.delivery_type === defaultDeliveryType
-    );
+    if (loading || isSubmittingRef.current) return;
+    setOrderItems((prev) => {
+      const existingItemIndex = prev.findIndex(
+        (orderItem) =>
+          orderItem.item_id === item.id && orderItem.delivery_type === defaultDeliveryType
+      );
 
-    if (existingItemIndex >= 0) {
-      // Increment quantity of existing item
-      const updatedItems = [...orderItems];
-      updatedItems[existingItemIndex].quantity += 1;
-      setOrderItems(updatedItems);
-      showToast(`${item.name} quantity increased`, 'success');
-    } else {
-      // Add new item to cart
-      const defaultService = services.find(s => (s.name || '').toLowerCase().includes('regular')) || services[0];
+      if (existingItemIndex >= 0) {
+        const updatedItems = [...prev];
+        updatedItems[existingItemIndex] = {
+          ...updatedItems[existingItemIndex],
+          quantity: updatedItems[existingItemIndex].quantity + 1,
+        };
+        showToast(`${item.name} quantity increased`, 'success');
+        return updatedItems;
+      }
+
+      const defaultService = services.find((s) => (s.name || '').toLowerCase().includes('regular')) || services[0];
       const deliveryType = selectedServiceType === 'express' ? 'same_day' : defaultDeliveryType;
       let expressMultiplier = 0;
       if (selectedServiceType !== 'express' && deliveryType === 'same_day') {
@@ -1160,7 +1125,7 @@ Phone: ${customer.phone}
       }
 
       const newItem = {
-        id: Date.now(),
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         item_id: item.id,
         item_name: item.name,
         service_id: defaultService?.id || null,
@@ -1174,13 +1139,13 @@ Phone: ${customer.phone}
         express_surcharge_multiplier: expressMultiplier,
         price: parseFloat(item.price || item.base_price || 0),
         manual_line_total: '',
-        manual_price_enabled: false
+        manual_price_enabled: false,
       };
-      
-      setOrderItems([...orderItems, newItem]);
+
       pushRecent('item', item.id);
       showToast(`${item.name} added to order`, 'success');
-    }
+      return [...prev, newItem];
+    });
   };
 
   const recentList = useMemo(() => {

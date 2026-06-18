@@ -72,6 +72,7 @@ require('./database/ensureExpenseCategoriesSchema');
 require('./database/ensureCleaningSchema');
 require('./database/ensureOrderVoidSchema');
 require('./database/ensureOrderArchiveSchema');
+require('./database/ensureReceiptSequenceSchema');
 
 // Routes - with error handling
 try {

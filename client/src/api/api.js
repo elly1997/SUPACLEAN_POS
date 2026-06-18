@@ -41,7 +41,13 @@ api.interceptors.response.use(
     const method = error.config?.method?.toUpperCase();
     const isMutation = method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
     // Queue mutations that failed due to network so they can sync when back online
-    if (isNetworkError && isMutation && error.config?.url) {
+    const requestUrl = String(error.config?.url || '');
+    const isOrderCreate =
+      requestUrl === '/orders' ||
+      requestUrl === '/orders/batch' ||
+      requestUrl.startsWith('/orders/batch');
+    // Never queue order creates offline — retries duplicate lines and inflate receipt totals.
+    if (isNetworkError && isMutation && error.config?.url && !isOrderCreate) {
       error.queuedForSync = true;
       try {
         await addToQueue(method, error.config.url, error.config.data ?? null);
@@ -307,6 +313,7 @@ export const generateReceiptNumber = (forDate = null, branchId = null) =>
     },
   });
 export const createOrder = (data) => api.post('/orders', data);
+export const createOrderBatch = (data) => api.post('/orders/batch', data);
 export const sendReceiptSms = (receiptNumber) => api.post(`/orders/receipt/${encodeURIComponent(receiptNumber)}/send-receipt-sms`);
 export const updateOrderStatus = (id, status) => api.put(`/orders/${id}/status`, { status });
 export const updateEstimatedCollectionDate = (id, estimated_collection_date) => api.put(`/orders/${id}/estimated-collection-date`, { estimated_collection_date });

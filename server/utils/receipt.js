@@ -57,22 +57,102 @@ async function getBranchReceiptPrefix(branchId) {
   }
 }
 
-async function nextBranchReceiptSequence(branchId, prefix, day, month, dateStr) {
-  const rows = await db.all(
-    `SELECT receipt_number FROM orders WHERE branch_id = ? AND DATE(order_date) = ?`,
-    [branchId, dateStr]
-  );
-  let maxSeq = 0;
+async function getMaxReceiptSequenceFromOrders(branchId, prefix, day, month, dateStr, queryClient = null) {
+  const runner = queryClient || db;
   const targetDay = parseInt(day, 10);
   const targetMonth = parseInt(month, 10);
+  let rows;
+  if (branchId != null) {
+    const result = queryClient
+      ? await queryClient.query(
+          'SELECT receipt_number FROM orders WHERE branch_id = $1 AND DATE(order_date) = $2::date',
+          [branchId, dateStr]
+        )
+      : await runner.all(
+          'SELECT receipt_number FROM orders WHERE branch_id = ? AND DATE(order_date) = ?',
+          [branchId, dateStr]
+        );
+    rows = queryClient ? result.rows : result;
+  } else {
+    const result = queryClient
+      ? await queryClient.query(
+          'SELECT receipt_number FROM orders WHERE branch_id IS NULL AND DATE(order_date) = $1::date',
+          [dateStr]
+        )
+      : await runner.all(
+          'SELECT receipt_number FROM orders WHERE branch_id IS NULL AND DATE(order_date) = ?',
+          [dateStr]
+        );
+    rows = queryClient ? result.rows : result;
+  }
+  let maxSeq = 0;
   for (const row of rows || []) {
     const p = parseReceiptNumber(row.receipt_number);
     if (p.prefix && prefix && p.prefix !== prefix) continue;
+    if (!p.prefix && prefix) continue;
     if (p.day === targetDay && p.month === targetMonth && Number.isFinite(p.sequence)) {
       maxSeq = Math.max(maxSeq, p.sequence);
     }
   }
-  return maxSeq + 1;
+  return maxSeq;
+}
+
+/**
+ * Atomically allocate the next receipt sequence for a branch and calendar day.
+ * @param {import('pg').PoolClient} [txClient] When provided, runs inside caller's transaction.
+ */
+async function allocateBranchReceiptSequence(branchId, prefix, day, month, dateStr, txClient = null) {
+  const bid = branchId != null ? Number(branchId) : 0;
+
+  const allocate = async (client) => {
+    await client.query(
+      `INSERT INTO branch_receipt_sequences (branch_id, seq_date, last_seq)
+       VALUES ($1, $2::date, 0)
+       ON CONFLICT (branch_id, seq_date) DO NOTHING`,
+      [bid, dateStr]
+    );
+    const locked = await client.query(
+      `SELECT last_seq FROM branch_receipt_sequences
+       WHERE branch_id = $1 AND seq_date = $2::date
+       FOR UPDATE`,
+      [bid, dateStr]
+    );
+    let current = Number(locked.rows[0]?.last_seq || 0);
+    if (current <= 0) {
+      const maxFromOrders = await getMaxReceiptSequenceFromOrders(branchId, prefix, day, month, dateStr, client);
+      current = Math.max(current, maxFromOrders);
+    }
+    const nextSeq = current + 1;
+    await client.query(
+      `UPDATE branch_receipt_sequences
+       SET last_seq = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE branch_id = $2 AND seq_date = $3::date`,
+      [nextSeq, bid, dateStr]
+    );
+    return nextSeq;
+  };
+
+  if (txClient) {
+    return allocate(txClient);
+  }
+
+  const client = await db.getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const nextSeq = await allocate(client);
+    await client.query('COMMIT');
+    return nextSeq;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** @deprecated Use allocateBranchReceiptSequence */
+async function nextBranchReceiptSequence(branchId, prefix, day, month, dateStr) {
+  return allocateBranchReceiptSequence(branchId, prefix, day, month, dateStr);
 }
 
 /**
@@ -118,24 +198,11 @@ async function generateReceiptNumberAsync(targetDate = new Date(), branchId = nu
     const prefix = branchId != null ? await getBranchReceiptPrefix(branchId) : null;
 
     if (prefix && branchId != null) {
-      const sequence = await nextBranchReceiptSequence(branchId, prefix, day, month, dateStr);
+      const sequence = await allocateBranchReceiptSequence(branchId, prefix, day, month, dateStr);
       return buildPrefixedReceiptNumber(prefix, sequence, day, month);
     }
 
-    const receiptRegex = `^[0-9]+-${day}-${month}( \\([0-9]{2}\\))?$`;
-    const row = await db.get(
-      `SELECT MAX(CAST(SPLIT_PART(receipt_number, '-', 1) AS INTEGER)) as max_seq
-       FROM orders
-       WHERE DATE(order_date) = ?
-       AND receipt_number ~ ?`,
-      [dateStr, receiptRegex]
-    );
-
-    let sequence = 1;
-    if (row && row.max_seq !== null) {
-      sequence = row.max_seq + 1;
-    }
-
+    const sequence = await allocateBranchReceiptSequence(null, null, day, month, dateStr);
     return `${sequence}-${day}-${month}`;
   } catch (err) {
     console.error('Error generating receipt number:', err);
@@ -368,4 +435,5 @@ module.exports = {
   buildPrefixedReceiptNumber,
   normalizeReceiptNumberForBranch,
   formatBranchReceiptLine,
+  allocateBranchReceiptSequence,
 };

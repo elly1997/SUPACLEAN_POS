@@ -4,6 +4,7 @@
 const db = require('../database/query');
 const cashManagement = require('../routes/cashManagement');
 const { logPaymentChange } = require('./paymentTransactions');
+const { toSqlDateString } = require('./businessDate');
 
 const LOYALTY_TIERS = {
   Platinum: { minPoints: 5000 },
@@ -20,16 +21,16 @@ function calculateTier(lifetimePoints) {
 }
 
 function normalizeDate(d) {
-  if (d == null || d === '') return null;
-  const s = String(d).trim();
-  return s.includes('T') ? s.split('T')[0] : s.slice(0, 10);
+  return toSqlDateString(d);
 }
 
 async function isReconciledDay(date, branchId) {
   if (branchId == null || !date) return false;
+  const day = toSqlDateString(date);
+  if (!day) return false;
   const row = await db.get(
     'SELECT is_reconciled FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
-    [date, branchId]
+    [day, branchId]
   );
   return !!(row && row.is_reconciled);
 }
