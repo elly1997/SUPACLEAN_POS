@@ -216,19 +216,18 @@ function generateReadyNotification(receiptNumber, customerName, estimatedDate = 
   const balanceText = Math.max(0, Math.round((Number.isFinite(balanceDue) ? balanceDue : 0) * 100) / 100).toLocaleString();
 
   if (Math.max(0, balanceDue) <= 0) {
-    return `Habari ${name}, oda yako ${receipt} imepokelewa Tsh. ${amountText} PAID. Karibu sana SUPACLEAN`;
+    return `Habari ${name}, oda yako ${receipt} imepokelewa Tsh. ${amountText} PAID. Karibu sana`;
   }
-  return `Habari ${name} oda yako ${receipt} imepokelewa, Advance ${paidText} Salio ${balanceText} Tshs. Karibu sana SUPACLEAN`;
+  return `Habari ${name} oda yako ${receipt} imepokelewa, Advance ${paidText} Salio ${balanceText} Tshs. Karibu sana`;
 }
 
 function generateOrderConfirmation(receiptNumber, customerName, totalAmount, estimatedDate = null) {
-  let message = `Hello ${customerName}, thank you for your order! Receipt: ${receiptNumber}. Amount: TSh ${totalAmount.toLocaleString()}`;
+  let message = `Habari ${customerName}, thank you for your order! Receipt: ${receiptNumber}. Amount: TSh ${totalAmount.toLocaleString()}`;
   if (estimatedDate) {
     const date = new Date(estimatedDate);
     const dateStr = date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
     message += `. Est. ready: ${dateStr}`;
   }
-  message += `. - SUPACLEAN`;
   return message;
 }
 
@@ -281,7 +280,7 @@ function generateOrderReceiptSms(receiptNumber, customerName, customerId, itemsD
   const amountStr = typeof totalAmount === 'number' ? totalAmount.toLocaleString() : String(totalAmount);
   const statusStr = formatPaymentStatusForSms(paymentStatus);
   const safeName = (customerName || 'Customer').replace(/[^a-zA-Z0-9 .'-]/g, '').trim() || 'Customer';
-  const base = `SUPACLEAN ${safeName}, receipt ${receiptNumber}, TSh ${amountStr}, ${statusStr}. Thank you.`;
+  const base = `Habari ${safeName}, receipt ${receiptNumber}, TSh ${amountStr}, ${statusStr}. Thank you.`;
   const normalized = base.replace(/\s+/g, ' ').trim();
   // Enforce single short English SMS to avoid multi-part billing.
   return normalized.length <= MAX_RECEIPT_SMS_LEN
@@ -327,7 +326,7 @@ function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0
   const safeName = String(customerName || 'Mteja').replace(/\s+/g, ' ').trim() || 'Mteja';
   const safeReceipt = String(receiptNumber || '').replace(/\s+/g, ' ').trim();
 
-  const base = `Habari ${safeName}, oda yako tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio: TSh ${balanceText}. Karibu sana - SUPACLEAN.`;
+  const base = `Habari ${safeName}, oda yako tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio: TSh ${balanceText}. Karibu sana.`;
   const normalized = base.replace(/\s+/g, ' ').trim();
   return normalized.length <= MAX_REMINDER_SMS_LEN
     ? normalized

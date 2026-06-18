@@ -103,7 +103,7 @@ async function sendNotification(options) {
           );
       break;
     default:
-      message = options.message || `Hello ${customerName}, this is a message from SUPACLEAN.`;
+      message = options.message || `Habari ${customerName}, this is a message from us.`;
   }
 
   const dedupeKey = computeDedupeKey({
@@ -186,13 +186,13 @@ async function sendNotification(options) {
  * Generate balance reminder message
  */
 function generateBalanceReminder(customerName, balance, receiptNumbers = []) {
-  let message = `Hello ${customerName}, reminder: You have an outstanding balance of TSh ${balance.toLocaleString()}`;
+  let message = `Habari ${customerName}, reminder: You have an outstanding balance of TSh ${balance.toLocaleString()}`;
   
   if (receiptNumbers && receiptNumbers.length > 0) {
     message += ` for receipt${receiptNumbers.length > 1 ? 's' : ''}: ${receiptNumbers.join(', ')}`;
   }
   
-  message += `. Please visit SUPACLEAN to collect your items. Thank you - SUPACLEAN`;
+  message += `. Please visit us to collect your items. Thank you.`;
   return message;
 }
 
