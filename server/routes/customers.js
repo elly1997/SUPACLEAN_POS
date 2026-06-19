@@ -32,8 +32,10 @@ async function findCustomerByPhone(phone) {
   const trimmed = phone.trim();
   const normalized = normalizePhone(trimmed);
   const rows = await db.all(
-    `SELECT * FROM customers WHERE phone = ? OR phone = ? OR TRIM(phone) = ? LIMIT 1`,
-    [trimmed, normalized, trimmed]
+    `SELECT * FROM customers
+     WHERE phone_normalized = ? OR phone = ? OR phone = ? OR TRIM(phone) = ?
+     LIMIT 1`,
+    [normalized, trimmed, normalized, trimmed]
   );
   return rows && rows[0] ? rows[0] : null;
 }
@@ -64,9 +66,11 @@ router.get('/', async (req, res) => {
     try {
       const rows = await db.all(
         `SELECT c.*,
-                (SELECT o.branch_id FROM orders o WHERE o.customer_id = c.id ORDER BY o.order_date DESC LIMIT 1) AS branch_id,
-                (SELECT b.name FROM orders o JOIN branches b ON o.branch_id = b.id WHERE o.customer_id = c.id ORDER BY o.order_date DESC LIMIT 1) AS branch_name
-         FROM customers c${whereClause} ORDER BY c.created_at DESC LIMIT ? OFFSET ?`,
+                c.primary_branch_id AS branch_id,
+                b.name AS branch_name
+         FROM customers c
+         LEFT JOIN branches b ON b.id = c.primary_branch_id
+         ${whereClause} ORDER BY c.created_at DESC LIMIT ? OFFSET ?`,
         [...params, limit, offset]
       );
       const formattedRows = (rows || []).map(row => ({
@@ -172,8 +176,8 @@ router.post('/quick-add', requirePermission('canCreateOrders'), async (req, res)
       return res.status(200).json({ ...c, existing: true });
     }
     const r = await db.run(
-      'INSERT INTO customers (name, phone, tin, vrn) VALUES (?, ?, ?, ?) RETURNING id',
-      [name.trim(), phone.trim(), (tin || '').trim() || null, (vrn || '').trim() || null]
+      'INSERT INTO customers (name, phone, phone_normalized, tin, vrn) VALUES (?, ?, ?, ?, ?) RETURNING id',
+      [name.trim(), phone.trim(), normalizePhone(phone.trim()) || null, (tin || '').trim() || null, (vrn || '').trim() || null]
     );
     const id = r?.row?.id ?? r?.lastID;
     const c = await db.get('SELECT id, name, phone, tin, vrn FROM customers WHERE id = ?', [id]);
@@ -221,11 +225,11 @@ router.post('/', requireBranchAccess(), requirePermission('canManageCustomers'),
     }
     const result = await db.run(
       branchId
-        ? 'INSERT INTO customers (name, phone, email, address, primary_branch_id) VALUES (?, ?, ?, ?, ?) RETURNING id'
-        : 'INSERT INTO customers (name, phone, email, address) VALUES (?, ?, ?, ?) RETURNING id',
+        ? 'INSERT INTO customers (name, phone, phone_normalized, email, address, primary_branch_id) VALUES (?, ?, ?, ?, ?, ?) RETURNING id'
+        : 'INSERT INTO customers (name, phone, phone_normalized, email, address) VALUES (?, ?, ?, ?, ?) RETURNING id',
       branchId
-        ? [name.trim(), phone.trim(), email ? email.trim() || null : null, address ? address.trim() || null : null, branchId]
-        : [name.trim(), phone.trim(), email ? email.trim() || null : null, address ? address.trim() || null : null]
+        ? [name.trim(), phone.trim(), normalizePhone(phone.trim()) || null, email ? email.trim() || null : null, address ? address.trim() || null : null, branchId]
+        : [name.trim(), phone.trim(), normalizePhone(phone.trim()) || null, email ? email.trim() || null : null, address ? address.trim() || null : null]
     );
     const id = result?.row?.id ?? result?.lastID;
     res.status(201).json({ id, name: name.trim(), phone: phone.trim(), email: email || null, address: address || null });
@@ -265,8 +269,8 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageCustomers'
       }
     }
     const result = await db.run(
-      'UPDATE customers SET name = ?, phone = ?, email = ?, address = ?, tags = ?, sms_notifications_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [name, phone, email || null, address || null, tagsString || null, sms_notifications_enabled !== undefined ? sms_notifications_enabled : null, id]
+      'UPDATE customers SET name = ?, phone = ?, phone_normalized = ?, email = ?, address = ?, tags = ?, sms_notifications_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [name, phone, normalizePhone(phone) || null, email || null, address || null, tagsString || null, sms_notifications_enabled !== undefined ? sms_notifications_enabled : null, id]
     );
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Customer not found' });

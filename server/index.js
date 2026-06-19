@@ -72,7 +72,8 @@ require('./database/ensureExpenseCategoriesSchema');
 require('./database/ensureCleaningSchema');
 require('./database/ensureOrderVoidSchema');
 require('./database/ensureOrderArchiveSchema');
-require('./database/ensureReceiptSequenceSchema');
+require('./database/ensurePerformanceIndexes');
+require('./database/ensureLongevitySchema');
 
 // Routes - with error handling
 try {
@@ -101,6 +102,7 @@ try {
   app.use('/api/cleaning-customers', require('./routes/cleaningCustomers'));
   app.use('/api/cleaning-expenses', require('./routes/cleaningExpenses'));
   app.use('/api/admin', require('./routes/adminData'));
+  app.use('/api/admin/maintenance', require('./routes/adminMaintenance'));
   console.log('✅ All routes loaded successfully');
 } catch (error) {
   console.error('❌ Error loading routes:', error);
@@ -108,9 +110,26 @@ try {
   process.exit(1);
 }
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'SUPACLEAN POS API is running' });
+// Health check (includes DB connectivity for monitoring / uptime probes)
+app.get('/api/health', async (req, res) => {
+  const started = Date.now();
+  try {
+    const db = require('./database/query');
+    await db.get('SELECT 1 AS ok', []);
+    res.json({
+      status: 'OK',
+      message: 'SUPACLEAN POS API is running',
+      database: 'connected',
+      latency_ms: Date.now() - started,
+    });
+  } catch (err) {
+    res.status(503).json({
+      status: 'DEGRADED',
+      message: 'API is up but database is unreachable',
+      database: 'unreachable',
+      error: err.message,
+    });
+  }
 });
 
 // SMS config status (no secrets) – helps troubleshoot why SMS might not send

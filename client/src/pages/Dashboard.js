@@ -61,24 +61,31 @@ const Dashboard = () => {
   const branchLine = branch?.name || '';
 
   const loadDashboardData = useCallback(async () => {
+    const readyCustomer = readySearchTerm.trim() || undefined;
+    const pendingCustomer = pendingSearchTerm.trim() || undefined;
+    const monthStart = `${today.slice(0, 7)}-01`;
+
     try {
-      const readyCustomer = readySearchTerm.trim() || undefined;
-      const pendingCustomer = pendingSearchTerm.trim() || undefined;
-      const monthStart = `${today.slice(0, 7)}-01`;
-      const [summaryRes, statsRes, pendingRes, queueRes, monthRes] = await Promise.all([
+      // Phase 1: headline stats (fast cached cash + counts) — paint KPIs first
+      const [summaryRes, statsRes] = await Promise.all([
         getTodayCashSummary(),
         getOrderDashboardStats(),
+      ]);
+      setSummary(summaryRes.data);
+      setOrderStats(statsRes.data || null);
+      setLoading(false);
+
+      // Phase 2: lists + month total (non-blocking for first paint)
+      const [pendingRes, queueRes, monthRes] = await Promise.all([
         getOrders({ status: 'pending', limit: DASHBOARD_LIST_LIMIT, ...(pendingCustomer && { customer: pendingCustomer }) }),
         getCollectionQueue({ limit: DASHBOARD_LIST_LIMIT, ...(readyCustomer && { customer: readyCustomer }) }),
-        getCashSummaryRange(monthStart, today)
+        getCashSummaryRange(monthStart, today),
       ]);
       const monthTotal = (Array.isArray(monthRes?.data) ? monthRes.data : []).reduce((acc, row) => (
         acc + (Number(row.cash_sales || 0) + Number(row.book_sales || 0) + Number(row.card_sales || 0) + Number(row.mobile_money_sales || 0))
       ), 0);
 
-      setSummary(summaryRes.data);
       setMonthIncome(monthTotal);
-      setOrderStats(statsRes.data || null);
       setPendingOrders(pendingRes.data || []);
       setReadyQueue(queueRes.data || []);
       const synced = [summaryRes, pendingRes, queueRes].find((r) => r.fromCache && r.syncedAt);
@@ -89,12 +96,10 @@ const Dashboard = () => {
       if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Network Error')) {
         showToast('Cannot connect to server. Please ensure the server is running.', 'error');
       }
-      // Set empty arrays on error to prevent crashes
       setPendingOrders([]);
       setReadyQueue([]);
       setOrderStats(null);
       setMonthIncome(0);
-    } finally {
       setLoading(false);
     }
   }, [today, readySearchTerm, pendingSearchTerm, showToast]);

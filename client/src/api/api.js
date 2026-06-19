@@ -312,8 +312,18 @@ export const generateReceiptNumber = (forDate = null, branchId = null) =>
       ...(branchId != null && branchId !== '' ? { branch_id: branchId } : {}),
     },
   });
-export const createOrder = (data) => api.post('/orders', data);
-export const createOrderBatch = (data) => api.post('/orders/batch', data);
+export const createOrder = (data, options = {}) => {
+  const headers = {};
+  const key = options.idempotencyKey || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null);
+  if (key) headers['Idempotency-Key'] = key;
+  return api.post('/orders', data, Object.keys(headers).length ? { headers } : undefined);
+};
+export const createOrderBatch = (data, options = {}) => {
+  const headers = {};
+  const key = options.idempotencyKey || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null);
+  if (key) headers['Idempotency-Key'] = key;
+  return api.post('/orders/batch', data, Object.keys(headers).length ? { headers } : undefined);
+};
 export const sendReceiptSms = (receiptNumber) => api.post(`/orders/receipt/${encodeURIComponent(receiptNumber)}/send-receipt-sms`);
 export const updateOrderStatus = (id, status) => api.put(`/orders/${id}/status`, { status });
 export const updateEstimatedCollectionDate = (id, estimated_collection_date) => api.put(`/orders/${id}/estimated-collection-date`, { estimated_collection_date });

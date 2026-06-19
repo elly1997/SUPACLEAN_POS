@@ -257,6 +257,80 @@ async function refreshUnreconciledSummariesFromDate(branchId, startDate) {
   return { expenseDayRefresh: expenseDayRefresh || { skipped: false }, daysRefreshed: sorted.length };
 }
 
+/** In-flight background refresh keys — avoids duplicate heavy recalcs on rapid page loads. */
+const bgRefreshInFlight = new Set();
+
+/**
+ * Queue a non-blocking daily summary recalc (debounced per branch+date).
+ * Use after payments, orders, expenses — not on every GET.
+ */
+function scheduleBackgroundDailySummaryRefresh(date, branchId, { force = false } = {}) {
+  const day = toSqlDateString(date);
+  if (!day || branchId == null) return;
+  const key = `${branchId}:${day}:${force ? 'force' : 'normal'}`;
+  if (bgRefreshInFlight.has(key)) return;
+  bgRefreshInFlight.add(key);
+  setImmediate(async () => {
+    try {
+      if (force) {
+        await refreshDailySummaryForce(day, branchId);
+      } else {
+        await refreshUnreconciledDailySummary(day, branchId);
+      }
+    } catch (err) {
+      console.error('Background daily summary refresh failed:', day, branchId, err.message);
+    } finally {
+      bgRefreshInFlight.delete(key);
+    }
+  });
+}
+
+/**
+ * Fast read: return persisted summary immediately; refresh unreconciled days in background.
+ * Sync compute only when no row exists yet (first visit for that branch/day).
+ */
+async function readDailySummaryForView(date, branchId, { scheduleRefresh = true } = {}) {
+  const day = toSqlDateString(date);
+  if (!day) {
+    throw new Error('Invalid date for daily cash summary');
+  }
+  const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [day, branchId]);
+  if (row) {
+    if (scheduleRefresh && !row.is_reconciled) {
+      scheduleBackgroundDailySummaryRefresh(day, branchId);
+    }
+    return row;
+  }
+  return computeAndPersistDailySummary(day, branchId);
+}
+
+async function readTodayConsolidatedForView(today, branchIds, { scheduleRefresh = true } = {}) {
+  if (!branchIds.length) {
+    return emptyDailySummary(today, true);
+  }
+  const placeholders = branchIds.map(() => '?').join(',');
+  const stored = await db.all(
+    `SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id IN (${placeholders})`,
+    [today, ...branchIds]
+  );
+  const byBranch = new Map((stored || []).map((r) => [Number(r.branch_id), r]));
+  const results = [];
+  for (const bid of branchIds) {
+    const row = byBranch.get(Number(bid));
+    if (row) {
+      results.push(row);
+      if (scheduleRefresh && !row.is_reconciled) {
+        scheduleBackgroundDailySummaryRefresh(today, bid);
+      }
+    } else {
+      results.push(await computeAndPersistDailySummary(today, bid));
+    }
+  }
+  const consolidated = consolidateSummaries(results, today);
+  consolidated.all_branches = true;
+  return consolidated;
+}
+
 // Line-level detail for cash sales on a date (matches daily summary cash_sales)
 router.get('/details/cash-sales/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { date } = req.params;
@@ -309,10 +383,8 @@ router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCa
     return;
   }
   try {
-    const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
-    const force = !!(row && row.is_reconciled);
-    const persisted = await computeAndPersistDailySummary(ymd, branchId, force);
-    return res.json(persisted);
+    const row = await readDailySummaryForView(ymd, branchId);
+    return res.json(row);
   } catch (err) {
     console.error('Error fetching daily cash summary:', err);
     res.status(500).json({ error: err.message });
@@ -446,74 +518,19 @@ router.get('/today', requireBranchAccess(), requirePermission('canManageCash'), 
     try {
       const branchRows = await db.all('SELECT id FROM branches ORDER BY id');
       const branchIds = (branchRows || []).map((r) => r.id);
-      if (branchIds.length === 0) {
-        return res.json(emptyDailySummary(today, true));
-      }
-      const results = [];
-      for (const bid of branchIds) {
-        const openingBalance = await getExpectedOpeningBalance(today, bid);
-        const existingToday = await db.get(
-          'SELECT opening_cash_declared, is_reconciled FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
-          [today, bid]
-        );
-        const cashSalesRow = await db.all(`
-          SELECT SUM(paid_amount) as cash_sales FROM orders
-          WHERE DATE(order_date) = ? AND payment_status = 'paid_full' AND payment_method = 'cash' AND paid_amount > 0 AND branch_id = ?
-          AND COALESCE(is_voided, FALSE) = FALSE
-        `, [today, bid]);
-    const cashSales = num(cashSalesRow[0]?.cash_sales);
-        const { calculateBookSales } = require('../utils/cashValidation');
-        let bookSales = 0;
-        try {
-          bookSales = await calculateBookSales(today, bid);
-        } catch (err) {
-          bookSales = 0;
-        }
-        const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, bid, existingToday?.opening_cash_declared);
-        const force = !!(existingToday && existingToday.is_reconciled);
-        const persisted = await upsertDailySummaryFromComputed(today, bid, result, null, force);
-        results.push(persisted || result);
-      }
-      const consolidated = consolidateSummaries(results, today);
-      consolidated.all_branches = true;
+      const consolidated = await readTodayConsolidatedForView(today, branchIds);
       return res.json(consolidated);
     } catch (err) {
-      console.error('Error calculating consolidated today summary:', err);
+      console.error('Error fetching consolidated today summary:', err);
       return res.status(500).json({ error: err.message });
     }
   }
 
   try {
-    const openingBalance = await getExpectedOpeningBalance(today, branchId);
-    const existingToday = await db.get(
-      'SELECT opening_cash_declared, is_reconciled FROM daily_cash_summaries WHERE date = ? AND branch_id = ?',
-      [today, branchId]
-    );
-    const cashSalesRow = await db.all(`
-      SELECT SUM(paid_amount) as cash_sales
-      FROM orders
-      WHERE DATE(order_date) = ?
-      AND payment_status = 'paid_full'
-      AND payment_method = 'cash'
-      AND paid_amount > 0
-      AND branch_id = ?
-      AND COALESCE(is_voided, FALSE) = FALSE
-    `, [today, branchId]);
-        const cashSales = num(cashSalesRow[0]?.cash_sales);
-    const { calculateBookSales } = require('../utils/cashValidation');
-    let bookSales = 0;
-    try {
-      bookSales = await calculateBookSales(today, branchId);
-    } catch (err) {
-      console.error('Error calculating book sales:', err);
-      bookSales = 0;
-    }
-    const result = await calculateRemaining(today, openingBalance, cashSales, bookSales, branchId, existingToday?.opening_cash_declared);
-    const force = !!(existingToday && existingToday.is_reconciled);
-    const persisted = await upsertDailySummaryFromComputed(today, branchId, result, null, force);
-    res.json(persisted || result);
+    const row = await readDailySummaryForView(today, branchId);
+    res.json(row);
   } catch (err) {
-    console.error('Error calculating today\'s cash summary:', err);
+    console.error('Error fetching today\'s cash summary:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1045,10 +1062,11 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
          LIMIT ?`,
         [businessToday, limit]
       );
-      rows = await Promise.all((rows || []).map(async (r) => {
-        const refreshed = await refreshUnreconciledDailySummary(r.date, r.branch_id);
-        return refreshed.row ? { ...refreshed.row, branch_name: r.branch_name } : r;
-      }));
+      for (const r of rows || []) {
+        if (r?.date && r.branch_id != null && !r.is_reconciled) {
+          scheduleBackgroundDailySummaryRefresh(r.date, r.branch_id);
+        }
+      }
       return res.json(rows || []);
     }
 
@@ -1063,10 +1081,11 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
        LIMIT ?`,
       [branchId, businessToday, limit]
     );
-    rows = await Promise.all((rows || []).map(async (r) => {
-      const refreshed = await refreshUnreconciledDailySummary(r.date, branchId);
-      return refreshed.row ? { ...refreshed.row, branch_name: r.branch_name } : r;
-    }));
+    for (const r of rows || []) {
+      if (r?.date && !r.is_reconciled) {
+        scheduleBackgroundDailySummaryRefresh(r.date, branchId);
+      }
+    }
     return res.json(rows || []);
   } catch (err) {
     console.error('Error fetching unreconciled daily closings:', err);
@@ -1123,19 +1142,17 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
       }));
       return res.json(normalized);
     }
-    let rows = await db.all(
+    const rows = await db.all(
       'SELECT * FROM daily_cash_summaries WHERE date >= ? AND date <= ? AND branch_id = ? ORDER BY date DESC',
       [start_date, end_date, branchId]
     );
-    rows = await Promise.all((rows || []).map(async (r) => {
-      if (r?.is_reconciled) {
-        const out = await refreshDailySummaryForce(r.date, branchId);
-        return out.row || r;
+    const businessToday = getBusinessTodayYmd();
+    for (const r of rows || []) {
+      if (r?.date && !r.is_reconciled && toSqlDateString(r.date) === businessToday) {
+        scheduleBackgroundDailySummaryRefresh(r.date, branchId);
       }
-      const refreshed = await refreshUnreconciledDailySummary(r.date, branchId);
-      return refreshed.row || r;
-    }));
-    res.json(rows);
+    }
+    res.json(rows || []);
   } catch (err) {
     console.error('Error fetching cash summary range:', err);
     res.status(500).json({ error: err.message });
@@ -1146,3 +1163,4 @@ module.exports = router;
 module.exports.refreshUnreconciledDailySummary = refreshUnreconciledDailySummary;
 module.exports.refreshUnreconciledSummariesFromDate = refreshUnreconciledSummariesFromDate;
 module.exports.refreshDailySummaryForce = refreshDailySummaryForce;
+module.exports.scheduleBackgroundDailySummaryRefresh = scheduleBackgroundDailySummaryRefresh;

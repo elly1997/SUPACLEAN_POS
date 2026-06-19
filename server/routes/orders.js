@@ -29,6 +29,12 @@ const { checkDuplicatePayment } = require('../utils/paymentTransactions');
 const { voidReceiptByNumber } = require('../utils/orderVoid');
 const { sqlActiveOrdersOnly, sqlUnarchivedOrdersOnly } = require('../utils/orderVoidFilter');
 const cashManagement = require('./cashManagement');
+const {
+  readIdempotencyKey,
+  getStoredIdempotencyResponse,
+  storeIdempotencyResponse,
+  pruneExpiredIdempotencyKeys,
+} = require('../utils/idempotency');
 const { assertNotFutureBusinessDate, getBusinessTodayYmd } = require('../utils/businessDate');
 const { generatePlaceholderPhone, isPlaceholderPhone, normalizePhoneDigits, sanitizeImportPhone, resolveInsertId } = require('../utils/customerPhone');
 const multer = require('multer');
@@ -60,14 +66,7 @@ function buildPaymentTimestampIso(paymentDate) {
 }
 
 function triggerDailySummaryRefreshAsync(paymentDate, branchId) {
-  if (branchId == null || !paymentDate) return;
-  setImmediate(async () => {
-    try {
-      await cashManagement.refreshDailySummaryForce(paymentDate, branchId);
-    } catch (err) {
-      console.error('Background daily summary refresh failed:', paymentDate, branchId, err.message);
-    }
-  });
+  cashManagement.scheduleBackgroundDailySummaryRefresh(paymentDate, branchId);
 }
 
 function buildPerOrderPaidAllocations(orders, receiptPaidAmount) {
@@ -165,19 +164,24 @@ router.get('/', requireBranchAccess(), async (req, res) => {
   }
 
   if (date) {
-    query += ' AND DATE(o.order_date) = ?';
-    params.push(date);
+    const dayStart = `${date}T00:00:00.000Z`;
+    const dayEnd = new Date(`${date}T00:00:00.000Z`);
+    dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+    query += ' AND o.order_date >= ? AND o.order_date < ?';
+    params.push(dayStart, dayEnd.toISOString());
   }
 
   // Date range filters
   if (date_from) {
-    query += ' AND DATE(o.order_date) >= ?';
-    params.push(date_from);
+    query += ' AND o.order_date >= ?';
+    params.push(`${date_from}T00:00:00.000Z`);
   }
 
   if (date_to) {
-    query += ' AND DATE(o.order_date) <= ?';
-    params.push(date_to);
+    const rangeEnd = new Date(`${date_to}T00:00:00.000Z`);
+    rangeEnd.setUTCDate(rangeEnd.getUTCDate() + 1);
+    query += ' AND o.order_date < ?';
+    params.push(rangeEnd.toISOString());
   }
 
   // Amount range filters
@@ -718,11 +722,23 @@ async function generateReceiptNumberPromise(targetDate = new Date(), branchId = 
   return generateReceiptNumberAsync(targetDate, branchId);
 }
 
+const IDEMPOTENCY_ROUTE_ORDERS_BATCH = 'POST /api/orders/batch';
+const IDEMPOTENCY_ROUTE_ORDERS = 'POST /api/orders';
+
 /**
  * Create a multi-line receipt in one atomic request (one receipt number, all items).
  * Prevents duplicate lines and wrong totals when several cashiers work at once.
  */
 router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {
+  const idempotencyKey = readIdempotencyKey(req);
+  if (idempotencyKey) {
+    pruneExpiredIdempotencyKeys().catch(() => {});
+    const cached = await getStoredIdempotencyResponse(IDEMPOTENCY_ROUTE_ORDERS_BATCH, idempotencyKey);
+    if (cached) {
+      return res.status(cached.status).json(cached.body);
+    }
+  }
+
   const moment = require('moment');
   const client = await db.getPool().connect();
   try {
@@ -938,10 +954,17 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
     }
 
     await client.query('COMMIT');
-    res.json({
+    const payload = {
       receipt_number: sharedReceiptNumber,
       items: results,
-    });
+    };
+    if (orderBranchId != null) {
+      cashManagement.scheduleBackgroundDailySummaryRefresh(paymentBookDateYmd(finalOrderDateIso), orderBranchId);
+    }
+    if (idempotencyKey) {
+      await storeIdempotencyResponse(IDEMPOTENCY_ROUTE_ORDERS_BATCH, idempotencyKey, 200, payload);
+    }
+    res.json(payload);
   } catch (err) {
     try {
       await client.query('ROLLBACK');
@@ -956,6 +979,15 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
 // Create new order (cashiers, managers, and admins can create)
 router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {
   try {
+    const idempotencyKey = readIdempotencyKey(req);
+    if (idempotencyKey) {
+      pruneExpiredIdempotencyKeys().catch(() => {});
+      const cached = await getStoredIdempotencyResponse(IDEMPOTENCY_ROUTE_ORDERS, idempotencyKey);
+      if (cached) {
+        return res.status(cached.status).json(cached.body);
+      }
+    }
+
     console.log('POST /api/orders - Request received');
     console.log('User:', req.user?.username, 'Role:', req.user?.role, 'BranchId:', req.user?.branchId);
     
@@ -1109,6 +1141,10 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
             console.error('Error logging payment change:', err);
           });
 
+          if (branchId != null) {
+            cashManagement.scheduleBackgroundDailySummaryRefresh(paymentBookDateYmd(finalOrderDateIso), branchId);
+          }
+
           // Get customer details for receipt
           const customer = await db.get('SELECT * FROM customers WHERE id = ?', [customer_id]);
           let branchName = null;
@@ -1149,12 +1185,16 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
           // Only one SMS after receipt: sent by client after printing (POST /orders/receipt/:receiptNumber/send-receipt-sms).
           // No duplicate order-confirmation SMS here.
 
-          res.json({
+          const payload = {
             order,
             receipt,
             customer,
             service
-          });
+          };
+          if (idempotencyKey) {
+            await storeIdempotencyResponse(IDEMPOTENCY_ROUTE_ORDERS, idempotencyKey, 200, payload);
+          }
+          res.json(payload);
         } catch (insertErr) {
           // Log the full error for debugging
           console.error('Order insertion error:', {
