@@ -25,7 +25,7 @@ const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 const { validatePayment } = require('../utils/paymentValidation');
 const { recordPaymentTransaction, logPaymentChange } = require('../utils/paymentTransactions');
-const { checkDuplicatePayment } = require('../utils/paymentTransactions');
+const { applyReceiptPaymentAtomic } = require('../utils/receiptPayment');
 const { voidReceiptByNumber } = require('../utils/orderVoid');
 const { sqlActiveOrdersOnly, sqlUnarchivedOrdersOnly } = require('../utils/orderVoidFilter');
 const cashManagement = require('./cashManagement');
@@ -1484,191 +1484,81 @@ router.put('/:id/estimated-collection-date', requireBranchAccess(), requirePermi
 router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { receiptNumber } = req.params;
   const { payment_amount, payment_method = 'cash', payment_date, notes } = req.body;
-  
+
   try {
-    // Get ALL orders for this receipt number (not just one) - case-insensitive
-    // Join with items table to get item names
     const branchFilter = getBranchFilter(req, 'o');
-    const updateBranchFilter = getBranchFilter(req);
-    const allOrders = await db.all(
-      `SELECT o.*, c.name as customer_name, c.phone as customer_phone,
-              s.name as service_name, i.name as item_name, i.category as item_category
+    const payAmount =
+      payment_amount !== undefined && payment_amount > 0 ? roundFigure(parseFloat(payment_amount)) : 0;
+
+    if (payAmount > 0 && !assertNotFutureBusinessDate(paymentBookDateYmd(payment_date), res, 'payment_date')) {
+      return;
+    }
+
+    const paymentTimestampIso = buildPaymentTimestampIso(payment_date);
+    const txResult = await applyReceiptPaymentAtomic({
+      receiptNumber,
+      branchFilter,
+      paymentAmount: payAmount,
+      paymentMethod: payment_method,
+      paymentTimestampIso,
+      notes,
+      changedBy: 'Cashier',
+      collect: true,
+    });
+
+    if (!txResult.ok) {
+      return res.status(txResult.status).json({ error: txResult.error });
+    }
+
+    const { firstOrder, receiptTotal, receiptPaid, paymentAmount, transactionId, itemCount } = txResult.data;
+    if (transactionId) {
+      console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${receiptNumber}`);
+      triggerDailySummaryRefreshAsync(paymentTimestampIso.slice(0, 10), firstOrder.branch_id);
+    }
+
+    if (txResult.data.receiptPaymentStatus === 'paid_full' && receiptTotal > 0) {
+      try {
+        const { awardPointsOnCollection } = require('./loyalty');
+        const loyaltyResult = await awardPointsOnCollection(firstOrder.customer_id, firstOrder.id, receiptTotal);
+        console.log(
+          `✅ Loyalty points awarded: ${loyaltyResult?.points_earned ?? 0} points to customer ${firstOrder.customer_id}`
+        );
+      } catch (err) {
+        console.error('Error awarding loyalty points:', err);
+      }
+    }
+
+    const updatedOrders = await db.all(
+      `SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
+              i.name as item_name, i.category as item_category
        FROM orders o
+       JOIN services s ON o.service_id = s.id
        JOIN customers c ON o.customer_id = c.id
-       LEFT JOIN services s ON o.service_id = s.id
        LEFT JOIN items i ON o.item_id = i.id
        WHERE UPPER(o.receipt_number) = UPPER(?)
        ${branchFilter.clause}
        ORDER BY o.id`,
       [receiptNumber, ...branchFilter.params]
     );
-    
-    if (!allOrders || allOrders.length === 0) {
-      return res.status(404).json({ error: 'Receipt not found' });
-    }
 
-    if (allOrders.some((o) => o.is_voided)) {
-      return res.status(400).json({ error: 'This receipt has been voided and cannot be collected' });
-    }
-    if (allOrders.some((o) => o.archived_at)) {
-      return res.status(400).json({ error: 'This receipt has been archived and cannot be collected' });
-    }
-
-    // Check if any order is already collected
-    const alreadyCollected = allOrders.some(o => o.status === 'collected');
-    if (alreadyCollected) {
-      return res.status(400).json({ error: 'Receipt already collected' });
-    }
-
-    // Calculate totals across ALL items on the receipt (rounded to 2 decimals)
-    const receiptTotal = roundFigure(allOrders.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0));
-    const receiptPaid = roundFigure(allOrders.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0));
-    const balanceDue = roundFigure(receiptTotal - receiptPaid);
-    
-    // Use the first order for customer info (all orders have same customer)
-    const firstOrder = allOrders[0];
-    let finalPaidAmount = receiptPaid;
-    let finalPaymentStatus = firstOrder.payment_status;
-
-    // Function to update ALL orders after payment processing
-    const updateAllOrders = async () => {
-      // Apply receipt paid allocation per item to avoid duplicate paid totals across rows.
-      const allocations = buildPerOrderPaidAllocations(allOrders, finalPaidAmount);
-      for (const alloc of allocations) {
-        await db.run(
-          `UPDATE orders
-           SET status = ?, collected_date = CURRENT_TIMESTAMP,
-               paid_amount = ?, payment_status = ?, payment_method = ?
-           WHERE id = ?`,
-          ['collected', alloc.paid_amount, alloc.payment_status, payment_method, alloc.id]
-        );
-      }
-      
-      // Award loyalty points on collection (only if fully paid) - use receipt total
-      if (finalPaymentStatus === 'paid_full' && receiptTotal > 0) {
-        try {
-          const { awardPointsOnCollection } = require('./loyalty');
-          const result = await awardPointsOnCollection(firstOrder.customer_id, firstOrder.id, receiptTotal);
-          console.log(`✅ Loyalty points awarded: ${result?.points_earned ?? 0} points to customer ${firstOrder.customer_id}`);
-        } catch (err) {
-          console.error('Error awarding loyalty points:', err);
-        }
-      }
-      
-      // Get all updated orders for response (case-insensitive)
-      // Join with items table to get item names
-      const updatedOrders = await db.all(
-        `SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
-                i.name as item_name, i.category as item_category
-         FROM orders o
-         JOIN services s ON o.service_id = s.id
-         JOIN customers c ON o.customer_id = c.id
-         LEFT JOIN items i ON o.item_id = i.id
-         WHERE UPPER(o.receipt_number) = UPPER(?)
-         ${branchFilter.clause}
-         ORDER BY o.id`,
-        [receiptNumber, ...branchFilter.params]
-      );
-      
-      // Calculate final totals for response
-      const finalReceiptTotal = updatedOrders.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0);
-      const finalReceiptPaid = updatedOrders.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0);
-      
-      // Return the first order as main order, but with receipt totals
-      const mainOrder = {
-        ...updatedOrders[0],
-        total_amount: finalReceiptTotal,
-        paid_amount: finalReceiptPaid,
-        receipt_item_count: updatedOrders.length
-      };
-      
-      res.json({ 
-        message: `Receipt collected successfully (${updatedOrders.length} ${updatedOrders.length === 1 ? 'item' : 'items'})`, 
-        order: mainOrder,
-        all_orders: updatedOrders,
-        payment_collected: payment_amount || 0,
-        balance_remaining: finalReceiptTotal - finalReceiptPaid,
-        receipt_total: finalReceiptTotal,
-        receipt_paid: finalReceiptPaid
-      });
+    const finalReceiptTotal = updatedOrders.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0);
+    const finalReceiptPaid = updatedOrders.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0);
+    const mainOrder = {
+      ...updatedOrders[0],
+      total_amount: finalReceiptTotal,
+      paid_amount: finalReceiptPaid,
+      receipt_item_count: updatedOrders.length,
     };
 
-    // Handle payment if provided (collect balance due, not full receipt total)
-    if (payment_amount !== undefined && payment_amount > 0) {
-      const paymentAmount = roundFigure(parseFloat(payment_amount));
-      
-      try {
-        const tol = 0.01;
-        if (paymentAmount <= 0) {
-          return res.status(400).json({
-            error: 'Payment amount must be greater than 0.'
-          });
-        }
-        if (paymentAmount > balanceDue + tol) {
-          return res.status(400).json({
-            error: `Payment cannot exceed the balance due of TSh ${balanceDue.toLocaleString()}.`
-          });
-        }
-        
-        if (!assertNotFutureBusinessDate(paymentBookDateYmd(payment_date), res, 'payment_date')) {
-          return;
-        }
-        // Check for duplicate payment using first order ID
-        const paymentTimestampIso = buildPaymentTimestampIso(payment_date);
-        const timestamp = paymentTimestampIso;
-        const isDuplicate = await checkDuplicatePayment(firstOrder.id, paymentAmount, timestamp);
-        
-        if (isDuplicate) {
-          return res.status(400).json({ error: 'Duplicate payment detected. This payment was already recorded.' });
-        }
-        
-        // Add payment to existing paid amount (collect balance due, not receipt total)
-        finalPaidAmount = roundFigure(receiptPaid + paymentAmount);
-        finalPaymentStatus = (finalPaidAmount >= receiptTotal - tol) ? 'paid_full' : 'advance';
-
-        // Record payment transaction using utility function
-        const orderObj = {
-          id: firstOrder.id,
-          receipt_number: receiptNumber,
-          branch_id: firstOrder.branch_id || null
-        };
-        
-        const transactionId = await recordPaymentTransaction(orderObj, paymentAmount, payment_method, 'Cashier', paymentTimestampIso);
-        console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${receiptNumber}`);
-        const paidDate = paymentTimestampIso.slice(0, 10);
-        triggerDailySummaryRefreshAsync(paidDate, orderObj.branch_id);
-        
-        // Log payment change to audit log (for first order, but represents entire receipt)
-        logPaymentChange({
-          order_id: firstOrder.id,
-          action: 'collected',
-          old_payment_status: firstOrder.payment_status,
-          new_payment_status: finalPaymentStatus,
-          old_paid_amount: receiptPaid,
-          new_paid_amount: finalPaidAmount,
-          old_payment_method: firstOrder.payment_method,
-          new_payment_method: payment_method,
-          changed_by: 'Cashier',
-          notes: notes || `Payment at collection for receipt ${receiptNumber} (${allOrders.length} items)`
-        }).catch((err) => {
-          console.error('Error logging payment change:', err);
-        });
-        
-        // Continue with order update
-        await updateAllOrders();
-      } catch (err) {
-        console.error('Error processing payment:', err);
-        return res.status(500).json({ error: 'Error processing payment: ' + err.message });
-      }
-    } else {
-      // No payment provided — only allow when already fully paid
-      if (balanceDue > 0) {
-        return res.status(400).json({
-          error: 'Cannot collect without payment. Record the balance due in the payment modal, or receive payment first (Orders or Collection page).'
-        });
-      }
-      await updateAllOrders();
-    }
+    res.json({
+      message: `Receipt collected successfully (${itemCount} ${itemCount === 1 ? 'item' : 'items'})`,
+      order: mainOrder,
+      all_orders: updatedOrders,
+      payment_collected: paymentAmount,
+      balance_remaining: finalReceiptTotal - finalReceiptPaid,
+      receipt_total: finalReceiptTotal,
+      receipt_paid: finalReceiptPaid,
+    });
   } catch (err) {
     console.error('Error collecting order:', err);
     res.status(500).json({ error: err.message });
@@ -1694,7 +1584,7 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
        WHERE o.id = ? ${branchFilter.clause}`,
       [id, ...branchFilter.params]
     );
-    
+
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
@@ -1705,86 +1595,42 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
       return res.status(400).json({ error: 'Cannot receive payment for an archived receipt' });
     }
 
-    // Load ALL orders for this receipt so we validate and apply at receipt level (single receipt = all items)
-    const allOrders = await db.all(
-      `SELECT o.* FROM orders o WHERE o.receipt_number = ? ${branchFilter.clause} ORDER BY o.id`,
-      [order.receipt_number, ...branchFilter.params]
-    );
-    if (allOrders.some((o) => o.archived_at)) {
-      return res.status(400).json({ error: 'Cannot receive payment for an archived receipt' });
-    }
-
-    const receiptTotal = roundFigure(allOrders.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0));
-    const receiptPaid = roundFigure(allOrders.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0));
-    const balanceDue = roundFigure(receiptTotal - receiptPaid);
-    const paymentAmount = roundFigure(parseFloat(payment_amount));
-    
-    const tol = 0.01;
-    if (balanceDue <= 0) {
-      return res.status(400).json({ error: 'Receipt is already fully paid.' });
-    }
-    if (paymentAmount > balanceDue + tol) {
-      return res.status(400).json({
-        error: `Payment cannot exceed the balance due of TSh ${balanceDue.toLocaleString()}.`
-      });
-    }
-
     if (!assertNotFutureBusinessDate(paymentBookDateYmd(payment_date), res, 'payment_date')) {
       return;
     }
-    // Check for duplicate payment (use first order id)
+
     const paymentTimestampIso = buildPaymentTimestampIso(payment_date);
-    const timestamp = paymentTimestampIso;
-    const isDuplicate = await checkDuplicatePayment(allOrders[0].id, paymentAmount, timestamp);
-    
-    if (isDuplicate) {
-      return res.status(400).json({ error: 'Duplicate payment detected. This payment was already recorded.' });
-    }
-    
-    // Record one transaction for the full receipt payment
-    const orderObj = {
-      id: allOrders[0].id,
-      receipt_number: order.receipt_number,
-      branch_id: order.branch_id || null
-    };
-    const transactionId = await recordPaymentTransaction(orderObj, paymentAmount, payment_method, 'Cashier', paymentTimestampIso);
-    console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${order.receipt_number} (${allOrders.length} items)`);
-    const paidDate = paymentTimestampIso.slice(0, 10);
-    triggerDailySummaryRefreshAsync(paidDate, orderObj.branch_id);
-    
-    // Apply payment across ALL orders on the receipt (supports partial payments).
-    const newReceiptPaid = roundFigure(receiptPaid + paymentAmount);
-    const allocations = buildPerOrderPaidAllocations(allOrders, newReceiptPaid);
-    for (const alloc of allocations) {
-      const oldOrder = allOrders.find((o) => Number(o.id) === Number(alloc.id));
-      await db.run(
-        `UPDATE orders SET paid_amount = ?, payment_status = ?, payment_method = ? WHERE id = ?`,
-        [alloc.paid_amount, alloc.payment_status, payment_method, alloc.id]
-      );
-      logPaymentChange({
-        order_id: alloc.id,
-        action: 'payment_received',
-        old_payment_status: oldOrder?.payment_status,
-        new_payment_status: alloc.payment_status,
-        old_paid_amount: parseFloat(oldOrder?.paid_amount) || 0,
-        new_paid_amount: alloc.paid_amount,
-        old_payment_method: oldOrder?.payment_method,
-        new_payment_method: payment_method,
-        changed_by: 'Cashier',
-        notes: notes || `Payment for receipt ${order.receipt_number} (${allOrders.length} items)`
-      }).catch((err) => console.error('Error logging payment change:', err));
+    const txResult = await applyReceiptPaymentAtomic({
+      receiptNumber: order.receipt_number,
+      branchFilter,
+      paymentAmount: roundFigure(parseFloat(payment_amount)),
+      paymentMethod: payment_method,
+      paymentTimestampIso,
+      notes,
+      changedBy: 'Cashier',
+      collect: false,
+    });
+
+    if (!txResult.ok) {
+      return res.status(txResult.status).json({ error: txResult.error });
     }
 
-    const remainingBalance = roundFigure(Math.max(0, receiptTotal - newReceiptPaid));
-    
-    res.json({ 
-      message: 'Payment received successfully', 
-      order: { ...order, total_amount: receiptTotal, paid_amount: newReceiptPaid, receipt_item_count: allOrders.length },
+    const { receiptTotal, receiptPaid, paymentAmount, transactionId, itemCount } = txResult.data;
+    if (transactionId) {
+      console.log(
+        `✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${order.receipt_number} (${itemCount} items)`
+      );
+      triggerDailySummaryRefreshAsync(paymentTimestampIso.slice(0, 10), order.branch_id);
+    }
+
+    res.json({
+      message: 'Payment received successfully',
+      order: { ...order, total_amount: receiptTotal, paid_amount: receiptPaid, receipt_item_count: itemCount },
       payment_received: paymentAmount,
-      total_paid: newReceiptPaid,
-      balance_remaining: remainingBalance,
+      total_paid: receiptPaid,
+      balance_remaining: txResult.data.balanceRemaining,
       receipt_total: receiptTotal,
-      receipt_item_count: allOrders.length
+      receipt_item_count: itemCount,
     });
   } catch (err) {
     console.error('Error receiving payment:', err);
