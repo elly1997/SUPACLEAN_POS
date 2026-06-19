@@ -26,8 +26,11 @@ const dbPool = new Pool({
   connectionTimeoutMillis: 10000, // Increased to 10 seconds for Supabase pooler
 });
 
-// Test connection
+// Log first pool connection only (each schema module triggers its own query on startup).
+let loggedPoolConnect = false;
 dbPool.on('connect', () => {
+  if (loggedPoolConnect) return;
+  loggedPoolConnect = true;
   console.log('✅ Connected to PostgreSQL database');
 });
 

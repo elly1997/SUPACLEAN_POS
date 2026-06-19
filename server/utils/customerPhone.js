@@ -15,9 +15,20 @@ function isPlaceholderPhone(phone) {
 
 function normalizePhoneDigits(phone) {
   if (!phone || typeof phone !== 'string') return '';
-  const digits = phone.replace(/\D/g, '');
-  if (digits.length === 9 && phone.trim().startsWith('0')) return '255' + digits;
-  if (digits.length === 9) return '255' + digits;
+  const trimmed = phone.trim();
+  if (isPlaceholderPhone(trimmed)) return '';
+  let digits = trimmed.replace(/\D/g, '');
+  if (!digits) return '';
+  // Tanzania mobile: 0XXXXXXXXX (10 digits) -> drop leading 0
+  if (digits.length === 10 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+  if (digits.length === 9) {
+    return '255' + digits;
+  }
+  if (digits.length === 12 && digits.startsWith('255')) {
+    return digits;
+  }
   return digits;
 }
 

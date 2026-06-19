@@ -4,6 +4,16 @@ const db = require('../database/query');
 const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
+const { normalizePhoneDigits, isPlaceholderPhone } = require('../utils/customerPhone');
+
+async function phoneNormalizedForCustomer(phone, excludeId = null) {
+  const normalized = normalizePhoneDigits(String(phone || '').trim());
+  if (!normalized) return null;
+  const existing = excludeId
+    ? await db.get('SELECT id FROM customers WHERE phone_normalized = ? AND id <> ? LIMIT 1', [normalized, excludeId])
+    : await db.get('SELECT id FROM customers WHERE phone_normalized = ? LIMIT 1', [normalized]);
+  return existing ? null : normalized;
+}
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 const fs = require('fs');
@@ -17,25 +27,24 @@ if (!fs.existsSync(uploadsDir)) {
 
 const upload = multer({ dest: uploadsDir });
 
-/** Normalize phone for lookup: digits only; 9 digits with leading 0 -> 255 prefix (Tanzania) */
-function normalizePhone(phone) {
-  if (!phone || typeof phone !== 'string') return '';
-  const digits = phone.replace(/\D/g, '');
-  if (digits.length === 9 && phone.trim().startsWith('0')) return '255' + digits;
-  if (digits.length === 9) return '255' + digits;
-  return digits;
-}
-
 /** Find customer by phone (exact or normalized match for Tanzania) */
 async function findCustomerByPhone(phone) {
   if (!phone || !phone.trim()) return null;
   const trimmed = phone.trim();
-  const normalized = normalizePhone(trimmed);
+  if (isPlaceholderPhone(trimmed)) return null;
+  const normalized = normalizePhoneDigits(trimmed);
+  const digitsOnly = trimmed.replace(/\D/g, '');
   const rows = await db.all(
     `SELECT * FROM customers
-     WHERE phone_normalized = ? OR phone = ? OR phone = ? OR TRIM(phone) = ?
+     WHERE phone_normalized = ?
+        OR TRIM(phone) = ?
+        OR phone = ?
+        OR regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') = ?
+     ORDER BY
+       CASE WHEN phone_normalized = ? THEN 0 ELSE 1 END,
+       id ASC
      LIMIT 1`,
-    [normalized, trimmed, normalized, trimmed]
+    [normalized, trimmed, normalized, digitsOnly, normalized]
   );
   return rows && rows[0] ? rows[0] : null;
 }
@@ -224,9 +233,10 @@ router.post('/quick-add', requirePermission('canCreateOrders'), async (req, res)
       const c = await db.get('SELECT id, name, phone, tin, vrn FROM customers WHERE id = ?', [existing.id]);
       return res.status(200).json({ ...c, existing: true });
     }
+    const normalizedPhone = await phoneNormalizedForCustomer(phone);
     const r = await db.run(
       'INSERT INTO customers (name, phone, phone_normalized, tin, vrn) VALUES (?, ?, ?, ?, ?) RETURNING id',
-      [name.trim(), phone.trim(), normalizePhone(phone.trim()) || null, (tin || '').trim() || null, (vrn || '').trim() || null]
+      [name.trim(), phone.trim(), normalizedPhone, (tin || '').trim() || null, (vrn || '').trim() || null]
     );
     const id = r?.row?.id ?? r?.lastID;
     const c = await db.get('SELECT id, name, phone, tin, vrn FROM customers WHERE id = ?', [id]);
@@ -272,13 +282,14 @@ router.post('/', requireBranchAccess(), requirePermission('canManageCustomers'),
         message: 'Customer with this phone already exists; use this customer for your order.'
       });
     }
+    const normalizedPhone = await phoneNormalizedForCustomer(phone);
     const result = await db.run(
       branchId
         ? 'INSERT INTO customers (name, phone, phone_normalized, email, address, primary_branch_id) VALUES (?, ?, ?, ?, ?, ?) RETURNING id'
         : 'INSERT INTO customers (name, phone, phone_normalized, email, address) VALUES (?, ?, ?, ?, ?) RETURNING id',
       branchId
-        ? [name.trim(), phone.trim(), normalizePhone(phone.trim()) || null, email ? email.trim() || null : null, address ? address.trim() || null : null, branchId]
-        : [name.trim(), phone.trim(), normalizePhone(phone.trim()) || null, email ? email.trim() || null : null, address ? address.trim() || null : null]
+        ? [name.trim(), phone.trim(), normalizedPhone, email ? email.trim() || null : null, address ? address.trim() || null : null, branchId]
+        : [name.trim(), phone.trim(), normalizedPhone, email ? email.trim() || null : null, address ? address.trim() || null : null]
     );
     const id = result?.row?.id ?? result?.lastID;
     res.status(201).json({ id, name: name.trim(), phone: phone.trim(), email: email || null, address: address || null });
@@ -317,9 +328,10 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageCustomers'
         return res.status(400).json({ error: 'Phone number already in use by another customer' });
       }
     }
+    const normalizedPhone = await phoneNormalizedForCustomer(phone, id);
     const result = await db.run(
       'UPDATE customers SET name = ?, phone = ?, phone_normalized = ?, email = ?, address = ?, tags = ?, sms_notifications_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [name, phone, normalizePhone(phone) || null, email || null, address || null, tagsString || null, sms_notifications_enabled !== undefined ? sms_notifications_enabled : null, id]
+      [name, phone, normalizedPhone, email || null, address || null, tagsString || null, sms_notifications_enabled !== undefined ? sms_notifications_enabled : null, id]
     );
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Customer not found' });
