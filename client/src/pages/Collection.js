@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getOrderByReceipt, collectOrder, receivePayment, getCustomers, searchOrdersByCustomer, getCollectionQueue } from '../api/api';
+import { getOrderByReceipt, collectOrder, receivePayment, searchCustomers, searchOrdersByCustomer, getCollectionQueue } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
@@ -213,7 +213,7 @@ const Collection = () => {
     // Debounce the search
     const timer = setTimeout(async () => {
       try {
-        const customersRes = await getCustomers(searchTerm);
+        const customersRes = await searchCustomers(searchTerm);
         const matchingCustomers = customersRes.data || [];
         setAutocompleteSuggestions(matchingCustomers); // Show all matches; dropdown scrolls
         setShowAutocomplete(matchingCustomers.length > 0);
@@ -308,7 +308,7 @@ const Collection = () => {
 
     try {
       const searchTerm = phoneNumber.trim();
-      const customersRes = await getCustomers(searchTerm);
+      const customersRes = await searchCustomers(searchTerm);
       const matchingCustomers = customersRes.data || [];
 
       if (matchingCustomers.length > 1) {

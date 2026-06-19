@@ -15,10 +15,10 @@ const db = require('../database/query');
  * @param {string|null} paymentTimestampIso - Optional ISO timestamp for transaction_date
  * @returns {Promise<number>} Transaction ID
  */
-async function recordPaymentTransaction(order, paymentAmount, paymentMethod, createdBy = 'System', paymentTimestampIso = null) {
-  const result = await db.run(
-    `INSERT INTO transactions 
-     (order_id, transaction_type, amount, payment_method, description, transaction_date, created_by, branch_id)
+async function recordPaymentTransactionClient(client, order, paymentAmount, paymentMethod, createdBy = 'System', paymentTimestampIso = null) {
+  const result = await client.query(
+    `INSERT INTO transactions
+       (order_id, transaction_type, amount, payment_method, description, transaction_date, created_by, branch_id)
      VALUES ($1, 'payment_received', $2, $3, $4, COALESCE($5::timestamp, CURRENT_TIMESTAMP), $6, $7)
      RETURNING id`,
     [
@@ -28,12 +28,21 @@ async function recordPaymentTransaction(order, paymentAmount, paymentMethod, cre
       `Payment for order ${order.receipt_number || order.id}`,
       paymentTimestampIso,
       createdBy,
-      order.branch_id != null ? order.branch_id : null
+      order.branch_id != null ? order.branch_id : null,
     ]
   );
-  const id = result?.row?.id ?? result?.lastID;
+  const id = result.rows?.[0]?.id;
   if (id == null) throw new Error('Failed to get transaction id from INSERT');
   return id;
+}
+
+async function recordPaymentTransaction(order, paymentAmount, paymentMethod, createdBy = 'System', paymentTimestampIso = null) {
+  const client = await db.getPool().connect();
+  try {
+    return await recordPaymentTransactionClient(client, order, paymentAmount, paymentMethod, createdBy, paymentTimestampIso);
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -79,12 +88,12 @@ async function getTotalPaymentsForOrder(orderId) {
  * @param {Object} auditData - Audit log data
  * @returns {Promise<number>} Audit log ID
  */
-async function logPaymentChange(auditData) {
-  const result = await db.run(
-    `INSERT INTO payment_audit_log 
-     (order_id, action, old_payment_status, new_payment_status, 
-      old_paid_amount, new_paid_amount, old_payment_method, new_payment_method, 
-      changed_by, notes)
+async function logPaymentChangeClient(client, auditData) {
+  const result = await client.query(
+    `INSERT INTO payment_audit_log
+       (order_id, action, old_payment_status, new_payment_status,
+        old_paid_amount, new_paid_amount, old_payment_method, new_payment_method,
+        changed_by, notes)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING id`,
     [
@@ -97,15 +106,26 @@ async function logPaymentChange(auditData) {
       auditData.old_payment_method ?? null,
       auditData.new_payment_method ?? null,
       auditData.changed_by || 'System',
-      auditData.notes ?? null
+      auditData.notes ?? null,
     ]
   );
-  return result?.row?.id ?? result?.lastID;
+  return result.rows?.[0]?.id;
+}
+
+async function logPaymentChange(auditData) {
+  const client = await db.getPool().connect();
+  try {
+    return await logPaymentChangeClient(client, auditData);
+  } finally {
+    client.release();
+  }
 }
 
 module.exports = {
   recordPaymentTransaction,
+  recordPaymentTransactionClient,
   checkDuplicatePayment,
   getTotalPaymentsForOrder,
-  logPaymentChange
+  logPaymentChange,
+  logPaymentChangeClient,
 };

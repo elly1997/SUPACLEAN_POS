@@ -17,3 +17,23 @@ services:
         sync: false
       - key: REACT_APP_API_URL
         sync: false
+
+  # First of each month: preview archive (set ARCHIVE_EXECUTE=true on cron env to run for real)
+  - type: cron
+    name: supaclean-monthly-archive
+    runtime: node
+    schedule: "0 4 1 * *"
+    buildCommand: npm install
+    startCommand: node server/scripts/runMonthlyArchive.js
+    envVars:
+      - key: CRON_SECRET
+        sync: false
+      - key: API_URL
+        fromService:
+          type: web
+          name: supaclean-pos
+          property: hostport
+      - key: ARCHIVE_MONTHS
+        value: "7"
+      - key: ARCHIVE_EXECUTE
+        value: "false"

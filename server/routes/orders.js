@@ -24,8 +24,9 @@ const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFe
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 const { validatePayment } = require('../utils/paymentValidation');
-const { recordPaymentTransaction, logPaymentChange } = require('../utils/paymentTransactions');
+const { recordPaymentTransaction, recordPaymentTransactionClient, logPaymentChange, logPaymentChangeClient } = require('../utils/paymentTransactions');
 const { applyReceiptPaymentAtomic } = require('../utils/receiptPayment');
+const { parseArchiveOptions, archiveOldOrders: runArchiveOldOrders } = require('../utils/archiveOldOrders');
 const { voidReceiptByNumber } = require('../utils/orderVoid');
 const { sqlActiveOrdersOnly, sqlUnarchivedOrdersOnly } = require('../utils/orderVoidFilter');
 const cashManagement = require('./cashManagement');
@@ -272,55 +273,15 @@ router.post('/archive-old', requireBranchAccess(), requirePermission('canManageO
     return res.status(403).json({ error: 'Only admins can run order archive maintenance.' });
   }
 
-  const monthsRaw = Number(req.body?.months ?? 7);
-  const months = Number.isFinite(monthsRaw) ? Math.max(1, Math.min(120, Math.round(monthsRaw))) : 7;
-  const dryRun = req.body?.dry_run === true || req.body?.dry_run === 'true';
-  const cutoff = new Date();
-  cutoff.setMonth(cutoff.getMonth() - months);
-  const cutoffIso = cutoff.toISOString();
   const branchFilter = getBranchFilter(req);
-  const archiveReason = req.body?.archive_reason || `Auto-archived completed orders older than ${months} months`;
-  const archivedBy = req.user?.fullName || req.user?.username || 'Admin';
-
-  const whereClause = `
-    archived_at IS NULL
-    AND (
-      status = 'collected'
-      OR status = 'voided'
-      OR COALESCE(is_voided, FALSE) = TRUE
-    )
-    AND COALESCE(collected_date, voided_at, order_date) < ?
-    ${branchFilter.clause}
-  `;
-  const whereParams = [cutoffIso, ...branchFilter.params];
+  const options = parseArchiveOptions({
+    ...req.body,
+    archived_by: req.user?.fullName || req.user?.username || 'Admin',
+  });
 
   try {
-    const summary = await db.get(
-      `SELECT COUNT(*) AS items, COUNT(DISTINCT UPPER(receipt_number)) AS receipts
-       FROM orders
-       WHERE ${whereClause}`,
-      whereParams
-    );
-
-    if (!dryRun) {
-      await db.run(
-        `UPDATE orders
-         SET archived_at = CURRENT_TIMESTAMP,
-             archived_by = ?,
-             archive_reason = ?
-         WHERE ${whereClause}`,
-        [archivedBy, archiveReason, ...whereParams]
-      );
-    }
-
-    res.json({
-      message: dryRun ? 'Archive preview completed' : 'Old completed orders archived successfully',
-      dry_run: dryRun,
-      cutoff_date: cutoffIso.slice(0, 10),
-      months,
-      receipts_matched: Number(summary?.receipts || 0),
-      items_matched: Number(summary?.items || 0)
-    });
+    const result = await runArchiveOldOrders(branchFilter, options);
+    res.json(result);
   } catch (err) {
     console.error('Error archiving old orders:', err);
     res.status(500).json({ error: err.message });
@@ -928,12 +889,17 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
       };
 
       if (linePaid > 0 && linePaymentStatus === 'advance') {
-        recordPaymentTransaction(order, linePaid, linePaymentMethod, created_by || 'System').catch((err) => {
-          console.error('Error recording payment transaction (batch):', err);
-        });
+        await recordPaymentTransactionClient(
+          client,
+          order,
+          linePaid,
+          linePaymentMethod,
+          created_by || 'System',
+          finalOrderDateIso
+        );
       }
 
-      logPaymentChange({
+      await logPaymentChangeClient(client, {
         order_id: orderId,
         action: 'created',
         new_payment_status: linePaymentStatus,
@@ -941,8 +907,6 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
         new_payment_method: linePaymentMethod,
         changed_by: created_by || 'System',
         notes: 'Order created (batch)',
-      }).catch((err) => {
-        console.error('Error logging payment change (batch):', err);
       });
 
       results.push({

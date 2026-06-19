@@ -4,6 +4,10 @@
  */
 const db = require('../database/query');
 const { convertQuery } = require('../database/query');
+const {
+  recordPaymentTransactionClient,
+  logPaymentChangeClient,
+} = require('./paymentTransactions');
 
 const roundFigure = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x));
 
@@ -55,51 +59,6 @@ async function checkDuplicatePaymentClient(client, orderId, amount, timestamp) {
     [orderId, amount, timestamp]
   );
   return (result.rows || []).length > 0;
-}
-
-async function recordPaymentTransactionClient(client, order, paymentAmount, paymentMethod, createdBy, paymentTimestampIso) {
-  const result = await client.query(
-    `INSERT INTO transactions
-       (order_id, transaction_type, amount, payment_method, description, transaction_date, created_by, branch_id)
-     VALUES ($1, 'payment_received', $2, $3, $4, COALESCE($5::timestamp, CURRENT_TIMESTAMP), $6, $7)
-     RETURNING id`,
-    [
-      order.id,
-      paymentAmount,
-      paymentMethod || 'cash',
-      `Payment for order ${order.receipt_number || order.id}`,
-      paymentTimestampIso,
-      createdBy,
-      order.branch_id != null ? order.branch_id : null,
-    ]
-  );
-  const id = result.rows?.[0]?.id;
-  if (id == null) throw new Error('Failed to get transaction id from INSERT');
-  return id;
-}
-
-async function logPaymentChangeClient(client, auditData) {
-  const result = await client.query(
-    `INSERT INTO payment_audit_log
-       (order_id, action, old_payment_status, new_payment_status,
-        old_paid_amount, new_paid_amount, old_payment_method, new_payment_method,
-        changed_by, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     RETURNING id`,
-    [
-      auditData.order_id,
-      auditData.action || 'updated',
-      auditData.old_payment_status ?? null,
-      auditData.new_payment_status ?? null,
-      auditData.old_paid_amount ?? null,
-      auditData.new_paid_amount ?? null,
-      auditData.old_payment_method ?? null,
-      auditData.new_payment_method ?? null,
-      auditData.changed_by || 'System',
-      auditData.notes ?? null,
-    ]
-  );
-  return result.rows?.[0]?.id;
 }
 
 /**

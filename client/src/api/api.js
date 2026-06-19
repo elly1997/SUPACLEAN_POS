@@ -188,6 +188,37 @@ export async function getCustomers(search = '', options = {}) {
     throw err;
   }
 }
+
+/** Fast typeahead for New Order / Collection autocomplete */
+export async function searchCustomers(q, options = {}) {
+  const term = String(q || '').trim();
+  if (term.length < 2) {
+    return { data: [] };
+  }
+  const limit = options.limit || 15;
+  if (isOffline()) {
+    try {
+      const cached = await getSyncCache('customers');
+      if (cached && Array.isArray(cached.data)) {
+        const s = term.toLowerCase();
+        const data = cached.data
+          .filter(
+            (c) =>
+              (c.name && c.name.toLowerCase().includes(s)) ||
+              (c.phone && String(c.phone).includes(term))
+          )
+          .slice(0, limit);
+        return { data, fromCache: true };
+      }
+      return { data: [] };
+    } catch (e) {
+      return { data: [] };
+    }
+  }
+  const params = new URLSearchParams({ q: term, limit: String(limit) });
+  return api.get(`/customers/search?${params.toString()}`);
+}
+
 export const getCustomer = (id) => api.get(`/customers/${id}`);
 export const createCustomer = (data) => api.post('/customers', data);
 export const updateCustomer = (id, data) => api.put(`/customers/${id}`, data);

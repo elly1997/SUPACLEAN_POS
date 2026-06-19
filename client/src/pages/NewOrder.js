@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { getServices, getItems, getCustomers, createCustomer, createOrderBatch, getCustomerOrders, getSettings, sendReceiptSms } from '../api/api';
+import { getServices, getItems, searchCustomers, createCustomer, createOrderBatch, getCustomerOrders, getSettings, sendReceiptSms } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
@@ -232,7 +232,7 @@ const NewOrder = () => {
     }
     
     try {
-      const res = await getCustomers(term.trim());
+      const res = await searchCustomers(term.trim());
       const customerList = res.data || [];
       console.log('Customer search results:', customerList.length, 'customers found for term:', term);
       setCustomers(customerList);

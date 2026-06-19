@@ -42,6 +42,55 @@ async function findCustomerByPhone(phone) {
 
 router.use(authenticate, requireBranchFeature('customers'));
 
+// Fast typeahead search for New Order / Collection autocomplete (must be before /:id)
+router.get('/search', async (req, res) => {
+  const q = String(req.query.q || req.query.search || '').trim();
+  if (q.length < 2) {
+    return res.json([]);
+  }
+
+  const limit = Math.min(parseInt(req.query.limit, 10) || 15, 30);
+  const effectiveBranchId = getEffectiveBranchId(req);
+  const digitsOnly = q.replace(/\D/g, '');
+  const normalizedPhone = digitsOnly.length === 9 ? '255' + digitsOnly : digitsOnly;
+
+  const whereConditions = [];
+  const params = [];
+
+  if (effectiveBranchId != null) {
+    whereConditions.push(
+      '(c.primary_branch_id = ? OR (c.primary_branch_id IS NULL AND c.id IN (SELECT DISTINCT customer_id FROM orders WHERE branch_id = ?)))'
+    );
+    params.push(effectiveBranchId, effectiveBranchId);
+  }
+
+  const searchConditions = ['c.name ILIKE ?', 'c.phone ILIKE ?'];
+  params.push(`${q}%`, `${q}%`);
+  if (normalizedPhone.length >= 3) {
+    searchConditions.push('c.phone_normalized LIKE ?');
+    params.push(`${normalizedPhone}%`);
+  }
+  whereConditions.push(`(${searchConditions.join(' OR ')})`);
+
+  const whereClause = whereConditions.length ? ` WHERE ${whereConditions.join(' AND ')}` : '';
+
+  try {
+    const rows = await db.all(
+      `SELECT c.id, c.name, c.phone, c.email, c.primary_branch_id AS branch_id, b.name AS branch_name
+       FROM customers c
+       LEFT JOIN branches b ON b.id = c.primary_branch_id
+       ${whereClause}
+       ORDER BY c.name ASC
+       LIMIT ?`,
+      [...params, limit]
+    );
+    res.json(rows || []);
+  } catch (err) {
+    console.error('Error searching customers:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get all customers with optional outstanding balance (?light=1 for fast list, no JOIN)
 router.get('/', async (req, res) => {
   const { search, limit: limitParam, offset: offsetParam, page, light } = req.query;
