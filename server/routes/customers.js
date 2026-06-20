@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
 const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/permissions');
+const { requirePermission, requireAnyPermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 const { normalizePhoneDigits, isPlaceholderPhone } = require('../utils/customerPhone');
 
@@ -49,9 +49,35 @@ async function findCustomerByPhone(phone) {
   return rows && rows[0] ? rows[0] : null;
 }
 
+async function formatExistingCustomerResponse(existing, extras = {}) {
+  let home_branch_name = null;
+  let home_branch_code = null;
+  if (existing.primary_branch_id) {
+    const branch = await db.get('SELECT name, code FROM branches WHERE id = ?', [existing.primary_branch_id]);
+    home_branch_name = branch?.name || null;
+    home_branch_code = branch?.code || null;
+  }
+  const branchLabel = home_branch_code || home_branch_name;
+  return {
+    id: existing.id,
+    name: existing.name,
+    phone: existing.phone,
+    email: existing.email ?? extras.email ?? null,
+    address: existing.address ?? extras.address ?? null,
+    existing: true,
+    home_branch_id: existing.primary_branch_id ?? null,
+    home_branch_name,
+    home_branch_code,
+    message: branchLabel
+      ? `Customer already registered (home branch: ${branchLabel}). You can use them for this order at any branch.`
+      : 'Customer with this phone already exists; use this customer for your order.',
+  };
+}
+
 router.use(authenticate, requireBranchFeature('customers'));
 
 // Fast typeahead search for New Order / Collection autocomplete (must be before /:id)
+// Searches all branches — customers may collect laundry at any branch.
 router.get('/search', async (req, res) => {
   const q = String(req.query.q || req.query.search || '').trim();
   if (q.length < 2) {
@@ -59,33 +85,26 @@ router.get('/search', async (req, res) => {
   }
 
   const limit = Math.min(parseInt(req.query.limit, 10) || 15, 30);
-  const effectiveBranchId = getEffectiveBranchId(req);
   const digitsOnly = q.replace(/\D/g, '');
-  const normalizedPhone = digitsOnly.length === 9 ? '255' + digitsOnly : digitsOnly;
-
-  const whereConditions = [];
-  const params = [];
-
-  if (effectiveBranchId != null) {
-    whereConditions.push(
-      '(c.primary_branch_id = ? OR (c.primary_branch_id IS NULL AND c.id IN (SELECT DISTINCT customer_id FROM orders WHERE branch_id = ?)))'
-    );
-    params.push(effectiveBranchId, effectiveBranchId);
+  let normalizedPhone = digitsOnly;
+  if (digitsOnly.length === 10 && digitsOnly.startsWith('0')) {
+    normalizedPhone = '255' + digitsOnly.slice(1);
+  } else if (digitsOnly.length === 9) {
+    normalizedPhone = '255' + digitsOnly;
   }
 
   const searchConditions = ['c.name ILIKE ?', 'c.phone ILIKE ?'];
-  params.push(`${q}%`, `${q}%`);
+  const params = [`${q}%`, `${q}%`];
   if (normalizedPhone.length >= 3) {
     searchConditions.push('c.phone_normalized LIKE ?');
     params.push(`${normalizedPhone}%`);
   }
-  whereConditions.push(`(${searchConditions.join(' OR ')})`);
 
-  const whereClause = whereConditions.length ? ` WHERE ${whereConditions.join(' AND ')}` : '';
+  const whereClause = ` WHERE (${searchConditions.join(' OR ')})`;
 
   try {
     const rows = await db.all(
-      `SELECT c.id, c.name, c.phone, c.email, c.primary_branch_id AS branch_id, b.name AS branch_name
+      `SELECT c.id, c.name, c.phone, c.email, c.primary_branch_id AS branch_id, b.name AS branch_name, b.code AS branch_code
        FROM customers c
        LEFT JOIN branches b ON b.id = c.primary_branch_id
        ${whereClause}
@@ -231,7 +250,8 @@ router.post('/quick-add', requirePermission('canCreateOrders'), async (req, res)
     const existing = await findCustomerByPhone(phone);
     if (existing) {
       const c = await db.get('SELECT id, name, phone, tin, vrn FROM customers WHERE id = ?', [existing.id]);
-      return res.status(200).json({ ...c, existing: true });
+      const payload = await formatExistingCustomerResponse(existing, { tin: c?.tin, vrn: c?.vrn });
+      return res.status(200).json({ ...c, ...payload, existing: true });
     }
     const normalizedPhone = await phoneNormalizedForCustomer(phone);
     const r = await db.run(
@@ -246,7 +266,8 @@ router.post('/quick-add', requirePermission('canCreateOrders'), async (req, res)
       const existing = await findCustomerByPhone(phone).catch(() => null);
       if (existing) {
         const c = await db.get('SELECT id, name, phone, tin, vrn FROM customers WHERE id = ?', [existing.id]);
-        return res.status(200).json({ ...c, existing: true });
+        const payload = await formatExistingCustomerResponse(existing, { tin: c?.tin, vrn: c?.vrn });
+        return res.status(200).json({ ...c, ...payload, existing: true });
       }
       return res.status(400).json({ error: 'Phone number already exists' });
     }
@@ -254,8 +275,8 @@ router.post('/quick-add', requirePermission('canCreateOrders'), async (req, res)
   }
 });
 
-// Create new customer (managers and admins only). Assigns primary_branch_id so customer only appears in that branch.
-router.post('/', requireBranchAccess(), requirePermission('canManageCustomers'), async (req, res) => {
+// Create customer or return existing match by phone (any branch). Orders can be placed at any branch.
+router.post('/', requireBranchAccess(), requireAnyPermission('canManageCustomers', 'canCreateOrders'), async (req, res) => {
   const { name, phone, email, address } = req.body;
   const branchId = getEffectiveBranchId(req) ?? req.user?.branchId ?? req.branch?.id ?? null;
 
@@ -269,18 +290,7 @@ router.post('/', requireBranchAccess(), requirePermission('canManageCustomers'),
   try {
     const existing = await findCustomerByPhone(phone);
     if (existing) {
-      if (branchId && existing.primary_branch_id != null && existing.primary_branch_id !== branchId) {
-        return res.status(400).json({ error: 'This phone number is already registered to a customer in another branch.' });
-      }
-      return res.status(200).json({
-        id: existing.id,
-        name: existing.name,
-        phone: existing.phone,
-        email: existing.email ?? email ?? null,
-        address: existing.address ?? address ?? null,
-        existing: true,
-        message: 'Customer with this phone already exists; use this customer for your order.'
-      });
+      return res.status(200).json(await formatExistingCustomerResponse(existing, { email, address }));
     }
     const normalizedPhone = await phoneNormalizedForCustomer(phone);
     const result = await db.run(
@@ -297,15 +307,7 @@ router.post('/', requireBranchAccess(), requirePermission('canManageCustomers'),
     if (err.message && (err.message.includes('UNIQUE') || err.message.includes('unique constraint') || err.message.includes('customers_phone_key'))) {
       const existing = await findCustomerByPhone(phone).catch(() => null);
       if (existing) {
-        return res.status(200).json({
-          id: existing.id,
-          name: existing.name,
-          phone: existing.phone,
-          email: existing.email ?? null,
-          address: existing.address ?? null,
-          existing: true,
-          message: 'Customer with this phone already exists; use this customer for your order.'
-        });
+        return res.status(200).json(await formatExistingCustomerResponse(existing, { email, address }));
       }
       return res.status(400).json({ error: 'Phone number already exists' });
     }

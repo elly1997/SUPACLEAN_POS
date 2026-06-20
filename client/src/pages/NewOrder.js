@@ -581,7 +581,7 @@ const NewOrder = () => {
       loadCustomers();
       showToast(
         res.data.existing
-          ? 'Customer with this phone already exists. Using existing customer for your order.'
+          ? (res.data.message || 'Customer with this phone already exists. Using existing customer for your order.')
           : 'Customer created successfully',
         'success'
       );
@@ -1274,7 +1274,7 @@ Phone: ${customer.phone}
                               <strong>{customer.name}</strong>
                               <span>{customer.phone}</span>
                               {customer.branch_name && (
-                                <span className="customer-dropdown-branch">📍 {customer.branch_name}</span>
+                                <span className="customer-dropdown-branch">Home: {customer.branch_code || customer.branch_name}</span>
                               )}
                             </div>
                           </div>

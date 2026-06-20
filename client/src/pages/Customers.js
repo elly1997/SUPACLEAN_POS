@@ -105,7 +105,7 @@ const Customers = () => {
       setShowNewCustomer(false);
       showToast(
         res.data.existing
-          ? 'Customer with this phone already exists. They are in the list below.'
+          ? (res.data.message || 'Customer with this phone already exists. They are in the list below.')
           : 'Customer created successfully',
         'success'
       );

@@ -98,6 +98,22 @@ function requirePermission(permission) {
   };
 }
 
+/** Allow route when the user has at least one of the listed permissions. */
+function requireAnyPermission(...permissionList) {
+  return (req, res, next) => {
+    if (!req.user || !req.user.role) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const allowed = permissionList.some((p) => hasPermission(req.user, p));
+    if (!allowed) {
+      return res.status(403).json({
+        error: `You don't have permission to perform this action. Required one of: ${permissionList.join(', ')}`,
+      });
+    }
+    next();
+  };
+}
+
 /**
  * Helper function to check if a user has a specific permission
  * Useful for conditional logic in routes or for frontend checks
@@ -123,6 +139,7 @@ function getRolePermissions(role) {
 module.exports = {
   ROLE_PERMISSIONS,
   requirePermission,
+  requireAnyPermission,
   hasPermission,
   getRolePermissions
 };
