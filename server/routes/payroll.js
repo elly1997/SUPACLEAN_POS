@@ -257,25 +257,82 @@ function mapSavedPayrollRowToLine(r) {
   };
 }
 
+function buildLineFromEmployee(e, advMap) {
+  const gross = parseMoney(e.gross_salary);
+  const allowances = parseMoney(e.default_allowances);
+  const bonuses = parseMoney(e.default_bonuses);
+  const otherDeductions = parseMoney(e.default_other_deductions);
+  const advances = advMap.get(Number(e.id)) || 0;
+  const nssfEmployeeRate = parseMoney(e.nssf_employee_rate, 10);
+  const nssfEmployerRate = parseMoney(e.nssf_employer_rate, 10);
+  const nssfEmployeeAmount = e.nssf_enabled ? (gross * nssfEmployeeRate) / 100 : 0;
+  const nssfEmployerAmount = e.nssf_enabled ? (gross * nssfEmployerRate) / 100 : 0;
+  const taxable = Math.max(0, gross + allowances + bonuses - nssfEmployeeAmount);
+  const paye = e.paye_enabled ? estimateMonthlyPAYE(taxable) : 0;
+  const totalDeductions = nssfEmployeeAmount + paye + otherDeductions + advances;
+  const net = gross + allowances + bonuses - totalDeductions;
+  return {
+    employee_id: e.id,
+    full_name: e.full_name,
+    employee_code: e.employee_code,
+    gross_salary: gross,
+    allowances,
+    bonuses,
+    nssf_enabled: !!e.nssf_enabled,
+    paye_enabled: !!e.paye_enabled,
+    nssf_employee_rate: nssfEmployeeRate,
+    nssf_employer_rate: nssfEmployerRate,
+    nssf_amount: nssfEmployeeAmount,
+    employer_nssf_amount: nssfEmployerAmount,
+    taxable_income: taxable,
+    paye_estimate: paye,
+    paye_amount: paye,
+    other_deductions: otherDeductions,
+    salary_advances: advances,
+    total_deductions: totalDeductions,
+    net_salary: net,
+    total_employer_cost: gross + allowances + bonuses + nssfEmployerAmount
+  };
+}
+
+function sumPayrollLines(lines) {
+  const list = lines || [];
+  let totalGross = 0;
+  let totalNet = 0;
+  for (const line of list) {
+    totalGross += parseMoney(line.gross_salary) + parseMoney(line.allowances) + parseMoney(line.bonuses);
+    totalNet += parseMoney(line.net_salary);
+  }
+  return {
+    employee_count: list.length,
+    total_gross: totalGross,
+    total_net: totalNet
+  };
+}
+
 router.get('/monthly', requirePermission('canManagePayroll'), async (req, res) => {
   const month = monthKeyOrNow(req.query.month);
   try {
     const periodRow = await db.get('SELECT month_key, status, completed_on FROM payroll_periods WHERE month_key = ?', [month]);
     const isClosed = periodRow && String(periodRow.status).toLowerCase() === 'closed';
 
+    const savedRows = await db.all(
+      `SELECT pm.*, e.full_name, e.employee_code
+       FROM payroll_monthly pm
+       JOIN employees e ON e.id = pm.employee_id
+       WHERE pm.month_key = ?
+       ORDER BY e.full_name ASC`,
+      [month]
+    );
+    const savedMap = new Map((savedRows || []).map((r) => [Number(r.employee_id), mapSavedPayrollRowToLine(r)]));
+
     if (isClosed) {
-      const rows = await db.all(
-        `SELECT pm.*, e.full_name, e.employee_code
-         FROM payroll_monthly pm
-         JOIN employees e ON e.id = pm.employee_id
-         WHERE pm.month_key = $1
-         ORDER BY e.full_name ASC`,
-        [month]
-      );
-      const lines = (rows || []).map(mapSavedPayrollRowToLine);
+      const lines = (savedRows || []).map(mapSavedPayrollRowToLine);
       return res.json({
         month_key: month,
         lines,
+        totals: sumPayrollLines(lines),
+        has_saved_snapshot: lines.length > 0,
         period: {
           status: 'closed',
           completed_on: periodRow.completed_on ? String(periodRow.completed_on).slice(0, 10) : null
@@ -290,45 +347,29 @@ router.get('/monthly', requirePermission('canManagePayroll'), async (req, res) =
       []
     );
     const advMap = await monthAdvanceMap(month);
-    const lines = (employees || []).map((e) => {
-      const gross = parseMoney(e.gross_salary);
-      const allowances = parseMoney(e.default_allowances);
-      const bonuses = parseMoney(e.default_bonuses);
-      const otherDeductions = parseMoney(e.default_other_deductions);
-      const advances = advMap.get(Number(e.id)) || 0;
-      const nssfEmployeeRate = parseMoney(e.nssf_employee_rate, 10);
-      const nssfEmployerRate = parseMoney(e.nssf_employer_rate, 10);
-      const nssfEmployeeAmount = e.nssf_enabled ? (gross * nssfEmployeeRate) / 100 : 0;
-      const nssfEmployerAmount = e.nssf_enabled ? (gross * nssfEmployerRate) / 100 : 0;
-      const taxable = Math.max(0, gross + allowances + bonuses - nssfEmployeeAmount);
-      const paye = e.paye_enabled ? estimateMonthlyPAYE(taxable) : 0;
-      const totalDeductions = nssfEmployeeAmount + paye + otherDeductions + advances;
-      const net = gross + allowances + bonuses - totalDeductions;
-      return {
-        employee_id: e.id,
-        full_name: e.full_name,
-        employee_code: e.employee_code,
-        gross_salary: gross,
-        allowances,
-        bonuses,
-        nssf_enabled: !!e.nssf_enabled,
-        paye_enabled: !!e.paye_enabled,
-        nssf_employee_rate: nssfEmployeeRate,
-        nssf_employer_rate: nssfEmployerRate,
-        nssf_amount: nssfEmployeeAmount,
-        employer_nssf_amount: nssfEmployerAmount,
-        taxable_income: taxable,
-        paye_estimate: paye,
-        other_deductions: otherDeductions,
-        salary_advances: advances,
-        total_deductions: totalDeductions,
-        net_salary: net,
-        total_employer_cost: gross + allowances + bonuses + nssfEmployerAmount
-      };
-    });
+    const lineByEmployee = new Map();
+
+    for (const e of employees || []) {
+      const saved = savedMap.get(Number(e.id));
+      lineByEmployee.set(Number(e.id), saved || buildLineFromEmployee(e, advMap));
+    }
+
+    // Keep saved lines for inactive staff so historical months stay complete after save.
+    for (const [empId, line] of savedMap) {
+      if (!lineByEmployee.has(empId)) {
+        lineByEmployee.set(empId, line);
+      }
+    }
+
+    const lines = Array.from(lineByEmployee.values()).sort((a, b) =>
+      String(a.full_name || '').localeCompare(String(b.full_name || ''))
+    );
+
     res.json({
       month_key: month,
       lines,
+      totals: sumPayrollLines(lines),
+      has_saved_snapshot: savedMap.size > 0,
       period: {
         status: 'open',
         completed_on: null

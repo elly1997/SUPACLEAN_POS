@@ -29,7 +29,7 @@ const formatPayrollMonthLabel = (monthKey) => {
 
 const moneyTzs = (n) => `TSh ${Number(n || 0).toLocaleString()}`;
 
-/** Net still “on the books” as payable while the period is open (matches API when present). */
+/** Net still on the books while the period is open (matches API when present). */
 const outstandingNetForHistoryRow = (h) => {
   if (h == null) return 0;
   if (h.outstanding_net_pay != null && Number.isFinite(Number(h.outstanding_net_pay))) {
@@ -38,12 +38,15 @@ const outstandingNetForHistoryRow = (h) => {
   return String(h.payroll_status) === 'Open' ? Number(h.total_net_salary || 0) : 0;
 };
 
-/** Linter-style severity for payroll month cards */
-const payrollHistoryCardLevel = (h) => {
-  if (String(h.payroll_status) !== 'Open') return 'INFO';
-  const overdue = h.overdue_open === true || (h.overdue_open == null && String(h.month_key) < monthNow());
-  if (overdue) return 'ERROR';
-  return 'WARN';
+const sumPayrollLines = (lines) => {
+  const list = lines || [];
+  let totalGross = 0;
+  let totalNet = 0;
+  for (const line of list) {
+    totalGross += Number(line.gross_salary || 0) + Number(line.allowances || 0) + Number(line.bonuses || 0);
+    totalNet += Number(line.net_salary || 0);
+  }
+  return { employee_count: list.length, total_gross: totalGross, total_net: totalNet };
 };
 
 const todayYmd = () => {
@@ -75,13 +78,13 @@ const Payroll = () => {
   const canManagePayroll = hasPermission('canManagePayroll');
   const canRecordAdvances = hasPermission('canRecordSalaryAdvances');
   const [payrollFeatureEnabled, setPayrollFeatureEnabled] = useState(isAdmin ? true : null);
-  const [activeStep, setActiveStep] = useState(canManagePayroll ? 'verification' : 'inputs');
+  const [activeStep, setActiveStep] = useState(canManagePayroll ? 'payrun' : 'staff');
   const [monthKey, setMonthKey] = useState(monthNow());
   const [employees, setEmployees] = useState([]);
   const [advances, setAdvances] = useState([]);
   const [payroll, setPayroll] = useState([]);
   const [payrollHistory, setPayrollHistory] = useState([]);
-  const [selectedHistoryMonth, setSelectedHistoryMonth] = useState('');
+  const [hasSavedSnapshot, setHasSavedSnapshot] = useState(false);
   const [selectedEmployeeStatement, setSelectedEmployeeStatement] = useState('');
   const [staffSearch, setStaffSearch] = useState('');
   const [editingStaffId, setEditingStaffId] = useState(null);
@@ -152,14 +155,14 @@ const Payroll = () => {
         setEmployees(results[idx++].data || []);
         const monthlyRes = results[idx++];
         const monthlyData = monthlyRes.data || {};
-        setPayroll((monthlyData.lines || []).map(recomputeLine));
+        setPayroll((monthlyData.lines || []).map((line) => ({ ...line })));
+        setHasSavedSnapshot(!!monthlyData.has_saved_snapshot);
         const p = monthlyData.period;
         setPeriodStatus(p?.status === 'closed' ? 'closed' : 'open');
         setCompletedOn(p?.completed_on ? String(p.completed_on).slice(0, 10) : '');
         setMarkCompleted(false);
         const h = results[idx++].data || [];
         setPayrollHistory(h);
-        if (h.length > 0) setSelectedHistoryMonth((prev) => (prev && h.some((x) => x.month_key === prev) ? prev : h[0].month_key));
       }
       if (canRecordAdvances) {
         setAdvances(results[idx++].data || []);
@@ -211,14 +214,18 @@ const Payroll = () => {
       return fullName.includes(q) || code.includes(q) || phone.includes(q);
     });
   }, [employees, staffSearch]);
-  const totalEmployees = employees.length;
-  const processedEmployees = payroll.length;
-  const remainingEmployees = Math.max(0, totalEmployees - processedEmployees);
+  const totalEmployees = employees.filter((e) => e.is_active !== false).length;
+  const payrollTotals = useMemo(() => sumPayrollLines(payroll), [payroll]);
+  const savedHistoryEntry = useMemo(
+    () => payrollHistory.find((h) => h.month_key === monthKey) || null,
+    [payrollHistory, monthKey]
+  );
+  const totalsMatchSaved = savedHistoryEntry
+    ? Math.abs(Number(savedHistoryEntry.total_net_salary || 0) - payrollTotals.total_net) < 1
+      && Math.abs(Number(savedHistoryEntry.total_gross_compensation || 0) - payrollTotals.total_gross) < 1
+      && Number(savedHistoryEntry.processed_employees || 0) === payrollTotals.employee_count
+    : !hasSavedSnapshot;
   const advancesTotal = advances.reduce((sum, a) => sum + Number(a.amount || 0), 0);
-
-  const payrollHistoryOpenOutstanding = useMemo(() => {
-    return payrollHistory.reduce((sum, h) => sum + outstandingNetForHistoryRow(h), 0);
-  }, [payrollHistory]);
 
   const submitEmployee = async (e) => {
     e.preventDefault();
@@ -339,9 +346,10 @@ const Payroll = () => {
   };
 
   const actionLoadLines = async () => {
-    const month = selectedHistoryMonth || monthKey;
-    const res = await getSavedMonthlyPayroll(month);
-    return res?.data?.lines || [];
+    const res = await getSavedMonthlyPayroll(monthKey);
+    const saved = res?.data?.lines || [];
+    if (saved.length) return saved;
+    return payroll;
   };
 
   const handleSalaryStatement = async () => {
@@ -351,14 +359,14 @@ const Payroll = () => {
       const totalNet = lines.reduce((s, r) => s + Number(r.net_salary || 0), 0);
       const totalPaye = lines.reduce((s, r) => s + Number(r.paye_amount || 0), 0);
       const text = [
-        `SUPACLEAN Payroll Statement (${selectedHistoryMonth || monthKey})`,
+        `SUPACLEAN Payroll Statement (${monthKey})`,
         `Employees: ${lines.length}`,
         `Total Net: TSh ${totalNet.toLocaleString()}`,
         `Total PAYE: TSh ${totalPaye.toLocaleString()}`,
         '',
         ...lines.map((r) => `${r.full_name} | Gross ${Number(r.gross_salary || 0).toLocaleString()} | Net ${Number(r.net_salary || 0).toLocaleString()}`)
       ].join('\n');
-      downloadFile(`payroll-statement-${selectedHistoryMonth || monthKey}.txt`, text);
+      downloadFile(`payroll-statement-${monthKey}.txt`, text);
       showToast('Salary statement exported', 'success');
     } catch (err) {
       showToast(`Error generating statement: ${err.response?.data?.error || err.message}`, 'error');
@@ -373,7 +381,7 @@ const Payroll = () => {
         'Employee,Employee Code,Net Salary',
         ...lines.map((r) => `"${(r.full_name || '').replace(/"/g, '""')}","${r.employee_code || ''}","${Number(r.net_salary || 0).toFixed(2)}"`)
       ].join('\n');
-      downloadFile(`bank-transfer-${selectedHistoryMonth || monthKey}.csv`, csv, 'text/csv;charset=utf-8');
+      downloadFile(`bank-transfer-${monthKey}.csv`, csv, 'text/csv;charset=utf-8');
       showToast('Bank transfer file generated', 'success');
     } catch (err) {
       showToast(`Error generating transfer: ${err.response?.data?.error || err.message}`, 'error');
@@ -386,7 +394,7 @@ const Payroll = () => {
       if (!lines.length) return showToast('No saved payroll lines for selected month', 'error');
       const slips = lines.map((r) => ([
         '--- PAYSLIP ---',
-        `Month: ${selectedHistoryMonth || monthKey}`,
+        `Month: ${monthKey}`,
         `Employee: ${r.full_name}`,
         `Gross: TSh ${Number(r.gross_salary || 0).toLocaleString()}`,
         `Allowances: TSh ${Number(r.allowances || 0).toLocaleString()}`,
@@ -399,7 +407,7 @@ const Payroll = () => {
         `Net Salary: TSh ${Number(r.net_salary || 0).toLocaleString()}`,
         ''
       ].join('\n'))).join('\n');
-      downloadFile(`payslips-${selectedHistoryMonth || monthKey}.txt`, slips);
+      downloadFile(`payslips-${monthKey}.txt`, slips);
       showToast('Payslips exported', 'success');
     } catch (err) {
       showToast(`Error generating payslips: ${err.response?.data?.error || err.message}`, 'error');
@@ -410,7 +418,7 @@ const Payroll = () => {
     try {
       const lines = await actionLoadLines();
       if (!lines.length) return showToast('No saved payroll lines for selected month', 'error');
-      const month = selectedHistoryMonth || monthKey;
+      const month = monthKey;
       const ExcelJS = (await import(/* webpackChunkName: "lib-exceljs" */ 'exceljs')).default;
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet('Payroll');
@@ -470,7 +478,7 @@ const Payroll = () => {
       if (!lines.length) return showToast('No saved payroll lines for selected month', 'error');
       const line = lines.find((r) => String(r.employee_id) === String(selectedEmployeeStatement));
       if (!line) return showToast('No payroll line for selected employee in this month', 'error');
-      const month = selectedHistoryMonth || monthKey;
+      const month = monthKey;
       const employeeAdvances = advances.filter(
         (a) => String(a.employee_id) === String(selectedEmployeeStatement)
       );
@@ -563,59 +571,88 @@ const Payroll = () => {
       <ToastContainer />
       <div className="payroll-header">
         <div className="payroll-header-text">
-          <h1>Payroll Process</h1>
-          <p className="subtitle">Manage salary inputs, advances, and monthly run outputs</p>
+          <h1>Payroll</h1>
+          <p className="subtitle">Staff, monthly pay run, and saved salary statements</p>
         </div>
-        <input className="payroll-month-input" type="month" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} />
+        <div className="payroll-header-controls">
+          <label className="payroll-control-label">
+            Pay period
+            <input className="payroll-month-input" type="month" value={monthKey} onChange={(e) => setMonthKey(e.target.value)} />
+          </label>
+          {canManagePayroll && payrollHistory.length > 0 && (
+            <label className="payroll-control-label">
+              Saved statement
+              <select
+                className="payroll-saved-select"
+                value={monthKey}
+                onChange={(e) => {
+                  setMonthKey(e.target.value);
+                  setActiveStep('statements');
+                }}
+              >
+                {payrollHistory.map((h) => (
+                  <option key={h.month_key} value={h.month_key}>
+                    {formatPayrollMonthLabel(h.month_key)} — {h.payroll_status}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
       </div>
 
+      <div className="payroll-kpi-grid">
+        <div className="payroll-kpi-card payroll-kpi-card--employees">
+          <span className="payroll-kpi-label">Total employees</span>
+          <span className="payroll-kpi-value">{payrollTotals.employee_count || totalEmployees}</span>
+          <span className="payroll-kpi-hint">{formatPayrollMonthLabel(monthKey)}</span>
+        </div>
+        <div className="payroll-kpi-card payroll-kpi-card--gross">
+          <span className="payroll-kpi-label">Total gross pay</span>
+          <span className="payroll-kpi-value">{moneyTzs(payrollTotals.total_gross)}</span>
+          <span className="payroll-kpi-hint">Gross + allowances + bonuses</span>
+        </div>
+        <div className="payroll-kpi-card payroll-kpi-card--net">
+          <span className="payroll-kpi-label">Total net pay</span>
+          <span className="payroll-kpi-value">{moneyTzs(payrollTotals.total_net)}</span>
+          <span className="payroll-kpi-hint">After NSSF, PAYE &amp; deductions</span>
+        </div>
+        <div className="payroll-kpi-card payroll-kpi-card--status">
+          <span className="payroll-kpi-label">Period status</span>
+          <span className="payroll-kpi-value payroll-kpi-status">
+            <span className={`payroll-badge ${periodStatus === 'closed' ? 'closed' : 'open'}`}>
+              {loading ? '…' : periodStatus === 'closed' ? 'Closed' : 'Open'}
+            </span>
+          </span>
+          <span className="payroll-kpi-hint">
+            {periodStatus === 'closed' && completedOn ? `Completed ${completedOn}` : hasSavedSnapshot ? 'Saved snapshot on file' : 'Draft — save to keep figures'}
+          </span>
+        </div>
+      </div>
+
+      {canManagePayroll && savedHistoryEntry && !totalsMatchSaved && (
+        <div className="payroll-sync-banner" role="status">
+          Figures on screen differ from the last saved statement for this month. Save payroll to update the stored statement.
+        </div>
+      )}
+
       <div className="payroll-steps">
-        <button type="button" className={`payroll-step ${activeStep === 'inputs' ? 'active' : ''}`} onClick={() => setActiveStep('inputs')}>
-          Payroll Inputs
+        <button type="button" className={`payroll-step ${activeStep === 'staff' ? 'active' : ''}`} onClick={() => setActiveStep('staff')}>
+          Staff directory
         </button>
         {canManagePayroll && (
           <>
-            <button type="button" className={`payroll-step ${activeStep === 'verification' ? 'active' : ''}`} onClick={() => setActiveStep('verification')}>
-              Data Verification
+            <button type="button" className={`payroll-step ${activeStep === 'payrun' ? 'active' : ''}`} onClick={() => setActiveStep('payrun')}>
+              Monthly pay run
             </button>
-            <button type="button" className={`payroll-step ${activeStep === 'run' ? 'active' : ''}`} onClick={() => setActiveStep('run')}>
-              Run Payroll
+            <button type="button" className={`payroll-step ${activeStep === 'statements' ? 'active' : ''}`} onClick={() => setActiveStep('statements')}>
+              Saved statements
             </button>
           </>
         )}
       </div>
 
-      <div className="payroll-summary-grid">
-        <div className="payroll-summary-card">
-          <div className="label">Payroll Month</div>
-          <div className="value">{monthKey}</div>
-        </div>
-        <div className="payroll-summary-card">
-          <div className="label">Payroll Status</div>
-          <div className="value payroll-status-value">
-            <span className={`payroll-badge ${periodStatus === 'closed' ? 'closed' : 'open'}`}>
-              {loading ? '…' : periodStatus === 'closed' ? 'Closed' : 'Open'}
-            </span>
-            {periodStatus === 'closed' && completedOn && (
-              <div className="payroll-completed-date">Completed {completedOn}</div>
-            )}
-          </div>
-        </div>
-        <div className="payroll-summary-card">
-          <div className="label">Processed Employees</div>
-          <div className="value">{processedEmployees}</div>
-        </div>
-        <div className="payroll-summary-card">
-          <div className="label">Remaining Employees</div>
-          <div className="value">{remainingEmployees}</div>
-        </div>
-        <div className="payroll-summary-card">
-          <div className="label">Salary Advances ({monthKey})</div>
-          <div className="value">TSh {advancesTotal.toLocaleString()}</div>
-        </div>
-      </div>
-
-      {canManagePayroll && activeStep === 'inputs' && (
+      {canManagePayroll && activeStep === 'staff' && (
         <div className="payroll-card">
           <h3>Add Employee</h3>
           <form onSubmit={submitEmployee} className="payroll-form-grid">
@@ -637,7 +674,7 @@ const Payroll = () => {
         </div>
       )}
 
-      {canManagePayroll && activeStep === 'inputs' && (
+      {canManagePayroll && activeStep === 'staff' && (
         <div className="payroll-card">
           <div className="payroll-card-head">
             <h3>All Staff Directory</h3>
@@ -778,10 +815,10 @@ const Payroll = () => {
         </div>
       )}
 
-      {canManagePayroll && activeStep === 'verification' && (
+      {canManagePayroll && activeStep === 'payrun' && (
         <div className="payroll-card">
           <div className="payroll-card-head">
-            <h3>Monthly Payroll ({monthKey})</h3>
+            <h3>Monthly pay run — {formatPayrollMonthLabel(monthKey)}</h3>
             <div className="verification-head-actions">
               <button
                 type="button"
@@ -840,8 +877,14 @@ const Payroll = () => {
             </div>
           )}
           <div className="payroll-note">
-            Open months auto-generate from active staff and advances. Saving stores a snapshot; closing locks the month for exports.
-            PAYE follows Tanzania monthly bands on taxable income after employee NSSF. NSSF amounts use each employee&apos;s profile rates (shown as Emp NSSF / Er NSSF).
+            Edit amounts below, then save. Saved figures reload exactly for this month until you change them again.
+            PAYE uses Tanzania monthly bands after employee NSSF.
+          </div>
+          <div className="payroll-run-totals" aria-live="polite">
+            <span>{payrollTotals.employee_count} employees</span>
+            <span>Gross {moneyTzs(payrollTotals.total_gross)}</span>
+            <span>Net {moneyTzs(payrollTotals.total_net)}</span>
+            <span>Advances {moneyTzs(advancesTotal)}</span>
           </div>
           <div
             className="payroll-table-wrap verification-wrap interactive-scroll-region"
@@ -894,161 +937,81 @@ const Payroll = () => {
         </div>
       )}
 
-      {canManagePayroll && activeStep === 'run' && (
+      {canManagePayroll && activeStep === 'statements' && (
         <div className="payroll-card">
           <div className="payroll-card-head">
-            <h3>Run Payroll History</h3>
-            <div className="payroll-history-month-picker">
-              <label className="payroll-history-month-label" htmlFor="payroll-history-month">
-                Month with saved payroll
-              </label>
-              <select
-                id="payroll-history-month"
-                value={selectedHistoryMonth}
-                onChange={(e) => setSelectedHistoryMonth(e.target.value)}
-              >
-                <option value="">Select month...</option>
-                {payrollHistory.map((h) => (
-                  <option key={h.month_key} value={h.month_key}>
-                    {h.month_key}
-                    {h.payroll_status === 'Closed' ? ' — Closed' : ' — Open'}
-                    {h.completed_on ? ` (${h.completed_on})` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <h3>Saved salary statements</h3>
+            <p className="payroll-card-subtitle">
+              Viewing <strong>{formatPayrollMonthLabel(monthKey)}</strong> — totals match the cards above when saved.
+            </p>
           </div>
-          <p className="payroll-history-intro">
-            Each card summarizes one saved month. <strong>Outstanding pay</strong> is the total net still tied to an{' '}
-            <em>open</em> period (not closed in Data Verification). Closed months show no outstanding balance here.
-          </p>
-          {payrollHistory.length > 0 && (
-            <div className="payroll-history-overview" role="status">
-              <span className="payroll-history-overview-label">Open periods — outstanding net (all months)</span>
-              <span className="payroll-history-overview-value">{moneyTzs(payrollHistoryOpenOutstanding)}</span>
-            </div>
-          )}
-          <div
-            className="payroll-history-lint-grid interactive-scroll-region"
-            tabIndex={0}
-            role="list"
-            aria-label="Payroll history by month"
-            {...tableScrollHandlers}
-          >
+
+          <div className="payroll-statements-grid" role="list" aria-label="Saved payroll months">
             {payrollHistory.map((h) => {
-              const level = payrollHistoryCardLevel(h);
-              const levelClass = level === 'ERROR' ? 'error' : level === 'WARN' ? 'warn' : 'info';
-              const outstanding = outstandingNetForHistoryRow(h);
-              const totalNet = Number(h.total_net_salary || 0);
+              const selected = monthKey === h.month_key;
               const gross = Number(h.total_gross_compensation ?? 0);
-              const adv = Number(h.total_salary_advances ?? 0);
-              const nssf = Number(h.total_nssf || 0);
-              const paye = Number(h.total_paye || 0);
-              const selected = selectedHistoryMonth === h.month_key;
-              const title =
-                h.payroll_status === 'Open'
-                  ? h.overdue_open
-                    ? 'Payroll period open — past month'
-                    : 'Payroll period open'
-                  : 'Payroll period closed';
-              const detailParts = [
-                `${moneyTzs(gross)} gross (incl. allowances & bonuses)`,
-                `${moneyTzs(adv)} salary advances (in saved lines)`,
-                `${moneyTzs(nssf)} NSSF (employee)`,
-                `${moneyTzs(paye)} PAYE`,
-                `${moneyTzs(totalNet)} total net on file`,
-                `${Number(h.processed_employees || 0)} employees · ${Number(h.payroll_runs || 0)} save run(s)`
-              ];
-              const remediation =
-                h.payroll_status === 'Open'
-                  ? 'Close the month in Data Verification after salaries are paid and statements are final.'
-                  : 'Use the actions below to export statements or bank transfer for this month.';
+              const totalNet = Number(h.total_net_salary || 0);
+              const empCount = Number(h.processed_employees || 0);
               return (
-                <article
+                <button
                   key={h.month_key}
+                  type="button"
                   role="listitem"
-                  className={`payroll-lint-card payroll-lint-card--${levelClass} ${selected ? 'is-selected' : ''}`}
-                  onClick={() => setSelectedHistoryMonth(h.month_key)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      setSelectedHistoryMonth(h.month_key);
-                    }
-                  }}
-                  tabIndex={0}
+                  className={`payroll-statement-card ${selected ? 'is-selected' : ''}`}
+                  onClick={() => setMonthKey(h.month_key)}
                 >
-                  <header className="payroll-lint-card-head">
-                    <span className={`payroll-lint-level payroll-lint-level--${levelClass}`}>{level}</span>
-                    <span className="payroll-lint-facing">PAYROLL</span>
-                  </header>
-                  <h4 className="payroll-lint-name">payroll_month_{h.month_key}</h4>
-                  <p className="payroll-lint-title">{title}</p>
-                  <p className="payroll-lint-detail">{detailParts.join(' · ')}</p>
-                  <div className="payroll-lint-outstanding" aria-label="Outstanding net pay for this month">
-                    <span className="payroll-lint-outstanding-label">Outstanding pay (net)</span>
-                    <span className={`payroll-lint-outstanding-value ${outstanding > 0 ? 'has-balance' : ''}`}>
-                      {moneyTzs(outstanding)}
-                    </span>
+                  <div className="payroll-statement-card-top">
+                    <span className="payroll-statement-month">{formatPayrollMonthLabel(h.month_key)}</span>
+                    <span className={`payroll-badge ${String(h.payroll_status).toLowerCase()}`}>{h.payroll_status}</span>
                   </div>
-                  <dl className="payroll-lint-metadata">
+                  <div className="payroll-statement-stats">
                     <div>
-                      <dt>month_key</dt>
-                      <dd>{h.month_key}</dd>
+                      <span className="stat-label">Employees</span>
+                      <span className="stat-value">{empCount}</span>
                     </div>
                     <div>
-                      <dt>display</dt>
-                      <dd>{formatPayrollMonthLabel(h.month_key)}</dd>
+                      <span className="stat-label">Gross</span>
+                      <span className="stat-value">{moneyTzs(gross)}</span>
                     </div>
                     <div>
-                      <dt>status</dt>
-                      <dd>
-                        <span className={`payroll-badge ${String(h.payroll_status).toLowerCase()}`}>{h.payroll_status}</span>
-                      </dd>
+                      <span className="stat-label">Net</span>
+                      <span className="stat-value">{moneyTzs(totalNet)}</span>
                     </div>
-                    <div>
-                      <dt>completed_on</dt>
-                      <dd>{h.completed_on || '—'}</dd>
-                    </div>
-                    <div>
-                      <dt>statement</dt>
-                      <dd>
-                        <span className="payroll-badge approved">{h.salary_statement_status}</span>
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>bank_transfer</dt>
-                      <dd>
-                        <span className="payroll-badge pending">{h.bank_transfer_status}</span>
-                      </dd>
-                    </div>
-                  </dl>
-                  <p className="payroll-lint-remediation">{remediation}</p>
-                  {selected && <p className="payroll-lint-selected-hint">Selected for exports below.</p>}
-                </article>
+                  </div>
+                  {h.completed_on && (
+                    <span className="payroll-statement-meta">Completed {h.completed_on}</span>
+                  )}
+                  {String(h.payroll_status) === 'Open' && outstandingNetForHistoryRow(h) > 0 && (
+                    <span className="payroll-statement-meta payroll-statement-meta--warn">
+                      Outstanding net: {moneyTzs(outstandingNetForHistoryRow(h))}
+                    </span>
+                  )}
+                </button>
               );
             })}
             {payrollHistory.length === 0 && (
               <p className="payroll-history-empty">
-                No payroll history yet — save payroll in Data Verification to create a month.
+                No saved payroll yet. Enter figures under Monthly pay run and click Save payroll.
               </p>
             )}
           </div>
-          <div className="payroll-action-bar">
-            <button type="button" className="payroll-action-btn statement" onClick={handleSalaryStatement}>Salary Statement</button>
-            <button type="button" className="payroll-action-btn transfer" onClick={handleBankTransfer}>Generate Bank Transfer</button>
-            <button type="button" className="payroll-action-btn slips" onClick={handlePayslips}>Get Payslips</button>
-            <button type="button" className="payroll-action-btn transfer" onClick={handlePayrollSpreadsheet}>Export Payroll (Excel)</button>
-          </div>
-          <div className="payroll-card-head" style={{ marginTop: 12 }}>
-            <h3>Employee Statement</h3>
+
+          <div className="payroll-export-section">
+            <h4>Export for {formatPayrollMonthLabel(monthKey)}</h4>
+            <div className="payroll-action-bar">
+              <button type="button" className="payroll-action-btn statement" onClick={handleSalaryStatement}>Salary statement</button>
+              <button type="button" className="payroll-action-btn transfer" onClick={handleBankTransfer}>Bank transfer CSV</button>
+              <button type="button" className="payroll-action-btn slips" onClick={handlePayslips}>Payslips</button>
+              <button type="button" className="payroll-action-btn transfer" onClick={handlePayrollSpreadsheet}>Excel spreadsheet</button>
+            </div>
             <div className="employee-statement-controls">
               <select value={selectedEmployeeStatement} onChange={(e) => setSelectedEmployeeStatement(e.target.value)}>
-                <option value="">Select employee...</option>
+                <option value="">Select employee for individual statement…</option>
                 {employeeOptions.map((emp) => (
                   <option key={emp.id} value={emp.id}>{emp.name}</option>
                 ))}
               </select>
-              <button type="button" className="payroll-action-btn statement" onClick={handleEmployeeStatement}>Export Employee Statement</button>
+              <button type="button" className="payroll-action-btn statement" onClick={handleEmployeeStatement}>Export employee statement</button>
             </div>
           </div>
         </div>
