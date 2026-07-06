@@ -6,6 +6,10 @@ const { requirePermission } = require('../middleware/permissions');
 const { getEffectiveBranchId } = require('../utils/branchFilter');
 const { sqlOperatingExpensesOnly } = require('../utils/operatingExpenses');
 const { getBusinessTodayYmd, assertNotFutureBusinessDate, toSqlDateString } = require('../utils/businessDate');
+const {
+  isReconciledFlag,
+  deliverDirectorDailyReport,
+} = require('../utils/dailyClosingReport');
 
 // All cash-management routes require branch feature 'cash_management' (admin bypasses)
 router.use(authenticate, requireBranchFeature('cash_management'));
@@ -45,7 +49,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
   );
 
   // Never overwrite reconciled rows automatically unless force=true (payment backdate correction).
-  if (!force && existing && existing.is_reconciled) {
+  if (!force && existing && isReconciledFlag(existing.is_reconciled)) {
     return db.get('SELECT * FROM daily_cash_summaries WHERE id = ?', [existing.id]);
   }
 
@@ -69,7 +73,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
   };
 
   const nextReconciledSnap =
-    existing && existing.is_reconciled && force ? payload.closing_balance : existing?.reconciled_closing_balance ?? null;
+    existing && isReconciledFlag(existing.is_reconciled) && force ? payload.closing_balance : existing?.reconciled_closing_balance ?? null;
 
   if (existing) {
     await db.run(
@@ -209,7 +213,7 @@ async function refreshUnreconciledDailySummary(date, branchId) {
     return { skipped: true, reason: 'invalid_date', row: null };
   }
   const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [day, branchId]);
-  if (row && row.is_reconciled) {
+  if (row && isReconciledFlag(row.is_reconciled)) {
     return { skipped: true, reason: 'reconciled', row };
   }
   const persisted = await computeAndPersistDailySummary(day, branchId);
@@ -468,7 +472,7 @@ router.post('/opening-session/:date', requireBranchAccess(), requirePermission('
   }
   try {
     const existing = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
-    if (existing?.is_reconciled) {
+    if (existing && isReconciledFlag(existing.is_reconciled)) {
       return res.status(409).json({ error: 'This day is already reconciled and cannot be changed.' });
     }
     const expectedOpening = await getExpectedOpeningBalance(ymd, branchId);
@@ -832,8 +836,12 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
     const refresh = await refreshUnreconciledDailySummary(ymd, branchId);
     let row = refresh.row || await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
     if (!row) return res.status(404).json({ error: 'Daily summary not found' });
-    if (refresh.skipped) {
-      return res.status(409).json({ error: 'This date is already reconciled and cannot be reconciled again.', row });
+    if (refresh.skipped && refresh.reason === 'reconciled') {
+      return res.status(409).json({
+        error: 'This branch has already reconciled this date. Use Send to director to resend the WhatsApp report.',
+        code: 'already_reconciled',
+        row,
+      });
     }
     
     const snapClosing = num(row.closing_balance);
@@ -843,127 +851,87 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
            reconciled_by = ?,
            reconciled_at = CURRENT_TIMESTAMP,
            reconciled_closing_balance = ?
-       WHERE date = ? AND branch_id = ?`,
+       WHERE date = ? AND branch_id = ? AND COALESCE(is_reconciled, FALSE) = FALSE`,
       [reconciled_by || 'Cashier', snapClosing, ymd, branchId]
     );
     
     if (result.changes === 0) {
-      return res.status(404).json({ error: 'Daily summary not found' });
+      const locked = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
+      if (locked && isReconciledFlag(locked.is_reconciled)) {
+        return res.status(409).json({
+          error: 'This branch has already reconciled this date. Use Send to director to resend the WhatsApp report.',
+          code: 'already_reconciled',
+          row: locked,
+        });
+      }
+      return res.status(404).json({ error: 'Daily summary not found for this branch' });
     }
 
     row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
     const branchRow = await db.get('SELECT name FROM branches WHERE id = ?', [branchId]);
     const branchName = branchRow?.name || `Branch ${branchId}`;
 
-    // Daily Closing Report (SUPACLEAN format) – send to director WhatsApp (or return for manual send)
-    let reportSent = false;
-    let reportText = null;
-    let directorPhoneForWa = null;
-    try {
-      const settingsRows = await db.all('SELECT setting_key, setting_value FROM settings WHERE setting_key = ?', ['manager_whatsapp_number']);
-      const directorPhone = (settingsRows && settingsRows[0] && settingsRows[0].setting_value) ? settingsRows[0].setting_value.trim() : null;
-      if (!directorPhone) {
-        console.warn('Reconcile: No director WhatsApp number in settings – daily report not sent.');
-      } else {
-        const opening = parseFloat(row.opening_balance) || 0;
-        const openingDeclared = row.opening_cash_declared != null ? parseFloat(row.opening_cash_declared) : opening;
-        const openingVariance = parseFloat(row.opening_variance || 0);
-        const cashSales = parseFloat(row.cash_sales) || 0;
-        const bookSales = parseFloat(row.book_sales) || 0;
-        const cardSales = parseFloat(row.card_sales) || 0;
-        const mobileSales = parseFloat(row.mobile_money_sales) || 0;
-        const totalSales = cashSales + bookSales + cardSales + mobileSales;
-        const expensesCash = parseFloat(row.expenses_from_cash) || 0;
-        const expensesBank = parseFloat(row.expenses_from_bank) || 0;
-        const expensesMpesa = parseFloat(row.expenses_from_mpesa) || 0;
-        const totalExpenses = expensesCash + expensesBank + expensesMpesa;
-        const bankDepositsDay = parseFloat(row.bank_deposits) || 0;
-        // Cash drawer: operating cash expenses + cash banked (deposits), not double-counted in totalExpenses.
-        const cashOutDrawer = expensesCash + bankDepositsDay;
-        const expectedCash = opening + cashSales + bookSales - cashOutDrawer;
-        const actualCash = openingDeclared + cashSales + bookSales - cashOutDrawer;
-        const dateFormatted = new Date(`${ymd}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-        const cashierName = reconciled_by || 'Cashier';
-
-        // P&L: Revenue = total sales; discounts/COGS from schema if available, else 0
-        const revenue = totalSales;
-        const discounts = 0;
-        const costOfGoods = 0;
-        const grossProfit = revenue - discounts - costOfGoods;
-        const operatingExpenses = totalExpenses;
-        const netProfit = grossProfit - operatingExpenses;
-
-        const fmt = (n) => Number(n).toLocaleString();
-        const report = [
-          '*SUPACLEAN*',
-          '*Daily Closing Report*',
-          '━━━━━━━━━━━━━━━━',
-          `📅 ${dateFormatted}`,
-          `👤 Cashier: ${cashierName}`,
-          '',
-          '💰 *OPENING CASH*',
-          `Expected (Prev Closing): TZS ${fmt(opening)}`,
-          `Declared (Session Start): TZS ${fmt(openingDeclared)}`,
-          `Variance: ${openingVariance < 0 ? '-' : '+'}TZS ${fmt(Math.abs(openingVariance))}`,
-          '',
-          '📈 *SALES BREAKDOWN*',
-          `• Cash Sales: TZS ${fmt(cashSales)}`,
-          `• M-Pesa: TZS ${fmt(mobileSales)}`,
-          `• Bank: TZS ${fmt(cardSales)}`,
-          `• Credit Sales: TZS ${fmt(0)}`,
-          `*Total Sales: TZS ${fmt(totalSales)}*`,
-          '',
-          '📥 *CREDIT COLLECTIONS*',
-          `Received Today: TZS ${fmt(bookSales)}`,
-          '',
-          '📤 *OUTFLOWS*',
-          `• Operating expenses: TZS ${fmt(totalExpenses)}`,
-          `• Bank deposits (cash to bank, not P&L): TZS ${fmt(bankDepositsDay)}`,
-          `• Stock Purchases: TZS 0`,
-          '',
-          '📊 *PROFIT & LOSS*',
-          `• Revenue: TZS ${fmt(revenue)}`,
-          `• Less Discounts: (TZS ${fmt(discounts)})`,
-          `• Cost of Goods: (TZS ${fmt(costOfGoods)})`,
-          `• *Gross Profit: TZS ${fmt(grossProfit)}*`,
-          `• Operating Expenses: (TZS ${fmt(operatingExpenses)})`,
-          `*💰 NET PROFIT: TZS ${fmt(netProfit)}*`,
-          '',
-          'ℹ️ Opening cash variance is for reconciliation only (not extra P&L). A short may be an unrecorded expense or deposit—book the expense on this date (Expenses → adjust reconciled day) or record deposits under Cash Management.',
-          '',
-          '💵 *CASH POSITION*',
-          `Opening (Expected): TZS ${fmt(opening)}`,
-          `Opening (Declared): TZS ${fmt(openingDeclared)}`,
-          `+ Cash Sales: TZS ${fmt(cashSales)}`,
-          `+ Collections: TZS ${fmt(bookSales)}`,
-          `- Cash expenses: TZS ${fmt(expensesCash)}`,
-          `- Bank deposits: TZS ${fmt(bankDepositsDay)}`,
-          `*Expected Cash: TZS ${fmt(expectedCash)}*`,
-          `*Actual Cash: TZS ${fmt(actualCash)}*`,
-          '━━━━━━━━━━━━━━━━',
-          branchName ? `📍 ${branchName}` : ''
-        ].filter(Boolean).join('\n');
-
-        const { sendWhatsApp, formatPhoneNumber } = require('../utils/whatsapp');
-        const waResult = await sendWhatsApp(directorPhone, report, {});
-        reportSent = !!(waResult && waResult.success);
-        if (!reportSent) {
-          reportText = report;
-          directorPhoneForWa = formatPhoneNumber(directorPhone).replace(/\D/g, '');
-        }
-      }
-    } catch (waErr) {
-      console.error('Reconcile: failed to send daily report WhatsApp:', waErr.message);
-    }
+    const delivery = await deliverDirectorDailyReport(row, branchName, reconciled_by || 'Cashier', ymd);
 
     res.json({
       ...row,
-      report_sent: reportSent,
-      report_text: reportText || undefined,
-      director_phone_wa: directorPhoneForWa || undefined
+      branch_id: branchId,
+      branch_name: branchName,
+      report_sent: delivery.report_sent,
+      report_text: delivery.report_text || undefined,
+      director_phone_wa: delivery.director_phone_wa || undefined,
+      report_error: delivery.error || undefined,
     });
   } catch (err) {
     console.error('Error reconciling daily cash:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Send daily closing report to director WhatsApp for one branch/date (independent per branch).
+ */
+router.post('/send-report/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+  const { date } = req.params;
+  const branchId = getEffectiveBranchId(req);
+  if (branchId == null) {
+    return res.status(400).json({ error: 'Select a branch to send the daily closing report' });
+  }
+  const ymd = toSqlDateString(date);
+  if (!ymd || !assertNotFutureBusinessDate(ymd, res, 'date')) {
+    return;
+  }
+
+  try {
+    let row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
+    if (!row) {
+      const refresh = await refreshUnreconciledDailySummary(ymd, branchId);
+      row = refresh.row;
+    }
+    if (!row) {
+      return res.status(404).json({
+        error: 'No daily closing summary for this branch and date. Save opening session or refresh totals first.',
+      });
+    }
+
+    const branchRow = await db.get('SELECT name FROM branches WHERE id = ?', [branchId]);
+    const branchName = branchRow?.name || `Branch ${branchId}`;
+    const cashierName =
+      req.body?.sent_by || req.body?.reconciled_by || req.user?.fullName || req.user?.username || 'Cashier';
+
+    const delivery = await deliverDirectorDailyReport(row, branchName, cashierName, ymd);
+
+    res.json({
+      ...row,
+      branch_id: branchId,
+      branch_name: branchName,
+      report_sent: delivery.report_sent,
+      report_text: delivery.report_text || undefined,
+      director_phone_wa: delivery.director_phone_wa || undefined,
+      report_error: delivery.error || undefined,
+    });
+  } catch (err) {
+    console.error('Error sending daily closing report:', err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -6,6 +6,148 @@
 const db = require('../database/query');
 const { sqlActiveOrdersOnly, sqlActiveTransactionsOnly } = require('./orderVoidFilter');
 
+/** Payment method aliases stored in orders/transactions over time. */
+const MOBILE_MONEY_METHODS = ['mobile_money', 'mpesa', 'm-pesa'];
+const CARD_METHODS = ['card'];
+const BANK_METHODS = ['bank', 'bank_transfer'];
+
+function buildMethodInClause(methods, alias = '') {
+  const col = alias ? `${alias}.payment_method` : 'payment_method';
+  const placeholders = methods.map(() => '?').join(', ');
+  return { clause: `${col} IN (${placeholders})`, params: [...methods] };
+}
+
+/** Attribute transactions to a branch via transaction.branch_id or linked order.branch_id. */
+function buildTransactionBranchClause(branchId, tAlias = 't') {
+  if (branchId == null) {
+    return { clause: '', params: [] };
+  }
+  return {
+    clause: ` AND (
+      ${tAlias}.branch_id = ?
+      OR (
+        ${tAlias}.branch_id IS NULL
+        AND EXISTS (
+          SELECT 1 FROM orders ob
+          WHERE ob.id = ${tAlias}.order_id
+            AND (ob.branch_id = ? OR ob.branch_id IS NULL)
+        )
+      )
+    )`,
+    params: [branchId, branchId],
+  };
+}
+
+/**
+ * Paid-in-full order sales on order_date (same pattern as cash_sales in cashManagement).
+ * Needed because paid_full non-cash orders at POS do not create payment_received transactions.
+ */
+async function calculatePaidInFullOrderSales(date, branchId, methods) {
+  const { clause: methodClause, params: methodParams } = buildMethodInClause(methods, 'o');
+  if (branchId == null) {
+    const row = await db.get(
+      `SELECT COALESCE(SUM(o.paid_amount), 0) AS total
+       FROM orders o
+       WHERE DATE(o.order_date) = ?::date
+         AND o.payment_status = 'paid_full'
+         AND o.paid_amount > 0
+         ${methodClause}
+         ${sqlActiveOrdersOnly('o')}`,
+      [date, ...methodParams]
+    );
+    return parseFloat(row?.total || 0);
+  }
+  const row = await db.get(
+    `SELECT COALESCE(SUM(o.paid_amount), 0) AS total
+     FROM orders o
+     WHERE DATE(o.order_date) = ?::date
+       AND o.branch_id = ?
+       AND o.payment_status = 'paid_full'
+       AND o.paid_amount > 0
+       ${methodClause}
+       ${sqlActiveOrdersOnly('o')}`,
+    [date, branchId, ...methodParams]
+  );
+  return parseFloat(row?.total || 0);
+}
+
+/**
+ * payment_received transactions for a payment method, excluding amounts already counted
+ * in same-day paid-in-full order sales (mirrors calculateBookSales for cash).
+ */
+async function calculateDigitalBookSales(date, branchId, methods) {
+  const methodIn = methods.map(() => '?').join(', ');
+  const branchFilter = buildTransactionBranchClause(branchId, 't');
+
+  if (branchId == null) {
+    const row = await db.get(
+      `WITH paid_full_receipts AS (
+         SELECT o.receipt_number, o.branch_id
+         FROM orders o
+         WHERE DATE(o.order_date) = ?::date
+         ${sqlActiveOrdersOnly('o')}
+         GROUP BY o.receipt_number, o.branch_id
+         HAVING BOOL_AND(o.payment_status = 'paid_full' AND o.payment_method IN (${methodIn}))
+       )
+       SELECT COALESCE(SUM(t.amount), 0) AS total
+       FROM transactions t
+       LEFT JOIN orders o ON o.id = t.order_id
+       WHERE DATE(t.transaction_date) = ?::date
+         AND t.transaction_type = 'payment_received'
+         AND t.payment_method IN (${methodIn})
+         ${sqlActiveTransactionsOnly('t')}
+         AND (
+           t.order_id IS NULL OR o.id IS NULL
+           OR NOT EXISTS (
+             SELECT 1 FROM paid_full_receipts r
+             WHERE r.receipt_number = o.receipt_number
+               AND r.branch_id IS NOT DISTINCT FROM o.branch_id
+           )
+         )`,
+      [date, ...methods, date, ...methods]
+    );
+    return parseFloat(row?.total || 0);
+  }
+
+  const row = await db.get(
+    `WITH paid_full_receipts AS (
+       SELECT o.receipt_number, o.branch_id
+       FROM orders o
+       WHERE DATE(o.order_date) = ?::date
+         AND (o.branch_id = ? OR o.branch_id IS NULL)
+         ${sqlActiveOrdersOnly('o')}
+       GROUP BY o.receipt_number, o.branch_id
+       HAVING BOOL_AND(o.payment_status = 'paid_full' AND o.payment_method IN (${methodIn}))
+     )
+     SELECT COALESCE(SUM(t.amount), 0) AS total
+     FROM transactions t
+     LEFT JOIN orders o ON o.id = t.order_id
+     WHERE DATE(t.transaction_date) = ?::date
+       AND t.transaction_type = 'payment_received'
+       AND t.payment_method IN (${methodIn})
+       ${sqlActiveTransactionsOnly('t')}
+       ${branchFilter.clause}
+       AND (
+         t.order_id IS NULL OR o.id IS NULL
+         OR NOT EXISTS (
+           SELECT 1 FROM paid_full_receipts r
+           WHERE r.receipt_number = o.receipt_number
+             AND r.branch_id IS NOT DISTINCT FROM o.branch_id
+         )
+       )`,
+    [date, branchId, ...methods, date, ...methods, ...branchFilter.params]
+  );
+  return parseFloat(row?.total || 0);
+}
+
+async function calculateDigitalPaymentReceived(date, branchId, methods) {
+  const [fromOrders, fromTx] = await Promise.all([
+    calculatePaidInFullOrderSales(date, branchId, methods),
+    calculateDigitalBookSales(date, branchId, methods),
+  ]);
+  return fromOrders + fromTx;
+}
+
 /**
  * Validate cash balance for a date
  * @param {string} date - Date in YYYY-MM-DD format
@@ -126,21 +268,7 @@ async function calculateBookSales(date, branchId = null) {
  */
 async function calculateMobileMoneyReceived(date, branchId = null) {
   try {
-    const params = [date];
-    let branchClause = '';
-    if (branchId != null) {
-      branchClause = ' AND (branch_id = ? OR branch_id IS NULL)';
-      params.push(branchId);
-    }
-    const row = await db.get(
-      `SELECT COALESCE(SUM(amount), 0) AS total
-       FROM transactions
-       WHERE DATE(transaction_date) = ?
-       AND transaction_type = 'payment_received'
-       AND payment_method = 'mobile_money'` + branchClause + sqlActiveTransactionsOnly(),
-      params
-    );
-    return parseFloat(row?.total || 0);
+    return await calculateDigitalPaymentReceived(date, branchId, MOBILE_MONEY_METHODS);
   } catch (err) {
     throw err;
   }
@@ -155,21 +283,7 @@ async function calculateMobileMoneyReceived(date, branchId = null) {
  */
 async function calculateCardReceived(date, branchId = null) {
   try {
-    const params = [date];
-    let branchClause = '';
-    if (branchId != null) {
-      branchClause = ' AND (branch_id = ? OR branch_id IS NULL)';
-      params.push(branchId);
-    }
-    const row = await db.get(
-      `SELECT COALESCE(SUM(amount), 0) AS total
-       FROM transactions
-       WHERE DATE(transaction_date) = ?
-       AND transaction_type = 'payment_received'
-       AND payment_method = 'card'` + branchClause + sqlActiveTransactionsOnly(),
-      params
-    );
-    return parseFloat(row?.total || 0);
+    return await calculateDigitalPaymentReceived(date, branchId, CARD_METHODS);
   } catch (err) {
     throw err;
   }
@@ -184,21 +298,7 @@ async function calculateCardReceived(date, branchId = null) {
  */
 async function calculateBankReceived(date, branchId = null) {
   try {
-    const params = [date];
-    let branchClause = '';
-    if (branchId != null) {
-      branchClause = ' AND (branch_id = ? OR branch_id IS NULL)';
-      params.push(branchId);
-    }
-    const row = await db.get(
-      `SELECT COALESCE(SUM(amount), 0) AS total
-       FROM transactions
-       WHERE DATE(transaction_date) = ?
-       AND transaction_type = 'payment_received'
-       AND (payment_method = 'bank' OR payment_method = 'bank_transfer')` + branchClause + sqlActiveTransactionsOnly(),
-      params
-    );
-    return parseFloat(row?.total || 0);
+    return await calculateDigitalPaymentReceived(date, branchId, BANK_METHODS);
   } catch (err) {
     throw err;
   }
