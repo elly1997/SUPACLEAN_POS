@@ -131,8 +131,10 @@ const Reports = () => {
     year: new Date().getFullYear()
   });
   const [loading, setLoading] = useState(true);
+  const [tabLoading, setTabLoading] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
+  const [loadedTabs, setLoadedTabs] = useState({ overview: false, sales: false, services: false, customers: false });
   const [expandedSections, setExpandedSections] = useState({
     sales: true,
     services: true,
@@ -207,9 +209,9 @@ const Reports = () => {
     return name || branch?.name || (selectedBranchId != null ? `Branch #${selectedBranchId}` : 'Current branch');
   }, [selectedBranchId, isAdmin, branchesList, branch?.name]);
 
-  const loadReports = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
+  const loadOverviewTab = useCallback(async (isInitial = false) => {
+    if (isInitial) { setLoading(true); setLoadError(null); }
+    else setTabLoading(true);
     try {
       const today = new Date().toISOString().split('T')[0];
       const depositPromise =
@@ -217,46 +219,75 @@ const Reports = () => {
           ? getBankDeposits({ start_date: dateRange.start, end_date: dateRange.end }).catch(() => ({ data: [] }))
           : Promise.resolve({ data: [] });
 
-      const [summaryRes, financialRes, profitRes, salesRes, serviceRes, customerRes, depRes] = await Promise.all([
+      const [summaryRes, financialRes, profitRes, depRes] = await Promise.all([
         getOverviewReport(today),
         getFinancialReport(dateRange.start, dateRange.end, reportPeriod),
         getDailyProfitReport(dateRange.start, dateRange.end),
-        getSalesReport(dateRange.start, dateRange.end),
-        getServiceReport(dateRange.start, dateRange.end),
-        getCustomerReport({ month: customerFilter.month, year: customerFilter.year }),
         depositPromise
       ]);
 
       setSummary(summaryRes.data);
       setFinancialReport(financialRes.data);
       setProfitReport(profitRes.data || []);
-      setSalesReport(salesRes.data || []);
-      setServiceReport(serviceRes.data || []);
-      setCustomerReport(customerRes.data || []);
       setBankDeposits(Array.isArray(depRes.data) ? depRes.data : []);
-      const synced = [summaryRes, financialRes, salesRes, serviceRes, customerRes].find((r) => r.fromCache && r.syncedAt);
+      setLoadedTabs((prev) => ({ ...prev, overview: true }));
+      const synced = [summaryRes, financialRes].find((r) => r.fromCache && r.syncedAt);
       if (synced) setLastSyncedAt(synced.syncedAt); else setLastSyncedAt(null);
     } catch (error) {
       console.error('Error loading reports:', error);
       const errorMsg = error.response?.data?.error || error.message || 'Network Error';
-      setLoadError(errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Network Error')
-        ? 'Cannot connect to server. Ensure the backend is running (npm run dev).'
-        : errorMsg);
+      if (isInitial) {
+        setLoadError(errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Network Error')
+          ? 'Cannot connect to server. Ensure the backend is running (npm run dev).'
+          : errorMsg);
+      }
       setSummary(null);
       setFinancialReport(null);
       setProfitReport([]);
-      setSalesReport([]);
-      setServiceReport([]);
-      setCustomerReport([]);
       setBankDeposits([]);
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
+      else setTabLoading(false);
     }
-  }, [dateRange.start, dateRange.end, reportPeriod, customerFilter.month, customerFilter.year, canViewBankDeposits]);
+  }, [dateRange.start, dateRange.end, reportPeriod, canViewBankDeposits]);
+
+  const loadTabData = useCallback(async (tab) => {
+    setTabLoading(true);
+    try {
+      if (tab === 'sales') {
+        const res = await getSalesReport(dateRange.start, dateRange.end);
+        setSalesReport(res.data || []);
+      } else if (tab === 'services') {
+        const res = await getServiceReport(dateRange.start, dateRange.end);
+        setServiceReport(res.data || []);
+      } else if (tab === 'customers') {
+        const res = await getCustomerReport({ month: customerFilter.month, year: customerFilter.year });
+        setCustomerReport(res.data || []);
+      }
+      setLoadedTabs((prev) => ({ ...prev, [tab]: true }));
+    } catch (error) {
+      console.error(`Error loading ${tab} report:`, error);
+    } finally {
+      setTabLoading(false);
+    }
+  }, [dateRange.start, dateRange.end, customerFilter.month, customerFilter.year]);
+
+  const handleTabSwitch = useCallback((tab) => {
+    setActiveTab(tab);
+    if (tab === 'overview' && !loadedTabs.overview) {
+      loadOverviewTab(false);
+    } else if (!loadedTabs[tab]) {
+      loadTabData(tab);
+    }
+  }, [loadedTabs, loadOverviewTab, loadTabData]);
+
+  const loadReports = useCallback(async () => {
+    await loadOverviewTab(true);
+  }, [loadOverviewTab]);
 
   useEffect(() => {
-    loadReports();
-  }, [loadReports]);
+    loadOverviewTab(true);
+  }, []);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -275,43 +306,26 @@ const Reports = () => {
   };
 
   const handleCustomerFilterChange = async () => {
-    setLoading(true);
+    setTabLoading(true);
     try {
       const res = await getCustomerReport({ month: customerFilter.month, year: customerFilter.year });
       setCustomerReport(res.data || []);
+      setLoadedTabs((prev) => ({ ...prev, customers: true }));
       if (res.fromCache && res.syncedAt) setLastSyncedAt(res.syncedAt); else setLastSyncedAt(null);
     } catch (error) {
       console.error('Error loading customer report:', error);
     } finally {
-      setLoading(false);
+      setTabLoading(false);
     }
   };
 
   const handleDateRangeChange = async () => {
-    setLoading(true);
-    try {
-      const depositPromise =
-        canViewBankDeposits
-          ? getBankDeposits({ start_date: dateRange.start, end_date: dateRange.end }).catch(() => ({ data: [] }))
-          : Promise.resolve({ data: [] });
-      const [financialRes, profitRes, salesRes, serviceRes, depRes] = await Promise.all([
-        getFinancialReport(dateRange.start, dateRange.end, reportPeriod),
-        getDailyProfitReport(dateRange.start, dateRange.end),
-        getSalesReport(dateRange.start, dateRange.end),
-        getServiceReport(dateRange.start, dateRange.end),
-        depositPromise
-      ]);
-      setFinancialReport(financialRes.data);
-      setProfitReport(profitRes.data || []);
-      setSalesReport(salesRes.data);
-      setServiceReport(serviceRes.data);
-      setBankDeposits(Array.isArray(depRes.data) ? depRes.data : []);
-      const synced = [financialRes, salesRes, serviceRes].find((r) => r.fromCache && r.syncedAt);
-      if (synced) setLastSyncedAt(synced.syncedAt); else setLastSyncedAt(null);
-    } catch (error) {
-      console.error('Error loading reports:', error);
-    } finally {
-      setLoading(false);
+    setLoadedTabs({ overview: false, sales: false, services: false, customers: false });
+    if (activeTab === 'overview') {
+      await loadOverviewTab(false);
+    } else {
+      await loadOverviewTab(false);
+      await loadTabData(activeTab);
     }
   };
 
@@ -489,28 +503,28 @@ const Reports = () => {
           <button
             type="button"
             className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
-            onClick={() => setActiveTab('overview')}
+            onClick={() => handleTabSwitch('overview')}
           >
             Overview
           </button>
           <button
             type="button"
             className={`tab-btn ${activeTab === 'sales' ? 'active' : ''}`}
-            onClick={() => setActiveTab('sales')}
+            onClick={() => handleTabSwitch('sales')}
           >
             Sales
           </button>
           <button
             type="button"
             className={`tab-btn ${activeTab === 'customers' ? 'active' : ''}`}
-            onClick={() => setActiveTab('customers')}
+            onClick={() => handleTabSwitch('customers')}
           >
             Customers
           </button>
           <button
             type="button"
             className={`tab-btn ${activeTab === 'services' ? 'active' : ''}`}
-            onClick={() => setActiveTab('services')}
+            onClick={() => handleTabSwitch('services')}
           >
             Services
           </button>
@@ -904,7 +918,13 @@ const Reports = () => {
         </>
       )}
 
-      {activeTab === 'sales' && (
+      {activeTab !== 'overview' && tabLoading && !loadedTabs[activeTab] && (
+        <div className="reports-tab-skeleton" role="status" aria-live="polite">
+          <Loader message={`Loading ${activeTab} data…`} fullPage={false} />
+        </div>
+      )}
+
+      {activeTab === 'sales' && loadedTabs.sales && (
         <section className="reports-panel reports-panel--sales" aria-label="Sales report">
           <p className="reports-live-line" aria-live="polite">{salesSummaryLine}</p>
           <p className="reports-panel-lead">Uses the same date range as Overview (apply range there first).</p>
@@ -991,7 +1011,7 @@ const Reports = () => {
         </section>
       )}
 
-      {activeTab === 'services' && (
+      {activeTab === 'services' && loadedTabs.services && (
         <section className="reports-panel reports-panel--services" aria-label="Services report">
           <p className="reports-live-line" aria-live="polite">{servicesSummaryLine}</p>
           <p className="reports-panel-lead">Uses the same date range as Overview.</p>
@@ -1072,7 +1092,7 @@ const Reports = () => {
         </section>
       )}
 
-      {activeTab === 'customers' && (
+      {activeTab === 'customers' && loadedTabs.customers && (
         <section className="reports-panel reports-panel--customers" aria-label="Customers loyalty report">
           <p className="reports-live-line" aria-live="polite">{customersSummaryLine}</p>
           <p className="reports-panel-lead">Filter by calendar month; independent of the Overview date range.</p>

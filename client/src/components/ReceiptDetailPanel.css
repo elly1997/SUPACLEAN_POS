@@ -1,0 +1,203 @@
+.receipt-detail-panel {
+  margin-top: 8px;
+  padding: 16px 18px 18px;
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  animation: receipt-detail-expand 180ms ease-out;
+}
+
+.receipt-detail-panel--compact {
+  margin: 0;
+  border-radius: var(--radius-md);
+}
+
+@keyframes receipt-detail-expand {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.receipt-detail-panel__toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.receipt-detail-panel__toolbar .receipt-summary-one-line {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.receipt-detail-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.receipt-detail-panel__header h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.receipt-detail-panel__header .order-date {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.receipt-detail-panel .receipt-detail-table-section {
+  margin-bottom: 14px;
+}
+
+.receipt-detail-panel .receipt-detail-table-section h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.receipt-detail-panel .receipt-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.receipt-detail-panel .receipt-detail-table td,
+.receipt-detail-panel .receipt-detail-table th {
+  padding: 6px 8px;
+  border-bottom: 0.5px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+}
+
+.receipt-detail-panel .receipt-detail-table td:first-child {
+  width: 38%;
+  color: var(--text-secondary);
+}
+
+.receipt-detail-panel .receipt-items-table-scroll {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.receipt-detail-panel .balance-due {
+  color: var(--warning-color);
+  font-weight: 700;
+}
+
+.receipt-detail-panel .special-instructions-modern {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.receipt-detail-panel .special-instructions-modern h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.receipt-detail-panel .special-instructions-modern p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.receipt-detail-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--border-color);
+}
+
+.receipt-detail-panel__loading,
+.receipt-detail-panel__error {
+  margin: 8px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.receipt-detail-panel__error {
+  color: var(--danger-color);
+}
+
+.orders-actions-v2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.orders-actions-v2__overflow {
+  position: relative;
+}
+
+.orders-actions-v2__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 160px;
+  padding: 6px;
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.12));
+}
+
+.orders-actions-v2__menu button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.orders-actions-v2__menu button:hover:not(:disabled) {
+  background: var(--bg-hover, var(--bg-tertiary));
+}
+
+.orders-actions-v2__menu button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.orders-expand-row td {
+  padding: 0 12px 14px !important;
+  background: var(--bg-tertiary);
+  border-bottom: 0.5px solid var(--border-color);
+}
+
+@media (max-width: 640px) {
+  .receipt-detail-panel__toolbar {
+    flex-direction: column;
+  }
+
+  .receipt-detail-panel__header {
+    flex-direction: column;
+  }
+}

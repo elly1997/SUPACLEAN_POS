@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { getOrders, updateOrderStatus, getCollectionQueue, getOrderDashboardStats, getTodayCashSummary, getCashSummaryRange } from '../api/api';
+import { getOrders, updateOrderStatus, getCollectionQueue, getOrderDashboardStats, getTodayCashSummary, getCashSummaryRange, getUnreconciledClosings } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
@@ -9,7 +9,7 @@ import Loader from '../components/Loader';
 import { formatReceiptForDisplay } from '../utils/receiptId';
 import './Dashboard.css';
 
-const DASHBOARD_LIST_LIMIT = 100;
+const DASHBOARD_LIST_LIMIT = 50;
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -17,7 +17,12 @@ const Dashboard = () => {
   const { selectedBranchId, user, hasPermission, branch } = useAuth();
   const isCashier = user?.role === 'cashier';
   const canManageCash = hasPermission?.('canManageCash') ?? false;
+  const canManageOrders = hasPermission?.('canManageOrders') ?? false;
+  const canViewReports = hasPermission?.('canViewReports') ?? false;
+  const isManager = canManageCash || canManageOrders || canViewReports;
   const [listView, setListView] = useListViewPreference();
+  const [unreconciledCount, setUnreconciledCount] = useState(0);
+  const visibleRef = useRef(true);
   const [summary, setSummary] = useState(null);
   const [monthIncome, setMonthIncome] = useState(0);
   const [orderStats, setOrderStats] = useState(null);
@@ -75,11 +80,15 @@ const Dashboard = () => {
       setOrderStats(statsRes.data || null);
       setLoading(false);
 
-      // Phase 2: lists + month total (non-blocking for first paint)
-      const [pendingRes, queueRes, monthRes] = await Promise.all([
+      // Phase 2: lists + month total + unreconciled (non-blocking for first paint)
+      const unreconciledPromise = canManageCash
+        ? getUnreconciledClosings({ limit: 50 }).catch(() => ({ data: [] }))
+        : Promise.resolve({ data: [] });
+      const [pendingRes, queueRes, monthRes, unreconRes] = await Promise.all([
         getOrders({ status: 'pending', limit: DASHBOARD_LIST_LIMIT, ...(pendingCustomer && { customer: pendingCustomer }) }),
         getCollectionQueue({ limit: DASHBOARD_LIST_LIMIT, ...(readyCustomer && { customer: readyCustomer }) }),
         getCashSummaryRange(monthStart, today),
+        unreconciledPromise,
       ]);
       const monthTotal = (Array.isArray(monthRes?.data) ? monthRes.data : []).reduce((acc, row) => (
         acc + (Number(row.cash_sales || 0) + Number(row.book_sales || 0) + Number(row.card_sales || 0) + Number(row.mobile_money_sales || 0))
@@ -88,6 +97,7 @@ const Dashboard = () => {
       setMonthIncome(monthTotal);
       setPendingOrders(pendingRes.data || []);
       setReadyQueue(queueRes.data || []);
+      setUnreconciledCount(Array.isArray(unreconRes.data) ? unreconRes.data.length : 0);
       const synced = [summaryRes, pendingRes, queueRes].find((r) => r.fromCache && r.syncedAt);
       if (synced) setLastSyncedAt(synced.syncedAt); else setLastSyncedAt(null);
     } catch (error) {
@@ -106,8 +116,15 @@ const Dashboard = () => {
 
   useEffect(() => {
     loadDashboardData();
-    const interval = setInterval(loadDashboardData, 30000); // Refresh every 30 seconds
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      if (!document.hidden) loadDashboardData();
+    }, 30000);
+    const onVis = () => { visibleRef.current = !document.hidden; };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, [loadDashboardData, selectedBranchId]);
 
   // Debounce search terms so we don't refetch on every keystroke
@@ -216,14 +233,33 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {canManageCash && (
-        <div className="dk-manager-strip">
-          <span className="dk-manager-strip__label">Reconcile & daily totals</span>
-          <button type="button" className="dk-btn dk-btn--secondary dk-btn--md" onClick={() => navigate('/cash-management')}>
-            Cash Management
-          </button>
-        </div>
-      )}
+      {isManager && (() => {
+        const pendingCount = orderStats?.pending_receipts ?? groupedPending.length;
+        const tasks = [];
+        if (canManageCash && unreconciledCount > 0)
+          tasks.push({ key: 'unrec', label: 'Unreconciled days', value: unreconciledCount, path: '/cash-management', accent: 'warning' });
+        if (overdueCount > 0)
+          tasks.push({ key: 'overdue', label: 'Ready overdue', value: overdueCount, path: '/collection', accent: 'danger' });
+        if (openBalancesTotal > 0)
+          tasks.push({ key: 'balances', label: 'Open balances', value: `TSh ${openBalancesTotal.toLocaleString()}`, path: '/orders', accent: 'warning' });
+        if (pendingCount > 0)
+          tasks.push({ key: 'pending', label: 'Pending in progress', value: pendingCount, path: '/orders', accent: 'info' });
+        return tasks.length > 0 ? (
+          <div className="dk-task-inbox" role="region" aria-label="Manager tasks">
+            {tasks.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                className={`dk-task-card dk-task-card--${t.accent}`}
+                onClick={() => navigate(t.path)}
+              >
+                <span className="dk-task-card__value">{t.value}</span>
+                <span className="dk-task-card__label">{t.label}</span>
+              </button>
+            ))}
+          </div>
+        ) : null;
+      })()}
 
       <div className="dk-stat-strip" role="region" aria-label="Dashboard summary">
         <div className="dk-stat-cell">
@@ -475,7 +511,7 @@ const Dashboard = () => {
                       <p>{receiptGroup.items.length} line(s) · TSh {(receiptGroup.total_amount || 0).toLocaleString()}</p>
                     </div>
                     <div className="dashboard-list-card-actions">
-                      <button type="button" className="btn-small btn-secondary" onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}>View</button>
+                      <button type="button" className="btn-small btn-secondary" onClick={() => navigate(`/orders?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}>View</button>
                       <button type="button" className="btn-small btn-success" onClick={() => handleReceiptStatusUpdate(receiptGroup, 'ready')}>Mark Ready</button>
                     </div>
                   </div>
@@ -511,8 +547,8 @@ const Dashboard = () => {
                             <button
                               type="button"
                               className="btn-small btn-secondary btn-table-action"
-                              onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}
-                              title="View receipt"
+                              onClick={() => navigate(`/orders?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}
+                              title="View receipt details on Orders"
                             >
                               View
                             </button>

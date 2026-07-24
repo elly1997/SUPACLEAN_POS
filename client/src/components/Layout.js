@@ -88,7 +88,13 @@ const Layout = ({ children }) => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
-  // Base menu items by workflow group
+  const ROLE_NAV_PRESETS = {
+    cashier: ['/dashboard', '/new-order', '/collection', '/orders', '/cash-management'],
+    processor: ['/dashboard', '/orders'],
+    manager: null,
+    admin: null
+  };
+
   const menuGroups = [
     {
       label: null,
@@ -142,9 +148,14 @@ const Layout = ({ children }) => {
     return true;
   };
 
+  const rolePreset = ROLE_NAV_PRESETS[user?.role] ?? null;
+
   const filteredGroups = menuGroups.map(grp => ({
     ...grp,
-    items: grp.items.filter(filterItem),
+    items: grp.items.filter(filterItem).filter((item) => {
+      if (!rolePreset) return true;
+      return rolePreset.includes(item.path);
+    }),
   })).filter(grp => grp.items.length > 0);
 
   if (isAdmin) {

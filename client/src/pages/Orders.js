@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef, Fragment } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { getOrders, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, updateOrderCustomerPhone, receivePayment, sendCollectionReminder, voidOrderReceipt, archiveOldOrders } from '../api/api';
+import { useSearchParams } from 'react-router-dom';
+import { getOrders, getOrderByReceipt, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, updateOrderCustomerPhone, receivePayment, sendCollectionReminder, voidOrderReceipt, archiveOldOrders } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
+import ReceiptDetailPanel from '../components/ReceiptDetailPanel';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import { formatCustomerReceiptId, formatReceiptForDisplay, formatBranchReceiptLine } from '../utils/receiptId';
@@ -32,7 +33,7 @@ const ORDERS_EXPORT_COLUMNS = [
 ];
 
 const Orders = () => {
-  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { showToast, ToastContainer } = useToast();
   const { branch, selectedBranchId, hasPermission, isAdmin } = useAuth();
   const [listView, setListView] = useListViewPreference();
@@ -53,6 +54,9 @@ const Orders = () => {
   const [receivingPayment, setReceivingPayment] = useState(false);
   const [sendingReminder, setSendingReminder] = useState(null);
   const [expandedReceipts, setExpandedReceipts] = useState(new Set()); // Track which receipts are expanded
+  const [receiptDetails, setReceiptDetails] = useState({}); // receipt -> { order, loading, error }
+  const [openOverflowMenu, setOpenOverflowMenu] = useState(null);
+  const deepLinkHandledRef = useRef(null);
   const [searchFilters, setSearchFilters] = useState({
     customer: '',
     dateFrom: '',
@@ -83,6 +87,13 @@ const Orders = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  useEffect(() => {
+    if (!openOverflowMenu) return undefined;
+    const onDocClick = () => setOpenOverflowMenu(null);
+    document.addEventListener('click', onDocClick);
+    return () => document.removeEventListener('click', onDocClick);
+  }, [openOverflowMenu]);
 
   const loadOrders = useCallback(async (append = false, offsetOverride = undefined, filtersOverride = null, filterOverride = null) => {
     const f = filtersOverride ?? debouncedSearchFilters;
@@ -826,14 +837,259 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
     return Object.values(grouped);
   };
 
-  const toggleReceiptExpansion = (receiptNumber) => {
+  const loadReceiptDetail = useCallback(async (receiptNumber, fallbackItems = []) => {
+    setReceiptDetails((prev) => ({
+      ...prev,
+      [receiptNumber]: { ...(prev[receiptNumber] || {}), loading: true, error: null },
+    }));
+    try {
+      const res = await getOrderByReceipt(receiptNumber);
+      const order = res?.data || null;
+      setReceiptDetails((prev) => ({
+        ...prev,
+        [receiptNumber]: { order, loading: false, error: order ? null : 'Order not found' },
+      }));
+    } catch (err) {
+      // Fall back to list items so managers still see a maximized panel
+      const first = fallbackItems[0] || null;
+      const fallbackOrder = first
+        ? {
+            ...first,
+            total_amount: fallbackItems.reduce((s, i) => s + (parseFloat(i.total_amount) || 0), 0),
+            paid_amount: fallbackItems.reduce((s, i) => s + (parseFloat(i.paid_amount) || 0), 0),
+            all_items: fallbackItems,
+          }
+        : null;
+      setReceiptDetails((prev) => ({
+        ...prev,
+        [receiptNumber]: {
+          order: fallbackOrder,
+          loading: false,
+          error: fallbackOrder ? null : (err.response?.data?.error || err.message || 'Failed to load details'),
+        },
+      }));
+    }
+  }, []);
+
+  // Deep link: /orders?receipt=XXX maximizes that receipt on this page (no Collection redirect)
+  useEffect(() => {
+    const receiptParam = searchParams.get('receipt');
+    if (!receiptParam || !receiptParam.trim()) return;
+    const rn = receiptParam.trim();
+    if (deepLinkHandledRef.current === rn) return;
+    deepLinkHandledRef.current = rn;
+    setExpandedReceipts(new Set([rn]));
+    loadReceiptDetail(rn, []);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('receipt');
+      return next;
+    }, { replace: true });
+  }, [searchParams, setSearchParams, loadReceiptDetail]);
+
+  const toggleReceiptExpansion = (receiptNumber, fallbackItems = []) => {
     const newExpanded = new Set(expandedReceipts);
     if (newExpanded.has(receiptNumber)) {
       newExpanded.delete(receiptNumber);
+      setOpenOverflowMenu(null);
     } else {
       newExpanded.add(receiptNumber);
+      if (!receiptDetails[receiptNumber]?.order) {
+        loadReceiptDetail(receiptNumber, fallbackItems);
+      }
     }
     setExpandedReceipts(newExpanded);
+  };
+
+  const openPaymentForReceipt = (receiptGroup) => {
+    const balance = receiptGroup.total_amount - receiptGroup.paid_amount;
+    setSelectedOrderForPayment({
+      ...receiptGroup.items[0],
+      total_amount: receiptGroup.total_amount,
+      paid_amount: receiptGroup.paid_amount,
+    });
+    setPaymentAmount(balance.toString());
+    setPaymentDate(todayYmd());
+    setShowReceivePaymentModal(true);
+    setOpenOverflowMenu(null);
+  };
+
+  const renderReceiptActions = (receiptGroup, { compact = false } = {}) => {
+    const balance = receiptGroup.total_amount - receiptGroup.paid_amount;
+    const isExpanded = expandedReceipts.has(receiptGroup.receipt_number);
+    const menuOpen = openOverflowMenu === receiptGroup.receipt_number;
+    const archivedOrVoided = receiptGroup.is_archived || receiptGroup.is_voided;
+    let primary = null;
+    if (!archivedOrVoided && (receiptGroup.status === 'pending' || receiptGroup.status === 'processing')) {
+      primary = (
+        <button
+          type="button"
+          className="dk-btn dk-btn--success dk-btn--sm"
+          onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}
+        >
+          Mark Ready
+        </button>
+      );
+    } else if (!archivedOrVoided && receiptGroup.status === 'ready') {
+      primary = (
+        <button
+          type="button"
+          className="dk-btn dk-btn--primary dk-btn--sm"
+          onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'collected')}
+          disabled={balance > 0}
+          title={balance > 0 ? 'Pay balance first' : 'Collect'}
+        >
+          Collect
+        </button>
+      );
+    } else if (!archivedOrVoided && balance > 0) {
+      primary = (
+        <button
+          type="button"
+          className="dk-btn dk-btn--primary dk-btn--sm"
+          onClick={() => openPaymentForReceipt(receiptGroup)}
+        >
+          Pay
+        </button>
+      );
+    }
+
+    return (
+      <div className="orders-actions-v2">
+        {primary}
+        {!archivedOrVoided && balance > 0 && receiptGroup.status === 'ready' && (
+          <button
+            type="button"
+            className="dk-btn dk-btn--secondary dk-btn--sm"
+            onClick={() => openPaymentForReceipt(receiptGroup)}
+          >
+            Pay
+          </button>
+        )}
+        <button
+          type="button"
+          className={`dk-btn dk-btn--${isExpanded ? 'primary' : 'secondary'} dk-btn--sm`}
+          onClick={() => toggleReceiptExpansion(receiptGroup.receipt_number, receiptGroup.items)}
+          aria-expanded={isExpanded}
+        >
+          {isExpanded ? 'Minimize' : 'Details'}
+        </button>
+        <div className="orders-actions-v2__overflow">
+          <button
+            type="button"
+            className="dk-btn dk-btn--secondary dk-btn--sm"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpenOverflowMenu(menuOpen ? null : receiptGroup.receipt_number);
+            }}
+          >
+            More
+          </button>
+          {menuOpen && (
+            <div className="orders-actions-v2__menu" role="menu" onClick={(e) => e.stopPropagation()}>
+              {!archivedOrVoided && receiptGroup.status === 'ready' && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={sendingReminder !== null || isMissingCustomerPhone(receiptGroup.customer_phone)}
+                  title={
+                    isMissingCustomerPhone(receiptGroup.customer_phone)
+                      ? 'Add a customer phone number first'
+                      : 'Send collection reminder'
+                  }
+                  onClick={() => {
+                    receiptGroup.items.forEach((item) => handleSendReminder(item.id));
+                    setOpenOverflowMenu(null);
+                  }}
+                >
+                  {sendingReminder ? 'Sending…' : 'Remind'}
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  handlePrintReceipt(receiptGroup);
+                  setOpenOverflowMenu(null);
+                }}
+              >
+                Reprint
+              </button>
+              {hasPermission('canManageOrders') && !archivedOrVoided && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={voidingReceipt === receiptGroup.receipt_number}
+                  onClick={() => {
+                    handleVoidReceipt(receiptGroup);
+                    setOpenOverflowMenu(null);
+                  }}
+                >
+                  {voidingReceipt === receiptGroup.receipt_number ? 'Voiding…' : 'Void'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        {compact ? null : null}
+      </div>
+    );
+  };
+
+  const renderExpandedDetail = (receiptGroup) => {
+    const detail = receiptDetails[receiptGroup.receipt_number] || {};
+    return (
+      <ReceiptDetailPanel
+        order={detail.order}
+        items={receiptGroup.items}
+        loading={!!detail.loading}
+        error={detail.error}
+        onClose={() => toggleReceiptExpansion(receiptGroup.receipt_number, receiptGroup.items)}
+        actions={
+          !receiptGroup.is_archived && !receiptGroup.is_voided ? (
+            <>
+              {(receiptGroup.status === 'pending' || receiptGroup.status === 'processing') && (
+                <button
+                  type="button"
+                  className="dk-btn dk-btn--success dk-btn--sm"
+                  onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}
+                >
+                  Mark Ready
+                </button>
+              )}
+              {receiptGroup.status === 'ready' && (
+                <button
+                  type="button"
+                  className="dk-btn dk-btn--primary dk-btn--sm"
+                  onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'collected')}
+                  disabled={receiptGroup.total_amount - receiptGroup.paid_amount > 0}
+                >
+                  Collect
+                </button>
+              )}
+              {receiptGroup.total_amount - receiptGroup.paid_amount > 0 && (
+                <button
+                  type="button"
+                  className="dk-btn dk-btn--secondary dk-btn--sm"
+                  onClick={() => openPaymentForReceipt(receiptGroup)}
+                >
+                  Receive Payment
+                </button>
+              )}
+              <button
+                type="button"
+                className="dk-btn dk-btn--secondary dk-btn--sm"
+                onClick={() => handlePrintReceipt(receiptGroup)}
+              >
+                Reprint
+              </button>
+            </>
+          ) : null
+        }
+      />
+    );
   };
 
   const paymentStatusLabel = (ps) => {
@@ -962,6 +1218,8 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
 
   // Get consolidated orders
   const consolidatedOrders = groupOrdersByReceipt(orders);
+  const listReceiptNumbers = new Set(consolidatedOrders.map((g) => g.receipt_number));
+  const orphanExpandedReceipts = [...expandedReceipts].filter((rn) => !listReceiptNumbers.has(rn));
   const canManageOrders = hasPermission('canManageOrders');
 
   return (
@@ -1178,12 +1436,50 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
 
       {loading ? (
         <Loader message="Loading orders…" fullPage />
-      ) : consolidatedOrders.length === 0 ? (
+      ) : (
+        <>
+      {orphanExpandedReceipts.map((rn) => {
+        const detail = receiptDetails[rn] || {};
+        return (
+          <div key={`orphan-${rn}`} className="orders-orphan-detail" style={{ marginBottom: 16 }}>
+            <ReceiptDetailPanel
+              order={detail.order}
+              loading={!!detail.loading}
+              error={detail.error}
+              onClose={() => toggleReceiptExpansion(rn, [])}
+              actions={
+                detail.order && !detail.order.is_voided ? (
+                  <button
+                    type="button"
+                    className="dk-btn dk-btn--secondary dk-btn--sm"
+                    onClick={() => handlePrintReceipt({
+                      receipt_number: rn,
+                      items: detail.order.all_items || [detail.order],
+                      total_amount: detail.order.total_amount,
+                      paid_amount: detail.order.paid_amount,
+                      payment_status: detail.order.payment_status,
+                      payment_method: detail.order.payment_method,
+                      customer_name: detail.order.customer_name,
+                      customer_phone: detail.order.customer_phone,
+                      order_date: detail.order.order_date,
+                      estimated_collection_date: detail.order.estimated_collection_date,
+                      branch_code: detail.order.branch_code,
+                    })}
+                  >
+                    Reprint
+                  </button>
+                ) : null
+              }
+            />
+          </div>
+        );
+      })}
+      {consolidatedOrders.length === 0 && orphanExpandedReceipts.length === 0 ? (
         <div className="empty-state-modern" role="status">
           <p className="empty-state-title">No orders match your filters</p>
           <p className="empty-state-hint">Try clearing filters above or create a new order from the Dashboard.</p>
         </div>
-      ) : listView === 'card' ? (
+      ) : consolidatedOrders.length === 0 ? null : listView === 'card' ? (
         <>
         <div className="orders-cards-grid">
           {consolidatedOrders.map((receiptGroup) => {
@@ -1208,31 +1504,13 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                   <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Est: {formatDateTime(receiptGroup.estimated_collection_date)}</p>
                 </div>
                 <div className="orders-list-card-actions">
-                  {!receiptGroup.is_archived && !receiptGroup.is_voided && (receiptGroup.status === 'pending' || receiptGroup.status === 'processing') ? (
-                    <button className="btn-small btn-success" onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}>Mark Ready</button>
-                  ) : !receiptGroup.is_archived && !receiptGroup.is_voided && receiptGroup.status === 'ready' ? (
-                    <>
-                      <button className="btn-small btn-warning" onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'collected')} disabled={balance > 0} title={balance > 0 ? 'Pay first' : 'Collect'}>Collect</button>
-                      <button className="btn-small btn-secondary" onClick={() => receiptGroup.items.forEach(item => handleSendReminder(item.id))} disabled={sendingReminder !== null}>{sendingReminder ? '⏳' : '📱 Remind'}</button>
-                    </>
-                  ) : null}
-                  {!receiptGroup.is_archived && !receiptGroup.is_voided && balance > 0 && (
-                    <button className="btn-small btn-primary" onClick={() => { setSelectedOrderForPayment({ ...receiptGroup.items[0], total_amount: receiptGroup.total_amount, paid_amount: receiptGroup.paid_amount }); setPaymentAmount(balance.toString()); setPaymentDate(todayYmd()); setShowReceivePaymentModal(true); }}>💰 Pay</button>
-                  )}
-                  {canManageOrders && !receiptGroup.is_archived && !receiptGroup.is_voided && (
-                    <button
-                      className="btn-small btn-danger"
-                      onClick={() => handleVoidReceipt(receiptGroup)}
-                      disabled={voidingReceipt === receiptGroup.receipt_number}
-                      title="Void receipt and reverse all payments"
-                    >
-                      {voidingReceipt === receiptGroup.receipt_number ? '⏳ Voiding…' : 'Void'}
-                    </button>
-                  )}
-                  {!receiptGroup.is_archived && (
-                    <button className="btn-small btn-secondary" onClick={() => navigate(`/collection?receipt=${encodeURIComponent(receiptGroup.receipt_number)}`)}>View</button>
-                  )}
+                  {renderReceiptActions(receiptGroup)}
                 </div>
+                {expandedReceipts.has(receiptGroup.receipt_number) && (
+                  <div className="orders-list-card-detail">
+                    {renderExpandedDetail(receiptGroup)}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -1283,7 +1561,7 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                       <td>
                         <button
                           className="expand-btn"
-                          onClick={() => toggleReceiptExpansion(receiptGroup.receipt_number)}
+                          onClick={() => toggleReceiptExpansion(receiptGroup.receipt_number, receiptGroup.items)}
                           style={{ 
                             background: 'none', 
                             border: 'none', 
@@ -1291,7 +1569,7 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                             fontSize: '14px',
                             padding: '4px 8px'
                           }}
-                          title={isExpanded ? 'Collapse' : 'Expand to see items'}
+                          title={isExpanded ? 'Minimize details' : 'Maximize order details'}
                         >
                           {isExpanded ? '▼' : '▶'}
                         </button>
@@ -1407,148 +1685,16 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                         </span>
                       </td>
                       <td>
-                        <div className="action-buttons">
-                          {!receiptGroup.is_archived && !receiptGroup.is_voided && receiptGroup.status === 'pending' && (
-                            <button
-                              className="btn-small btn-success"
-                              onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}
-                              title="Mark order as ready for collection"
-                            >
-                              ✓ Mark as Ready
-                            </button>
-                          )}
-                          {!receiptGroup.is_archived && !receiptGroup.is_voided && receiptGroup.status === 'processing' && (
-                            <button
-                              className="btn-small btn-success"
-                              onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'ready')}
-                              title="Mark all ready"
-                            >
-                              Ready All
-                            </button>
-                          )}
-                          {!receiptGroup.is_archived && !receiptGroup.is_voided && receiptGroup.status === 'ready' && (
-                            <>
-                              <button
-                                className="btn-small btn-warning"
-                                onClick={() => handleReceiptStatusUpdate(receiptGroup.items, 'collected')}
-                                disabled={balance > 0}
-                                title={balance > 0 ? 'Payment required before collection. Use Pay first.' : 'Collect all items'}
-                              >
-                                Collect All
-                              </button>
-                              <button
-                                className="btn-small btn-secondary"
-                                onClick={() => {
-                                  receiptGroup.items.forEach(item => {
-                                    handleSendReminder(item.id);
-                                  });
-                                }}
-                                disabled={sendingReminder !== null || isMissingCustomerPhone(receiptGroup.customer_phone)}
-                                title={
-                                  isMissingCustomerPhone(receiptGroup.customer_phone)
-                                    ? 'Add a customer phone number first'
-                                    : 'Send collection reminder'
-                                }
-                                style={{ marginTop: '4px' }}
-                              >
-                                {sendingReminder ? '⏳ Sending...' : '📱 Remind'}
-                              </button>
-                            </>
-                          )}
-                          {!receiptGroup.is_archived && !receiptGroup.is_voided && balance > 0 && (
-                            <button
-                              className="btn-small btn-primary"
-                              onClick={() => {
-                                // Use first order for payment modal (all share same receipt)
-                                setSelectedOrderForPayment({
-                                  ...receiptGroup.items[0],
-                                  total_amount: receiptGroup.total_amount,
-                                  paid_amount: receiptGroup.paid_amount
-                                });
-                                setPaymentAmount(balance.toString());
-                                setPaymentDate(todayYmd());
-                                setShowReceivePaymentModal(true);
-                              }}
-                              style={{ marginTop: '4px' }}
-                            >
-                              💰 Pay
-                            </button>
-                          )}
-                          {canManageOrders && !receiptGroup.is_archived && !receiptGroup.is_voided && (
-                            <button
-                              className="btn-small btn-danger"
-                              onClick={() => handleVoidReceipt(receiptGroup)}
-                              disabled={voidingReceipt === receiptGroup.receipt_number}
-                              style={{ marginTop: '4px' }}
-                              title="Void receipt and reverse all payments"
-                            >
-                              {voidingReceipt === receiptGroup.receipt_number ? '⏳ Voiding…' : 'Void Receipt'}
-                            </button>
-                          )}
-                          <button
-                            className="btn-small btn-secondary"
-                            onClick={() => handlePrintReceipt(receiptGroup)}
-                            style={{ marginTop: '4px' }}
-                            title="Reprint receipt"
-                          >
-                            🖨️ Reprint Receipt
-                          </button>
-                        </div>
+                        {renderReceiptActions(receiptGroup)}
                       </td>
                     </tr>
-                    {/* Expanded items rows */}
-                    {isExpanded && receiptGroup.items.map((item, idx) => (
-                      <tr key={`${receiptGroup.receipt_number}-item-${idx}`} className="receipt-item-row" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-                        <td></td>
-                        <td style={{ paddingLeft: '40px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                          Item {idx + 1}
+                    {isExpanded && (
+                      <tr className="orders-expand-row">
+                        <td colSpan={10}>
+                          {renderExpandedDetail(receiptGroup)}
                         </td>
-                        <td colSpan="2">
-                          <div className="order-details" style={{ fontSize: '13px' }}>
-                            <span><strong>Type:</strong> {item.garment_type || item.service_name}</span>
-                            {item.color && <span><strong>Color:</strong> {item.color}</span>}
-                            <span><strong>Qty:</strong> {item.quantity}</span>
-                            {item.weight_kg && <span><strong>Weight:</strong> {item.weight_kg}kg</span>}
-                          </div>
-                        </td>
-                        <td style={{ fontSize: '13px' }}>TSh {item.total_amount.toLocaleString()}</td>
-                        <td>
-                          <div className="action-buttons">
-                            {!item.archived_at && (item.status === 'pending' || item.status === 'processing') && (
-                              <>
-                                {item.status === 'pending' && (
-                                  <button
-                                    className="btn-small btn-primary"
-                                    onClick={() => handleStatusUpdate(item.id, 'processing')}
-                                  >
-                                    Start
-                                  </button>
-                                )}
-                                {item.status === 'processing' && (
-                                  <button
-                                    className="btn-small btn-success"
-                                    onClick={() => handleStatusUpdate(item.id, 'ready')}
-                                  >
-                                    Ready
-                                  </button>
-                                )}
-                              </>
-                            )}
-                            {!item.archived_at && item.status === 'ready' && (
-                              <button
-                                className="btn-small btn-warning"
-                                onClick={() => handleStatusUpdate(item.id, 'collected')}
-                                disabled={balance > 0}
-                                title={balance > 0 ? 'Payment required before collection. Use Pay first.' : 'Collect'}
-                              >
-                                Collect
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                        <td colSpan="4"></td>
                       </tr>
-                    ))}
+                    )}
                   </Fragment>
                 );
               })}
@@ -1569,6 +1715,8 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           </div>
         )}
         </>
+      )}
+      </>
       )}
 
       {/* Receive Payment Modal */}

@@ -107,7 +107,7 @@ const Collection = () => {
   const loadQueue = useCallback(async () => {
     try {
       setQueueLoading(true);
-      const params = { limit: 500 };
+      const params = { limit: 80 };
       if (queueSearchDebounced && queueSearchDebounced.trim()) {
         params.customer = queueSearchDebounced.trim();
       }
@@ -125,9 +125,16 @@ const Collection = () => {
   useEffect(() => {
     loadQueue();
     const queueInterval = setInterval(() => {
-      if (showQueue) loadQueue();
+      if (!document.hidden && showQueue) loadQueue();
     }, 30000);
-    return () => clearInterval(queueInterval);
+    const onVis = () => {
+      if (!document.hidden && showQueue) loadQueue();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(queueInterval);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, [showQueue, loadQueue]);
 
   // Focus search input on mount so cashier can type or scan immediately

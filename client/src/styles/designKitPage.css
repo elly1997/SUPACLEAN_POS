@@ -454,3 +454,156 @@
 .admin-branches .admin-header:hover {
   box-shadow: var(--shadow-md);
 }
+
+/* ═══ Manager V2 — Task inbox ═══ */
+.dk-task-inbox {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.dk-task-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 0.5px solid var(--border-color);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  transition: all 0.25s ease;
+  box-shadow: var(--shadow-sm);
+  border-left: 4px solid var(--primary-color);
+}
+
+.dk-task-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.dk-task-card:active {
+  transform: scale(0.98);
+}
+
+.dk-task-card--warning {
+  border-left-color: var(--warning-color);
+}
+
+.dk-task-card--danger {
+  border-left-color: var(--danger-color);
+}
+
+.dk-task-card--info {
+  border-left-color: var(--info-color);
+}
+
+.dk-task-card--success {
+  border-left-color: var(--success-color);
+}
+
+.dk-task-card__value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.dk-task-card__label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+[data-theme="dark"] .dk-task-card {
+  background: rgba(28, 28, 30, 0.7);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+@media (max-width: 560px) {
+  .dk-task-inbox {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ═══ V2 step pills (close-day wizard) ═══ */
+.v2-step-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+
+.v2-step-pill:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+.v2-step-pill.active {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.25);
+}
+
+.v2-step-pill.done {
+  border-color: var(--success-color);
+  color: var(--success-color);
+}
+
+.v2-step-pill__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.v2-step-pill.active .v2-step-pill__num {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.v2-step-pill.done .v2-step-pill__num {
+  background: var(--success-color);
+  color: #fff;
+}
+
+.v2-step-pill__label {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .v2-step-pill__label {
+    display: inline;
+  }
+}
+
+[data-theme="dark"] .v2-step-pill {
+  background: rgba(44, 44, 46, 0.9);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* ═══ Reports tab-skeleton ═══ */
+.reports-tab-skeleton {
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

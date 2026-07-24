@@ -14,7 +14,8 @@ import {
   getCashSalesDetailForDate,
   getBookSalesDetailForDate,
   recalculateDailyCashForDate,
-  refreshCashChainFromDate
+  refreshCashChainFromDate,
+  getExpenses
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
@@ -25,10 +26,17 @@ import { formatCustomerReceiptId } from '../utils/receiptId';
 import { getBusinessTodayYmd } from '../utils/businessDate';
 import './CashManagement.css';
 
+const CLOSE_STEP_LABELS = ['Opening', 'Review', 'Deposits & Expenses', 'Reconcile'];
+
 const CashManagement = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
-  const { user, selectedBranchId, isAdmin } = useAuth();
+  const { user, selectedBranchId, isAdmin, hasPermission } = useAuth();
+  const canManageExpenses = hasPermission?.('canManageExpenses') ?? false;
+  const [cashWorkspace, setCashWorkspace] = useState('close');
+  const [closeStep, setCloseStep] = useState(1);
+  const [todayExpenses, setTodayExpenses] = useState([]);
+  const [expensesLoading, setExpensesLoading] = useState(false);
   const [summary, setSummary] = useState(null);
   const [bankDeposits, setBankDeposits] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -121,6 +129,19 @@ const CashManagement = () => {
     }
   };
 
+  const loadTodayExpenses = async () => {
+    setExpensesLoading(true);
+    try {
+      const res = await getExpenses({ start_date: today, end_date: today, limit: 100 });
+      setTodayExpenses(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error('Error loading today expenses:', err);
+      setTodayExpenses([]);
+    } finally {
+      setExpensesLoading(false);
+    }
+  };
+
   const loadUnreconciledClosings = async () => {
     setUnreconciledLoading(true);
     try {
@@ -141,6 +162,12 @@ const CashManagement = () => {
   useEffect(() => {
     loadUnreconciledClosings();
   }, [selectedBranchId]);
+
+  useEffect(() => {
+    if (closeStep === 3 && canManageExpenses && todayExpenses.length === 0) {
+      loadTodayExpenses();
+    }
+  }, [closeStep]);
 
   const rowDateKey = (row) => (row?.date != null ? String(row.date).slice(0, 10) : '');
 
@@ -663,7 +690,7 @@ const CashManagement = () => {
                                 type="button"
                                 className="btn-link"
                                 onClick={() =>
-                                  navigate(`/collection?receipt=${encodeURIComponent(row.receipt_number)}`)
+                                  navigate(`/orders?receipt=${encodeURIComponent(row.receipt_number)}`)
                                 }
                               >
                                 Open
@@ -711,7 +738,7 @@ const CashManagement = () => {
                                 type="button"
                                 className="btn-link"
                                 onClick={() =>
-                                  navigate(`/collection?receipt=${encodeURIComponent(row.receipt_number)}`)
+                                  navigate(`/orders?receipt=${encodeURIComponent(row.receipt_number)}`)
                                 }
                               >
                                 Open
@@ -811,7 +838,46 @@ const CashManagement = () => {
         </div>
       </div>
 
-      {!summary.all_branches && (
+      {/* Workspace tab bar */}
+      <nav className="cash-workspace-tabs" aria-label="Cash management workspace">
+        <button
+          type="button"
+          className={`tab-btn ${cashWorkspace === 'close' ? 'active' : ''}`}
+          onClick={() => setCashWorkspace('close')}
+        >
+          Today&apos;s close
+        </button>
+        <button
+          type="button"
+          className={`tab-btn ${cashWorkspace === 'history' ? 'active' : ''}`}
+          onClick={() => setCashWorkspace('history')}
+        >
+          History
+        </button>
+      </nav>
+
+      {/* Step indicator for close wizard */}
+      {cashWorkspace === 'close' && (
+        <div className="cash-step-indicator" role="group" aria-label="Close-day steps">
+          {CLOSE_STEP_LABELS.map((label, i) => {
+            const step = i + 1;
+            return (
+              <button
+                key={step}
+                type="button"
+                className={`v2-step-pill ${closeStep === step ? 'active' : ''} ${closeStep > step ? 'done' : ''}`}
+                onClick={() => setCloseStep(step)}
+              >
+                <span className="v2-step-pill__num">{step}</span>
+                <span className="v2-step-pill__label">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Close wizard: step 1 – Opening ── */}
+      {cashWorkspace === 'close' && closeStep === 1 && !summary.all_branches && (
         <div className="opening-session-card">
           <h2>Opening Session</h2>
           <p className="subtitle">
@@ -868,7 +934,15 @@ const CashManagement = () => {
         </div>
       )}
 
-      {/* Daily summary as table for data density and scalability */}
+      {cashWorkspace === 'close' && closeStep === 1 && summary.all_branches && (
+        <div className="all-branches-notice" role="status">
+          Viewing consolidated totals. Select a branch above to set opening session.
+        </div>
+      )}
+
+      {/* ── Close wizard: step 2 – Review ── */}
+      {cashWorkspace === 'close' && closeStep === 2 && (
+      <>
       <div className="cash-summary-table-section">
         <h2>Daily cash summary</h2>
         <div className="cash-summary-table-wrap interactive-scroll-region" tabIndex={0} role="region" aria-label="Daily cash summary table" {...tableScrollHandlers}>
@@ -1005,13 +1079,18 @@ const CashManagement = () => {
         </div>
       </div>
 
+      </>
+      )}
+
+      {/* ── Close wizard: step 3 – Deposits & Expenses ── */}
+      {cashWorkspace === 'close' && closeStep === 3 && (
+      <>
       {summary.all_branches && (
         <div className="all-branches-notice" role="status">
           Viewing consolidated totals for all branches. Select a branch above to reconcile or add deposits.
         </div>
       )}
 
-      {/* Bank Deposits Section */}
       <div className="deposits-section" id="bank-deposits-section">
         <div className="section-header">
           <h2>🏦 Bank Deposits</h2>
@@ -1121,6 +1200,51 @@ const CashManagement = () => {
         )}
       </div>
 
+      {/* Inline today's expenses panel */}
+      {canManageExpenses && (
+        <div className="cash-today-expenses">
+          <div className="section-header">
+            <h2>Today&apos;s Expenses</h2>
+            <button type="button" className="btn-small btn-secondary" onClick={() => navigate('/expenses')}>
+              Full Expenses Page
+            </button>
+          </div>
+          {expensesLoading ? (
+            <p className="range-empty">Loading expenses...</p>
+          ) : todayExpenses.length > 0 ? (
+            <div className="deposits-table-wrap interactive-scroll-region" tabIndex={0} role="region" aria-label="Today expenses table" {...tableScrollHandlers}>
+              <table className="deposits-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th className="num">Amount (TSh)</th>
+                    <th>Payment</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {todayExpenses.map((exp) => (
+                    <tr key={exp.id}>
+                      <td>{exp.category || exp.expense_type || '—'}</td>
+                      <td className="num">{parseFloat(exp.amount || 0).toLocaleString()}</td>
+                      <td>{exp.payment_source || exp.payment_method || '—'}</td>
+                      <td className="deposit-notes-cell">{exp.description || exp.notes || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="empty-state"><p>No expenses recorded today</p></div>
+          )}
+        </div>
+      )}
+      </>
+      )}
+
+      {/* ── Close wizard: step 4 – Reconcile ── */}
+      {cashWorkspace === 'close' && closeStep === 4 && (
+      <>
       {/* Action Buttons - only for single branch */}
       {!summary.all_branches && !summary.is_reconciled && (
         <div className="action-buttons">
@@ -1149,7 +1273,67 @@ const CashManagement = () => {
         </div>
       ))}
 
-      {/* Cashflow report by date range */}
+      {/* Checklist summary */}
+      <div className="cash-summary-table-section" style={{ marginTop: 16 }}>
+        <h2>Day-close checklist</h2>
+        <table className="cash-summary-table" style={{ fontSize: 14 }}>
+          <tbody>
+            <tr>
+              <td>Opening Balance</td>
+              <td className="num">TSh {parseFloat(summary.opening_balance || 0).toLocaleString()}</td>
+            </tr>
+            <tr>
+              <td>Cash Sales</td>
+              <td className="num">TSh {parseFloat(summary.cash_sales || 0).toLocaleString()}</td>
+            </tr>
+            <tr>
+              <td>Book Sales</td>
+              <td className="num">TSh {parseFloat(summary.book_sales || 0).toLocaleString()}</td>
+            </tr>
+            <tr>
+              <td>Expenses (Cash)</td>
+              <td className="num">- TSh {parseFloat(summary.expenses_from_cash || 0).toLocaleString()}</td>
+            </tr>
+            <tr>
+              <td>Bank Deposits</td>
+              <td className="num">- TSh {parseFloat(summary.bank_deposits || 0).toLocaleString()}</td>
+            </tr>
+            <tr className="total-row">
+              <td><strong>Closing Balance</strong></td>
+              <td className="num"><strong>TSh {parseFloat(summary.closing_balance || cashInHand).toLocaleString()}</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      </>
+      )}
+
+      {/* Step nav */}
+      {cashWorkspace === 'close' && (
+        <div className="cash-step-nav">
+          <button
+            type="button"
+            className="dk-btn dk-btn--secondary dk-btn--md"
+            onClick={() => setCloseStep((s) => Math.max(1, s - 1))}
+            disabled={closeStep === 1}
+          >
+            Back
+          </button>
+          <span className="cash-step-nav__label">Step {closeStep} of {CLOSE_STEP_LABELS.length}</span>
+          <button
+            type="button"
+            className="dk-btn dk-btn--primary dk-btn--md"
+            onClick={() => setCloseStep((s) => Math.min(CLOSE_STEP_LABELS.length, s + 1))}
+            disabled={closeStep === CLOSE_STEP_LABELS.length}
+          >
+            Next
+          </button>
+        </div>
+      )}
+
+      {/* ── History workspace ── */}
+      {cashWorkspace === 'history' && (
+      <>
       <div className="cash-range-section">
         <h2>Pending reconciliations</h2>
         <p className="subtitle">Daily closing entries that were saved but are not yet reconciled</p>
@@ -1389,6 +1573,8 @@ const CashManagement = () => {
           <p className="range-empty">No summary data for this range. Ensure dates have been reconciled or saved per branch.</p>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 };

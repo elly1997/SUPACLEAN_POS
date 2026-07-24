@@ -534,3 +534,11 @@
   color: var(--text-primary);
   border: 1px solid var(--border-color);
 }
+
+.orders-list-card-detail {
+  margin-top: 10px;
+}
+
+.orders-list-card .receipt-detail-panel {
+  margin-top: 0;
+}
