@@ -14,7 +14,8 @@ const BANK_METHODS = ['bank', 'bank_transfer'];
 function buildMethodInClause(methods, alias = '') {
   const col = alias ? `${alias}.payment_method` : 'payment_method';
   const placeholders = methods.map(() => '?').join(', ');
-  return { clause: `${col} IN (${placeholders})`, params: [...methods] };
+  // Leading AND required — clause is interpolated after other WHERE predicates.
+  return { clause: `AND ${col} IN (${placeholders})`, params: [...methods] };
 }
 
 /** Attribute transactions to a branch via transaction.branch_id or linked order.branch_id. */
