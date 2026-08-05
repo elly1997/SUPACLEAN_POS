@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getOrders, getOrderByReceipt, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, updateOrderCustomerPhone, receivePayment, sendCollectionReminder, voidOrderReceipt, archiveOldOrders } from '../api/api';
+import { getOrders, getOrderByReceipt, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, updateOrderCustomerPhone, receivePayment, sendCollectionReminder, voidOrderReceipt, requestVoidOrderReceipt, getPendingVoidRequests, archiveOldOrders } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
@@ -71,6 +71,7 @@ const Orders = () => {
   const [exporting, setExporting] = useState(false);
   const [exportingUncollected, setExportingUncollected] = useState(false);
   const [voidingReceipt, setVoidingReceipt] = useState(null);
+  const [pendingVoidReceipts, setPendingVoidReceipts] = useState(() => new Set());
   const [archivingOldOrders, setArchivingOldOrders] = useState(false);
   const [showExportPopup, setShowExportPopup] = useState(false);
   const ordersSearchInputRef = useRef(null);
@@ -94,6 +95,26 @@ const Orders = () => {
     document.addEventListener('click', onDocClick);
     return () => document.removeEventListener('click', onDocClick);
   }, [openOverflowMenu]);
+
+  const loadPendingVoids = useCallback(async () => {
+    if (!hasPermission('canManageOrders')) {
+      setPendingVoidReceipts(new Set());
+      return;
+    }
+    try {
+      const res = await getPendingVoidRequests(
+        selectedBranchId ? { branch_id: selectedBranchId } : {}
+      );
+      const next = new Set(
+        (res?.data?.items || [])
+          .map((item) => String(item?.payload?.receipt_number || '').trim().toUpperCase())
+          .filter(Boolean)
+      );
+      setPendingVoidReceipts(next);
+    } catch (err) {
+      console.error('Failed to load pending void requests:', err);
+    }
+  }, [hasPermission, selectedBranchId]);
 
   const loadOrders = useCallback(async (append = false, offsetOverride = undefined, filtersOverride = null, filterOverride = null) => {
     const f = filtersOverride ?? debouncedSearchFilters;
@@ -120,6 +141,7 @@ const Orders = () => {
       else setOrders(data);
       setHasMore(data.length === ORDERS_PAGE_SIZE);
       if (res.fromCache && res.syncedAt) setLastSyncedAt(res.syncedAt); else setLastSyncedAt(null);
+      if (!append) loadPendingVoids();
     } catch (error) {
       console.error('Error loading orders:', error);
       const errorMsg = error.response?.data?.error || error.message || 'Network Error';
@@ -132,7 +154,7 @@ const Orders = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [filter, debouncedSearchFilters, selectedBranchId, showToast]);
+  }, [filter, debouncedSearchFilters, selectedBranchId, showToast, loadPendingVoids]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearchFilters(searchFilters), 400);
@@ -463,7 +485,9 @@ const Orders = () => {
     let reason = presetReason;
     if (!reason) {
       reason = window.prompt(
-        'Reason for voiding this receipt (incorrect entry, duplicate, etc.):',
+        isAdmin
+          ? 'Reason for voiding this receipt (incorrect entry, duplicate, etc.):'
+          : 'Reason for void request (admin must approve before the receipt is voided):',
         'Incorrect receipt logged'
       );
       if (reason == null) return;
@@ -473,13 +497,30 @@ const Orders = () => {
       }
     }
     if (!acknowledgeReconciledDay && !window.confirm(
-      `Void receipt ${formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}?\n\nThis will reverse all payments and remove it from cash totals. This cannot be undone.`
+      isAdmin
+        ? `Void receipt ${formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)}?\n\nThis will reverse all payments and remove it from cash totals. This cannot be undone.`
+        : `Send void request for receipt ${formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)} to admin inbox?\n\nAn admin must approve before payments/cash totals change.`
     )) {
       return;
     }
 
     setVoidingReceipt(receiptGroup.receipt_number);
     try {
+      if (!isAdmin) {
+        const res = await requestVoidOrderReceipt(receiptGroup.receipt_number, {
+          void_reason: reason.trim(),
+          acknowledge_reconciled_day: acknowledgeReconciledDay
+        });
+        showToast(res?.data?.message || 'Void request sent to admin for approval', 'success');
+        setPendingVoidReceipts((prev) => {
+          const next = new Set(prev);
+          next.add(String(receiptGroup.receipt_number).trim().toUpperCase());
+          return next;
+        });
+        loadOrders(false);
+        return;
+      }
+
       const res = await voidOrderReceipt(receiptGroup.receipt_number, {
         void_reason: reason.trim(),
         acknowledge_reconciled_day: acknowledgeReconciledDay
@@ -504,6 +545,14 @@ const Orders = () => {
           return;
         }
         await handleVoidReceipt(receiptGroup, { acknowledgeReconciledDay: true, voidReason: reason.trim() });
+        return;
+      }
+      if (status === 409 && code === 'void_pending') {
+        showToast(msg || 'A void request is already pending admin approval', 'info');
+        return;
+      }
+      if (status === 403 && code === 'void_requires_approval') {
+        showToast('Void requires admin approval — submit a void request instead.', 'warning');
         return;
       }
       showToast('Error voiding receipt: ' + msg, 'error');
@@ -919,8 +968,11 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
     const isExpanded = expandedReceipts.has(receiptGroup.receipt_number);
     const menuOpen = openOverflowMenu === receiptGroup.receipt_number;
     const archivedOrVoided = receiptGroup.is_archived || receiptGroup.is_voided;
+    const voidPending = pendingVoidReceipts.has(
+      String(receiptGroup.receipt_number || '').trim().toUpperCase()
+    );
     let primary = null;
-    if (!archivedOrVoided && (receiptGroup.status === 'pending' || receiptGroup.status === 'processing')) {
+    if (!archivedOrVoided && !voidPending && (receiptGroup.status === 'pending' || receiptGroup.status === 'processing')) {
       primary = (
         <button
           type="button"
@@ -930,7 +982,7 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           Mark Ready
         </button>
       );
-    } else if (!archivedOrVoided && receiptGroup.status === 'ready') {
+    } else if (!archivedOrVoided && !voidPending && receiptGroup.status === 'ready') {
       primary = (
         <button
           type="button"
@@ -942,7 +994,7 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           Collect
         </button>
       );
-    } else if (!archivedOrVoided && balance > 0) {
+    } else if (!archivedOrVoided && !voidPending && balance > 0) {
       primary = (
         <button
           type="button"
@@ -952,12 +1004,22 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           Pay
         </button>
       );
+    } else if (!archivedOrVoided && voidPending) {
+      primary = (
+        <span
+          className="status-badge"
+          style={{ backgroundColor: '#c2410c', color: '#fff' }}
+          title="Awaiting admin approval"
+        >
+          Void pending
+        </span>
+      );
     }
 
     return (
       <div className="orders-actions-v2">
         {primary}
-        {!archivedOrVoided && balance > 0 && receiptGroup.status === 'ready' && (
+        {!archivedOrVoided && !voidPending && balance > 0 && receiptGroup.status === 'ready' && (
           <button
             type="button"
             className="dk-btn dk-btn--secondary dk-btn--sm"
@@ -1021,13 +1083,20 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                 <button
                   type="button"
                   role="menuitem"
-                  disabled={voidingReceipt === receiptGroup.receipt_number}
+                  disabled={
+                    voidingReceipt === receiptGroup.receipt_number
+                    || pendingVoidReceipts.has(String(receiptGroup.receipt_number || '').trim().toUpperCase())
+                  }
                   onClick={() => {
                     handleVoidReceipt(receiptGroup);
                     setOpenOverflowMenu(null);
                   }}
                 >
-                  {voidingReceipt === receiptGroup.receipt_number ? 'Voiding…' : 'Void'}
+                  {voidingReceipt === receiptGroup.receipt_number
+                    ? (isAdmin ? 'Voiding…' : 'Sending…')
+                    : pendingVoidReceipts.has(String(receiptGroup.receipt_number || '').trim().toUpperCase())
+                      ? 'Void pending'
+                      : (isAdmin ? 'Void' : 'Request void')}
                 </button>
               )}
             </div>

@@ -9,6 +9,7 @@ import { getBranches } from '../../api/api';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import OfflineIndicator from '../OfflineIndicator';
+import AdminNotificationCenter from '../AdminNotificationCenter';
 import { isSoundEnabled, setSoundEnabled } from '../../utils/sound';
 import './Layout.css';
 
@@ -272,6 +273,7 @@ const Layout = ({ children }) => {
         >
           ☰
         </button>
+        {isAdmin && <AdminNotificationCenter />}
         <div className="content-wrapper">
           {children}
         </div>

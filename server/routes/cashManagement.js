@@ -10,6 +10,7 @@ const {
   isReconciledFlag,
   deliverDirectorDailyReport,
 } = require('../utils/dailyClosingReport');
+const { notifyCashShort, notifyReconciledDay } = require('../utils/adminInbox');
 
 // All cash-management routes require branch feature 'cash_management' (admin bypasses)
 router.use(authenticate, requireBranchFeature('cash_management'));
@@ -492,9 +493,22 @@ router.post('/opening-session/:date', requireBranchAccess(), requirePermission('
         [ymd, branchId, expectedOpening, openingCash, openingVariance, req.user?.fullName || req.user?.username || 'Cashier', notes]
       );
     }
-    // Recompute this day and later unreconciled days so the next day’s expected opening tracks this closing
     await refreshUnreconciledSummariesFromDate(branchId, ymd);
     const row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
+
+    try {
+      await notifyCashShort({
+        branchId,
+        date: ymd,
+        openingVariance: parseFloat(row.opening_variance || 0),
+        openingCashDeclared: parseFloat(row.opening_cash_declared || 0),
+        expectedOpening: parseFloat(row.opening_balance || 0),
+        reportedBy: req.user?.fullName || req.user?.username || 'Cashier',
+      });
+    } catch (inboxErr) {
+      console.error('Failed to notify cash short to admin inbox:', inboxErr.message);
+    }
+
     res.json({
       ...row,
       opening_balanced: Math.abs(parseFloat(row.opening_variance || 0)) < 0.01,
@@ -870,6 +884,18 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
     row = await db.get('SELECT * FROM daily_cash_summaries WHERE date = ? AND branch_id = ?', [ymd, branchId]);
     const branchRow = await db.get('SELECT name FROM branches WHERE id = ?', [branchId]);
     const branchName = branchRow?.name || `Branch ${branchId}`;
+
+    try {
+      await notifyReconciledDay({
+        branchId,
+        date: ymd,
+        reconciledBy: reconciled_by || req.user?.fullName || req.user?.username || 'Cashier',
+        openingVariance: parseFloat(row.opening_variance || 0),
+        closingBalance: row.closing_balance ?? row.reconciled_closing_balance ?? null,
+      });
+    } catch (inboxErr) {
+      console.error('Failed to notify reconcile to admin inbox:', inboxErr.message);
+    }
 
     const delivery = await deliverDirectorDailyReport(row, branchName, reconciled_by || 'Cashier', ymd);
 

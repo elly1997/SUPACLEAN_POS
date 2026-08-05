@@ -28,6 +28,12 @@ const { recordPaymentTransaction, recordPaymentTransactionClient, logPaymentChan
 const { applyReceiptPaymentAtomic } = require('../utils/receiptPayment');
 const { parseArchiveOptions, archiveOldOrders: runArchiveOldOrders } = require('../utils/archiveOldOrders');
 const { voidReceiptByNumber } = require('../utils/orderVoid');
+const {
+  createVoidReceiptRequest,
+  logAdminExecutedVoid,
+  getPendingVoidForReceipt,
+  assertNoPendingVoid,
+} = require('../utils/adminInbox');
 const { sqlActiveOrdersOnly, sqlUnarchivedOrdersOnly } = require('../utils/orderVoidFilter');
 const cashManagement = require('./cashManagement');
 const {
@@ -438,7 +444,45 @@ router.get('/receipt/:receiptNumber', requireBranchAccess(), async (req, res) =>
   }
 });
 
-// Void entire receipt — reverses payments, loyalty, and removes from cash totals (managers/admins)
+// Staff/manager: request void — appears in admin inbox for approve/decline
+router.post('/receipt/:receiptNumber/void-request', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+  const { receiptNumber } = req.params;
+  const branchFilter = getBranchFilter(req, 'o');
+  const acknowledgeReconciledDay = req.body?.acknowledge_reconciled_day === true
+    || req.body?.acknowledge_reconciled_day === 'true'
+    || req.body?.acknowledge_reconciled_day === 1
+    || req.body?.acknowledge_reconciled_day === '1';
+
+  // Admins may still use request flow, but normally void immediately via /void
+  try {
+    const { item, created } = await createVoidReceiptRequest({
+      receiptNumber,
+      voidReason: req.body?.void_reason || 'Voided by user',
+      requestedBy: req.user?.fullName || req.user?.username || 'User',
+      requestedByUserId: req.user?.id,
+      branchFilterClause: branchFilter.clause,
+      branchFilterParams: branchFilter.params,
+      acknowledgeReconciledDay,
+    });
+    res.status(created ? 201 : 200).json({
+      message: created
+        ? 'Void request sent to admin inbox for approval'
+        : 'A void request for this receipt is already pending admin approval',
+      code: 'void_pending_approval',
+      item,
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    console.error('Error creating void request:', err);
+    res.status(status).json({
+      error: err.message || 'Failed to create void request',
+      code: err.code,
+      item: err.inboxItem || undefined,
+    });
+  }
+});
+
+// Admin-only immediate void — also logs an awareness item in the admin inbox
 router.post('/receipt/:receiptNumber/void', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { receiptNumber } = req.params;
   const branchFilter = getBranchFilter(req, 'o');
@@ -447,14 +491,41 @@ router.post('/receipt/:receiptNumber/void', requireBranchAccess(), requirePermis
     || req.body?.acknowledge_reconciled_day === 1
     || req.body?.acknowledge_reconciled_day === '1';
 
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({
+      error: 'Voiding a receipt requires admin approval. Submit a void request instead.',
+      code: 'void_requires_approval',
+    });
+  }
+
   try {
+    await assertNoPendingVoid(receiptNumber);
+    const voidedBy = req.user?.fullName || req.user?.username || 'Admin';
     const result = await voidReceiptByNumber(receiptNumber, {
-      voidReason: req.body?.void_reason || 'Voided by user',
-      voidedBy: req.user?.fullName || req.user?.username || 'User',
+      voidReason: req.body?.void_reason || 'Voided by admin',
+      voidedBy,
       acknowledgeReconciledDay,
       branchFilterClause: branchFilter.clause,
       branchFilterParams: branchFilter.params
     });
+
+    try {
+      const sample = await db.get(
+        `SELECT branch_id FROM orders WHERE UPPER(receipt_number) = UPPER(?) LIMIT 1`,
+        [receiptNumber]
+      );
+      await logAdminExecutedVoid({
+        receiptNumber,
+        voidReason: req.body?.void_reason || 'Voided by admin',
+        voidedBy,
+        voidedByUserId: req.user?.id,
+        branchId: sample?.branch_id ?? null,
+        result,
+      });
+    } catch (logErr) {
+      console.error('Failed to log admin void to inbox:', logErr.message);
+    }
+
     res.json(result);
   } catch (err) {
     if (err.status === 409 && err.code === 'reconciled_day') {
@@ -462,7 +533,57 @@ router.post('/receipt/:receiptNumber/void', requireBranchAccess(), requirePermis
     }
     const status = err.status || 500;
     console.error('Error voiding receipt:', err);
-    res.status(status).json({ error: err.message || 'Failed to void receipt' });
+    res.status(status).json({ error: err.message || 'Failed to void receipt', code: err.code });
+  }
+});
+
+// Pending void-request status for a receipt (staff + admin)
+router.get('/receipt/:receiptNumber/void-request', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+  try {
+    const item = await getPendingVoidForReceipt(req.params.receiptNumber);
+    res.json({ pending: !!item, item: item || null });
+  } catch (err) {
+    console.error('Error fetching void request status:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List pending void requests visible to this user (branch-scoped; admin sees all or selected branch)
+router.get('/void-requests/pending', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+  try {
+    const branchId = getEffectiveBranchId(req);
+    const params = [];
+    let branchClause = '';
+    if (req.user?.role !== 'admin') {
+      if (req.user?.branchId == null) {
+        return res.json({ items: [] });
+      }
+      branchClause = ' AND branch_id = ?';
+      params.push(req.user.branchId);
+    } else if (branchId != null && branchId !== '') {
+      branchClause = ' AND branch_id = ?';
+      params.push(Number(branchId));
+    }
+
+    const rows = await db.all(
+      `SELECT id, title, body, branch_id, branch_name, branch_code, payload,
+              requested_by, created_at, action_status, status
+       FROM admin_inbox
+       WHERE type = 'void_receipt' AND action_status = 'pending'${branchClause}
+       ORDER BY created_at DESC
+       LIMIT 100`,
+      params
+    );
+
+    res.json({
+      items: (rows || []).map((row) => ({
+        ...row,
+        payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : (row.payload || {}),
+      })),
+    });
+  } catch (err) {
+    console.error('Error listing pending void requests:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1250,11 +1371,11 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
     // Verify user has access: match by branch, or allow orders with null branch_id (legacy) and assign to current branch
     const branchFilter = getBranchFilter(req, 'o');
     let order = await db.get(
-      `SELECT o.id, o.total_amount, o.paid_amount, o.branch_id, o.is_voided, o.archived_at FROM orders o WHERE o.id = ? ${branchFilter.clause}`,
+      `SELECT o.id, o.total_amount, o.paid_amount, o.branch_id, o.is_voided, o.archived_at, o.receipt_number FROM orders o WHERE o.id = ? ${branchFilter.clause}`,
       [id, ...branchFilter.params]
     );
     if (!order && (branchFilter.clause || branchFilter.params?.length)) {
-      order = await db.get('SELECT id, total_amount, paid_amount, branch_id, is_voided, archived_at FROM orders WHERE id = ?', [id]);
+      order = await db.get('SELECT id, total_amount, paid_amount, branch_id, is_voided, archived_at, receipt_number FROM orders WHERE id = ?', [id]);
       if (order && order.branch_id != null) {
         return res.status(403).json({ error: 'Order belongs to another branch. You can only update orders for your branch.' });
       }
@@ -1267,6 +1388,16 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
     }
     if (order.archived_at) {
       return res.status(400).json({ error: 'Cannot update an archived order' });
+    }
+
+    if (order.receipt_number) {
+      const pendingVoid = await getPendingVoidForReceipt(order.receipt_number);
+      if (pendingVoid) {
+        return res.status(409).json({
+          error: 'This receipt has a void request awaiting admin approval',
+          code: 'void_pending',
+        });
+      }
     }
 
     // Cannot mark as collected without payment
@@ -1450,6 +1581,14 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
   const { payment_amount, payment_method = 'cash', payment_date, notes } = req.body;
 
   try {
+    const pendingVoid = await getPendingVoidForReceipt(receiptNumber);
+    if (pendingVoid) {
+      return res.status(409).json({
+        error: 'This receipt has a void request awaiting admin approval',
+        code: 'void_pending',
+      });
+    }
+
     const branchFilter = getBranchFilter(req, 'o');
     const payAmount =
       payment_amount !== undefined && payment_amount > 0 ? roundFigure(parseFloat(payment_amount)) : 0;
@@ -1557,6 +1696,16 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
     }
     if (order.archived_at) {
       return res.status(400).json({ error: 'Cannot receive payment for an archived receipt' });
+    }
+
+    if (order.receipt_number) {
+      const pendingVoid = await getPendingVoidForReceipt(order.receipt_number);
+      if (pendingVoid) {
+        return res.status(409).json({
+          error: 'This receipt has a void request awaiting admin approval',
+          code: 'void_pending',
+        });
+      }
     }
 
     if (!assertNotFutureBusinessDate(paymentBookDateYmd(payment_date), res, 'payment_date')) {

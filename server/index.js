@@ -72,6 +72,7 @@ require('./database/ensureExpenseCategoriesSchema');
 require('./database/ensureCleaningSchema');
 require('./database/ensureOrderVoidSchema');
 require('./database/ensureOrderArchiveSchema');
+require('./database/ensureAdminInboxSchema');
 require('./database/ensurePerformanceIndexes');
 require('./database/ensureLongevitySchema');
 
@@ -103,6 +104,7 @@ try {
   app.use('/api/cleaning-expenses', require('./routes/cleaningExpenses'));
   app.use('/api/admin', require('./routes/adminData'));
   app.use('/api/admin/maintenance', require('./routes/adminMaintenance'));
+  app.use('/api/admin/inbox', require('./routes/adminInbox'));
   console.log('✅ All routes loaded successfully');
 } catch (error) {
   console.error('❌ Error loading routes:', error);

@@ -362,7 +362,20 @@ export const collectOrder = (receiptNumber, paymentData = {}) => api.post(`/orde
 export const receivePayment = (orderId, paymentData) => api.post(`/orders/${orderId}/receive-payment`, paymentData);
 export const voidOrderReceipt = (receiptNumber, data = {}) =>
   api.post(`/orders/receipt/${encodeURIComponent(receiptNumber)}/void`, data);
+export const requestVoidOrderReceipt = (receiptNumber, data = {}) =>
+  api.post(`/orders/receipt/${encodeURIComponent(receiptNumber)}/void-request`, data);
+export const getVoidOrderRequest = (receiptNumber) =>
+  api.get(`/orders/receipt/${encodeURIComponent(receiptNumber)}/void-request`);
+export const getPendingVoidRequests = (params = {}) =>
+  api.get('/orders/void-requests/pending', { params });
 export const archiveOldOrders = (data = {}) => api.post('/orders/archive-old', data);
+
+export const getAdminInbox = (params = {}) => api.get('/admin/inbox', { params });
+export const getAdminInboxCounts = (params = {}) => api.get('/admin/inbox/counts', { params });
+export const markAdminInboxRead = (id) => api.post(`/admin/inbox/${id}/read`);
+export const dismissAdminInboxItem = (id) => api.post(`/admin/inbox/${id}/dismiss`);
+export const approveAdminInboxItem = (id, data = {}) => api.post(`/admin/inbox/${id}/approve`, data);
+export const rejectAdminInboxItem = (id, data = {}) => api.post(`/admin/inbox/${id}/reject`, data);
 export async function getCollectionQueue(params = {}) {
   if (isOffline()) {
     try {

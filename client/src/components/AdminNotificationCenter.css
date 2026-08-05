@@ -1,0 +1,316 @@
+.admin-inbox {
+  position: fixed;
+  top: 16px;
+  right: 20px;
+  z-index: 1100;
+}
+
+.admin-inbox__bell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color, #d6dde8);
+  background: var(--bg-secondary, #fff);
+  color: var(--text-primary, #122033);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm, 0 1px 3px rgba(16, 24, 40, 0.08));
+  font-family: inherit;
+}
+
+.admin-inbox__bell:hover,
+.admin-inbox__bell.is-open {
+  background: var(--bg-hover, #f3f6fb);
+}
+
+.admin-inbox__bell-icon {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-inbox__badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #c2410c;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.admin-inbox__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(420px, calc(100vw - 24px));
+  max-height: min(72vh, 640px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  border: 1px solid var(--border-color, #d6dde8);
+  background: var(--bg-secondary, #fff);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
+  overflow: hidden;
+}
+
+.admin-inbox__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 16px 10px;
+  border-bottom: 1px solid var(--border-color, #e5eaf2);
+}
+
+.admin-inbox__header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary, #122033);
+}
+
+.admin-inbox__header p {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary, #64748b);
+}
+
+.admin-inbox__refresh {
+  border: 1px solid var(--border-color, #d6dde8);
+  background: transparent;
+  color: var(--text-secondary, #475569);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.admin-inbox__filters {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+}
+
+.admin-inbox__chip {
+  border: 1px solid var(--border-color, #d6dde8);
+  background: transparent;
+  color: var(--text-secondary, #475569);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.admin-inbox__chip.is-active {
+  background: #0f2744;
+  border-color: #0f2744;
+  color: #fff;
+}
+
+.admin-inbox__list {
+  overflow-y: auto;
+  padding: 0 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-inbox__empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-secondary, #64748b);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.admin-inbox__item {
+  border: 1px solid var(--border-color, #e5eaf2);
+  border-radius: 12px;
+  background: var(--bg-primary, #f8fafc);
+  overflow: hidden;
+}
+
+.admin-inbox__item.is-unread {
+  border-color: #94a3b8;
+}
+
+.admin-inbox__item.is-pending {
+  border-color: #c2410c;
+  background: linear-gradient(180deg, rgba(194, 65, 12, 0.06), transparent 48%), var(--bg-primary, #fff);
+}
+
+.admin-inbox__item-main {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 12px 12px 8px;
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+}
+
+.admin-inbox__item-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-bottom: 6px;
+}
+
+.admin-inbox__type {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.admin-inbox__type--void_receipt {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.admin-inbox__type--cash_short {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.admin-inbox__type--ai_suggestion {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.admin-inbox__branch {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #0f2744;
+}
+
+.admin-inbox__when {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.admin-inbox__item h3 {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary, #122033);
+}
+
+.admin-inbox__item p {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--text-secondary, #64748b);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.admin-inbox__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.admin-inbox__status-pill {
+  text-transform: capitalize;
+  font-weight: 600;
+}
+
+.admin-inbox__actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.admin-inbox__btn {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 7px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.admin-inbox__btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.admin-inbox__btn--approve {
+  background: #0f2744;
+  color: #fff;
+}
+
+.admin-inbox__btn--reject {
+  background: #fff;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.admin-inbox__btn--ghost {
+  background: transparent;
+  border-color: var(--border-color, #d6dde8);
+  color: #64748b;
+}
+
+[data-theme='dark'] .admin-inbox__bell,
+[data-theme='dark'] .admin-inbox__panel {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+}
+
+[data-theme='dark'] .admin-inbox__item {
+  background: var(--bg-primary);
+}
+
+[data-theme='dark'] .admin-inbox__chip.is-active,
+[data-theme='dark'] .admin-inbox__btn--approve {
+  background: #e2e8f0;
+  color: #0f172a;
+  border-color: #e2e8f0;
+}
+
+@media (max-width: 768px) {
+  .admin-inbox {
+    top: 16px;
+    right: 16px;
+  }
+
+  .admin-inbox__panel {
+    position: fixed;
+    top: 68px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
+}
