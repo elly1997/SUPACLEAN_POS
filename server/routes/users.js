@@ -100,13 +100,33 @@ router.post('/', authenticate, requireRole('admin'), async (req, res) => {
     }
 
     // Hash password
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, 12);
+    const forceChange =
+      req.body.must_change_password === true ||
+      req.body.force_password_change === true ||
+      req.body.invite === true;
 
-    // Create user
-    const result = await db.run(
-      'INSERT INTO users (username, password_hash, full_name, role, branch_id, is_active) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-      [username, passwordHash, full_name, role, role === 'admin' ? null : branch_id, is_active !== undefined ? is_active : true]
-    );
+    let result;
+    try {
+      result = await db.run(
+        `INSERT INTO users (username, password_hash, full_name, role, branch_id, is_active, must_change_password)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [
+          username,
+          passwordHash,
+          full_name,
+          role,
+          role === 'admin' ? null : branch_id,
+          is_active !== undefined ? is_active : true,
+          forceChange,
+        ]
+      );
+    } catch (colErr) {
+      result = await db.run(
+        'INSERT INTO users (username, password_hash, full_name, role, branch_id, is_active) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+        [username, passwordHash, full_name, role, role === 'admin' ? null : branch_id, is_active !== undefined ? is_active : true]
+      );
+    }
 
     // Get the created user with branch info
     const user = await db.get(
@@ -216,9 +236,16 @@ router.put('/:id', authenticate, requireRole('admin'), async (req, res) => {
 
     // Only hash and update password if a non-empty new password was provided
     if (password && typeof password === 'string' && password.trim().length > 0) {
-      const passwordHash = await bcrypt.hash(password.trim(), 10);
+      const passwordHash = await bcrypt.hash(password.trim(), 12);
       updates.push(`password_hash = $${paramIndex++}`);
       params.push(passwordHash);
+      if (req.body.must_change_password === true || req.body.force_password_change === true) {
+        updates.push(`must_change_password = TRUE`);
+      }
+    } else if (req.body.must_change_password === true) {
+      updates.push(`must_change_password = TRUE`);
+    } else if (req.body.must_change_password === false) {
+      updates.push(`must_change_password = FALSE`);
     }
 
     if (is_active !== undefined) {
@@ -253,6 +280,53 @@ router.put('/:id', authenticate, requireRole('admin'), async (req, res) => {
   } catch (err) {
     console.error('Error updating user:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Admin: reset password to a temporary password and force change on next login.
+ * Returns the plaintext temporary password once (show to admin / share out-of-band).
+ */
+router.post('/:id/reset-password', authenticate, requireRole('admin'), async (req, res) => {
+  const { id } = req.params;
+  const crypto = require('crypto');
+
+  try {
+    const user = await db.get('SELECT id, username, full_name FROM users WHERE id = $1', [id]);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const sessionToken = req.headers.authorization?.replace('Bearer ', '');
+    if (sessionToken) {
+      const session = await db.get('SELECT user_id FROM user_sessions WHERE session_token = $1', [sessionToken]);
+      if (session && Number(session.user_id) === Number(id)) {
+        return res.status(400).json({ error: 'Use Change password on the login screen for your own account' });
+      }
+    }
+
+    const tempPassword =
+      (req.body && req.body.temporary_password && String(req.body.temporary_password).trim().length >= 8)
+        ? String(req.body.temporary_password).trim()
+        : `Sc${crypto.randomBytes(4).toString('hex')}!${crypto.randomInt(10, 99)}`;
+
+    const passwordHash = await bcrypt.hash(tempPassword, 12);
+    await db.run(
+      `UPDATE users SET password_hash = $1, must_change_password = TRUE WHERE id = $2`,
+      [passwordHash, id]
+    );
+    await db.run('DELETE FROM user_sessions WHERE user_id = $1', [id]);
+
+    res.json({
+      success: true,
+      user_id: user.id,
+      username: user.username,
+      temporary_password: tempPassword,
+      message: 'Password reset. Share the temporary password out-of-band; user must change it on next login.',
+    });
+  } catch (err) {
+    console.error('reset-password error:', err);
+    res.status(500).json({ error: 'Failed to reset password' });
   }
 });
 

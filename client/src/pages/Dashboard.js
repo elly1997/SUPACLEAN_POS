@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { getOrders, updateOrderStatus, getCollectionQueue, getOrderDashboardStats, getTodayCashSummary, getCashSummaryRange, getUnreconciledClosings } from '../api/api';
+import { getOrders, updateOrderStatus, getCollectionQueue, getOrderDashboardStats, getTodayCashSummary, getCashSummaryRange, getUnreconciledClosings, getAdminInboxCounts } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
@@ -16,12 +16,15 @@ const Dashboard = () => {
   const { showToast, ToastContainer } = useToast();
   const { selectedBranchId, user, hasPermission, branch } = useAuth();
   const isCashier = user?.role === 'cashier';
+  const isAdmin = user?.role === 'admin';
   const canManageCash = hasPermission?.('canManageCash') ?? false;
   const canManageOrders = hasPermission?.('canManageOrders') ?? false;
   const canViewReports = hasPermission?.('canViewReports') ?? false;
   const isManager = canManageCash || canManageOrders || canViewReports;
+  const isOwnerView = isAdmin || user?.role === 'manager';
   const [listView, setListView] = useListViewPreference();
   const [unreconciledCount, setUnreconciledCount] = useState(0);
+  const [inboxOpenCount, setInboxOpenCount] = useState(0);
   const visibleRef = useRef(true);
   const [summary, setSummary] = useState(null);
   const [monthIncome, setMonthIncome] = useState(0);
@@ -46,6 +49,21 @@ const Dashboard = () => {
   );
   const cashBookPortion = useMemo(
     () => Number(summary?.cash_sales || 0) + Number(summary?.book_sales || 0),
+    [summary]
+  );
+  const digitalToday = useMemo(
+    () => Number(summary?.card_sales || 0) + Number(summary?.mobile_money_sales || 0),
+    [summary]
+  );
+  const expensesToday = useMemo(
+    () =>
+      Number(summary?.expenses_from_cash || 0) +
+      Number(summary?.expenses_from_bank || 0) +
+      Number(summary?.expenses_from_mpesa || 0),
+    [summary]
+  );
+  const cashPosition = useMemo(
+    () => Number(summary?.cash_in_hand ?? summary?.closing_balance ?? 0),
     [summary]
   );
   const overdueCount = useMemo(() => readyQueue.filter((r) => r.is_overdue).length, [readyQueue]);
@@ -84,11 +102,15 @@ const Dashboard = () => {
       const unreconciledPromise = canManageCash
         ? getUnreconciledClosings({ limit: 50 }).catch(() => ({ data: [] }))
         : Promise.resolve({ data: [] });
-      const [pendingRes, queueRes, monthRes, unreconRes] = await Promise.all([
+      const inboxPromise = isAdmin
+        ? getAdminInboxCounts().catch(() => ({ data: {} }))
+        : Promise.resolve({ data: {} });
+      const [pendingRes, queueRes, monthRes, unreconRes, inboxRes] = await Promise.all([
         getOrders({ status: 'pending', limit: DASHBOARD_LIST_LIMIT, ...(pendingCustomer && { customer: pendingCustomer }) }),
         getCollectionQueue({ limit: DASHBOARD_LIST_LIMIT, ...(readyCustomer && { customer: readyCustomer }) }),
         getCashSummaryRange(monthStart, today),
         unreconciledPromise,
+        inboxPromise,
       ]);
       const monthTotal = (Array.isArray(monthRes?.data) ? monthRes.data : []).reduce((acc, row) => (
         acc + (Number(row.cash_sales || 0) + Number(row.book_sales || 0) + Number(row.card_sales || 0) + Number(row.mobile_money_sales || 0))
@@ -98,6 +120,8 @@ const Dashboard = () => {
       setPendingOrders(pendingRes.data || []);
       setReadyQueue(queueRes.data || []);
       setUnreconciledCount(Array.isArray(unreconRes.data) ? unreconRes.data.length : 0);
+      const counts = inboxRes?.data || {};
+      setInboxOpenCount(Number(counts.unread || counts.pending_actions || 0));
       const synced = [summaryRes, pendingRes, queueRes].find((r) => r.fromCache && r.syncedAt);
       if (synced) setLastSyncedAt(synced.syncedAt); else setLastSyncedAt(null);
     } catch (error) {
@@ -112,7 +136,7 @@ const Dashboard = () => {
       setMonthIncome(0);
       setLoading(false);
     }
-  }, [today, readySearchTerm, pendingSearchTerm, showToast]);
+  }, [today, readySearchTerm, pendingSearchTerm, showToast, canManageCash, isAdmin]);
 
   useEffect(() => {
     loadDashboardData();
@@ -238,6 +262,8 @@ const Dashboard = () => {
         const tasks = [];
         if (canManageCash && unreconciledCount > 0)
           tasks.push({ key: 'unrec', label: 'Unreconciled days', value: unreconciledCount, path: '/cash-management', accent: 'warning' });
+        if (isAdmin && inboxOpenCount > 0)
+          tasks.push({ key: 'inbox', label: 'Admin alerts', value: inboxOpenCount, path: '/dashboard', accent: 'danger' });
         if (overdueCount > 0)
           tasks.push({ key: 'overdue', label: 'Ready overdue', value: overdueCount, path: '/collection', accent: 'danger' });
         if (openBalancesTotal > 0)
@@ -274,6 +300,40 @@ const Dashboard = () => {
             Cash+book TSh {cashBookPortion.toLocaleString()} · MTD TSh {Number(monthIncome || 0).toLocaleString()}
           </span>
         </div>
+        {isOwnerView && (
+          <>
+            <div className="dk-stat-cell">
+              <div className="dk-stat-cell__row">
+                <span className="dk-stat-cell__dot dk-accent-info" aria-hidden />
+                <span className="dk-stat-cell__label">Digital today</span>
+              </div>
+              <div className="dk-stat-cell__value-row">
+                <span className="dk-stat-cell__value">TSh {digitalToday.toLocaleString()}</span>
+              </div>
+              <span className="dk-stat-cell__sub">Card + M-Pesa</span>
+            </div>
+            <div className="dk-stat-cell">
+              <div className="dk-stat-cell__row">
+                <span className="dk-stat-cell__dot dk-accent-warning" aria-hidden />
+                <span className="dk-stat-cell__label">Expenses today</span>
+              </div>
+              <div className="dk-stat-cell__value-row">
+                <span className="dk-stat-cell__value">TSh {expensesToday.toLocaleString()}</span>
+              </div>
+              <span className="dk-stat-cell__sub">Operating outflows</span>
+            </div>
+            <div className="dk-stat-cell">
+              <div className="dk-stat-cell__row">
+                <span className="dk-stat-cell__dot dk-accent-success" aria-hidden />
+                <span className="dk-stat-cell__label">Cash position</span>
+              </div>
+              <div className="dk-stat-cell__value-row">
+                <span className="dk-stat-cell__value">TSh {cashPosition.toLocaleString()}</span>
+              </div>
+              <span className="dk-stat-cell__sub">Expected cash in hand</span>
+            </div>
+          </>
+        )}
         <div className="dk-stat-cell">
           <div className="dk-stat-cell__row">
             <span className="dk-stat-cell__dot dk-accent-info" aria-hidden />

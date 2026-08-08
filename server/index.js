@@ -108,6 +108,7 @@ try {
   app.use('/api/admin', require('./routes/adminData'));
   app.use('/api/admin/maintenance', require('./routes/adminMaintenance'));
   app.use('/api/admin/inbox', require('./routes/adminInbox'));
+  app.use('/api/admin', require('./routes/auditExport'));
   console.log('✅ All routes loaded successfully');
 } catch (error) {
   console.error('❌ Error loading routes:', error);

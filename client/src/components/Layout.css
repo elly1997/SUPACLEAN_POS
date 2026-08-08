@@ -528,3 +528,28 @@
   font-size: 14px;
 }
 
+/* Cashier / processor PDA-friendly primary controls */
+.layout--pos-touch .nav-item {
+  min-height: 48px;
+  font-size: 15px;
+}
+
+.layout--pos-touch .dk-btn--md,
+.layout--pos-touch .btn-primary,
+.layout--pos-touch .btn-success,
+.layout--pos-touch .login-button,
+.layout--pos-touch button.payment-method-btn {
+  min-height: 48px;
+  padding: 12px 18px;
+}
+
+.layout--pos-touch .form-group input,
+.layout--pos-touch .form-group select,
+.layout--pos-touch input[type='text'],
+.layout--pos-touch input[type='number'],
+.layout--pos-touch input[type='search'] {
+  min-height: 44px;
+  font-size: 16px; /* reduces iOS zoom */
+}
+
+

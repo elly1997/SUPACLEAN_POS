@@ -999,10 +999,12 @@ export const updateBranchFeatures = (id, features) => api.put(`/branches/${id}/f
 export const getUsers = () => api.get('/users');
 export const getUser = (id) => api.get(`/users/${id}`);
 export const createUser = (data) => api.post('/users', data, { timeout: 45000 });
-// User update can be slow on cold start or when DB is remote; use longer timeout for admin
 export const updateUser = (id, data) => api.put(`/users/${id}`, data, { timeout: 45000 });
 export const deleteUser = (id) => api.delete(`/users/${id}`);
 export const deleteUserPermanent = (id) => api.delete(`/users/${id}?permanent=true`);
+export const resetUserPassword = (id, data = {}) => api.post(`/users/${id}/reset-password`, data, { timeout: 45000 });
+export const downloadAuditExport = (params = {}) =>
+  api.get('/admin/audit-export', { params: { format: 'csv', ...params }, responseType: 'blob', timeout: 60000 });
 
 // Admin: clear all customers, orders, and related data (test data reset). Requires { confirm: 'CLEAR' }.
 export const clearAllCustomerData = () => api.post('/admin/clear-customer-data', { confirm: 'CLEAR' });

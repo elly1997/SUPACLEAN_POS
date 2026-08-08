@@ -42,7 +42,12 @@ router.get('/:key', async (req, res) => {
 router.put('/:key', requireRole('admin'), async (req, res) => {
   const { key } = req.params;
   const { value, description } = req.body;
-  const allowedUpsertKeys = ['manager_whatsapp_number'];
+  const allowedUpsertKeys = [
+    'manager_whatsapp_number',
+    'business_name',
+    'business_tagline',
+    'receipt_footer',
+  ];
 
   try {
     let result = await db.run(

@@ -3,13 +3,15 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/useToast';
 import {
   getBranches, createBranch, updateBranch,
-  getUsers, createUser, updateUser, deleteUser, deleteUserPermanent,
+  getUsers, createUser, updateUser, deleteUser, deleteUserPermanent, resetUserPassword,
   getBranchFeatures, updateBranchFeatures,
   getSettings, updateSetting,
   checkServerConnection,
-  clearAllCustomerData
+  clearAllCustomerData,
+  downloadAuditExport,
 } from '../api/api';
 import Loader from '../components/Loader';
+import { clearBrandSettingsCache } from '../utils/brandSettings';
 import './AdminBranches.css';
 
 const AdminBranches = () => {
@@ -21,6 +23,18 @@ const AdminBranches = () => {
   const [activeTab, setActiveTab] = useState('branches'); // 'branches' | 'users' | 'settings'
   const [managerWhatsapp, setManagerWhatsapp] = useState('');
   const [managerWhatsappSaving, setManagerWhatsappSaving] = useState(false);
+  const [businessName, setBusinessName] = useState('SUPACLEAN');
+  const [businessTagline, setBusinessTagline] = useState('Laundry & Dry Cleaning');
+  const [receiptFooter, setReceiptFooter] = useState('Thank you for your business!');
+  const [brandSaving, setBrandSaving] = useState(false);
+  const [auditStart, setAuditStart] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  });
+  const [auditEnd, setAuditEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [auditExporting, setAuditExporting] = useState(false);
+  const [tempPasswordReveal, setTempPasswordReveal] = useState(null);
   
   // Branch form state
   const [showBranchForm, setShowBranchForm] = useState(false);
@@ -44,7 +58,8 @@ const AdminBranches = () => {
     full_name: '',
     role: 'manager',
     branch_id: '',
-    is_active: true
+    is_active: true,
+    invite: true,
   });
 
   // Branch features/privileges state
@@ -110,7 +125,10 @@ const AdminBranches = () => {
       setBranches(branchesRes.data || []);
       setUsers(usersRes.data || []);
       const settings = settingsRes.data || {};
-      setManagerWhatsapp(settings.manager_whatsapp_number?.value || '+255752757635');
+      setManagerWhatsapp(settings.manager_whatsapp_number?.value || '');
+      setBusinessName(settings.business_name?.value || 'SUPACLEAN');
+      setBusinessTagline(settings.business_tagline?.value || 'Laundry & Dry Cleaning');
+      setReceiptFooter(settings.receipt_footer?.value || 'Thank you for your business!');
     } catch (error) {
       console.error('Error loading data:', error);
       const errorMsg = error.response?.data?.error || error.message || 'Unknown error';
@@ -220,17 +238,61 @@ const AdminBranches = () => {
       showToast('Password is required for new users', 'error');
       return;
     }
+    if (String(userForm.password).length < 8) {
+      showToast('Password must be at least 8 characters', 'error');
+      return;
+    }
     try {
       await createUser({
         ...userForm,
-        branch_id: userForm.branch_id || null
+        branch_id: userForm.branch_id || null,
+        invite: !!userForm.invite,
+        must_change_password: !!userForm.invite,
       });
-      showToast('User created successfully', 'success');
+      showToast(
+        userForm.invite
+          ? 'User invited. They must change the temporary password on first login.'
+          : 'User created successfully',
+        'success'
+      );
       setShowUserForm(false);
       resetUserForm();
       loadData();
     } catch (error) {
       showToast('Error creating user: ' + (error.response?.data?.error || error.message), 'error');
+    }
+  };
+
+  const handleResetPassword = async (user) => {
+    if (!window.confirm(`Reset password for ${user.username}? They will be signed out and must change password on next login.`)) {
+      return;
+    }
+    try {
+      const res = await resetUserPassword(user.id);
+      const temp = res.data?.temporary_password;
+      setTempPasswordReveal({ username: user.username, password: temp });
+      showToast('Password reset. Copy the temporary password now.', 'success');
+    } catch (error) {
+      showToast('Error: ' + (error.response?.data?.error || error.message), 'error');
+    }
+  };
+
+  const handleAuditExport = async () => {
+    setAuditExporting(true);
+    try {
+      const res = await downloadAuditExport({ start_date: auditStart, end_date: auditEnd, format: 'csv' });
+      const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `audit-export-${auditStart}-to-${auditEnd}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Audit CSV downloaded', 'success');
+    } catch (error) {
+      showToast('Export failed: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setAuditExporting(false);
     }
   };
 
@@ -260,7 +322,8 @@ const AdminBranches = () => {
       full_name: user.full_name || '',
       role: user.role || 'manager',
       branch_id: user.branch_id || '',
-      is_active: user.is_active !== undefined ? user.is_active : true
+      is_active: user.is_active !== undefined ? user.is_active : true,
+      invite: false,
     });
     setShowUserForm(true);
   };
@@ -298,7 +361,8 @@ const AdminBranches = () => {
       full_name: '',
       role: 'manager',
       branch_id: '',
-      is_active: true
+      is_active: true,
+      invite: true,
     });
     setEditingUser(null);
   };
@@ -702,6 +766,18 @@ const AdminBranches = () => {
                       {' '}Active
                     </label>
                   </div>
+                  {!editingUser && (
+                    <div className="form-group">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={!!userForm.invite}
+                          onChange={(e) => setUserForm({ ...userForm, invite: e.target.checked })}
+                        />
+                        {' '}Require password change on first login (invite)
+                      </label>
+                    </div>
+                  )}
                   <div className="form-actions">
                     <button 
                       type="button" 
@@ -761,6 +837,14 @@ const AdminBranches = () => {
                       >
                         Edit
                       </button>
+                      <button
+                        type="button"
+                        className="btn-edit-small"
+                        onClick={() => handleResetPassword(user)}
+                        title="Generate temporary password"
+                      >
+                        Reset pwd
+                      </button>
                       {user.is_active ? (
                         <button 
                           className="btn-delete-small"
@@ -790,9 +874,50 @@ const AdminBranches = () => {
         <div className="admin-settings-section">
           <h2>Admin settings</h2>
           <div className="settings-card">
+            <h3>Business branding (white-label)</h3>
+            <p className="settings-description">
+              Shown on thermal receipts and daily closing WhatsApp reports. Leave blank fields to keep defaults.
+            </p>
+            <div className="form-group">
+              <label>Business name</label>
+              <input type="text" value={businessName} onChange={(e) => setBusinessName(e.target.value)} placeholder="SUPACLEAN" />
+            </div>
+            <div className="form-group">
+              <label>Tagline</label>
+              <input type="text" value={businessTagline} onChange={(e) => setBusinessTagline(e.target.value)} placeholder="Laundry & Dry Cleaning" />
+            </div>
+            <div className="form-group">
+              <label>Receipt footer line</label>
+              <input type="text" value={receiptFooter} onChange={(e) => setReceiptFooter(e.target.value)} placeholder="Thank you for your business!" />
+            </div>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={brandSaving}
+              onClick={async () => {
+                setBrandSaving(true);
+                try {
+                  await Promise.all([
+                    updateSetting('business_name', { value: businessName.trim() || 'SUPACLEAN', description: 'Business name on receipts and reports' }),
+                    updateSetting('business_tagline', { value: businessTagline.trim() || 'Laundry & Dry Cleaning', description: 'Tagline under brand on receipts' }),
+                    updateSetting('receipt_footer', { value: receiptFooter.trim() || 'Thank you for your business!', description: 'Footer line on printed receipts' }),
+                  ]);
+                  clearBrandSettingsCache();
+                  showToast('Branding saved', 'success');
+                } catch (e) {
+                  showToast('Error saving branding: ' + (e.response?.data?.error || e.message), 'error');
+                } finally {
+                  setBrandSaving(false);
+                }
+              }}
+            >
+              {brandSaving ? 'Saving…' : 'Save branding'}
+            </button>
+          </div>
+          <div className="settings-card">
             <h3>Daily Closing Report – Director WhatsApp</h3>
             <p className="settings-description">
-              When a branch reconciles the day in Cash Management, the SUPACLEAN Daily Closing Report is sent to this number via WhatsApp.
+              When a branch reconciles the day in Cash Management, the Daily Closing Report is sent to this number via WhatsApp.
             </p>
             <div className="form-group">
               <label>Director WhatsApp number</label>
@@ -800,7 +925,7 @@ const AdminBranches = () => {
                 type="text"
                 value={managerWhatsapp}
                 onChange={(e) => setManagerWhatsapp(e.target.value)}
-                placeholder="+255752757635"
+                placeholder="+2557XXXXXXXX"
               />
             </div>
             <button
@@ -811,7 +936,7 @@ const AdminBranches = () => {
                 setManagerWhatsappSaving(true);
                 try {
                   await updateSetting('manager_whatsapp_number', {
-                    value: managerWhatsapp.trim() || '+255752757635',
+                    value: managerWhatsapp.trim(),
                     description: 'Director WhatsApp number – receives Daily Closing Report when a branch reconciles the day'
                   });
                   showToast('Director WhatsApp number saved', 'success');
@@ -823,6 +948,25 @@ const AdminBranches = () => {
               }}
             >
               {managerWhatsappSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+          <div className="settings-card">
+            <h3>Activity audit export</h3>
+            <p className="settings-description">
+              Download payment and expense change history as CSV for your accountant or compliance pack.
+            </p>
+            <div className="form-group" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <label>
+                From
+                <input type="date" value={auditStart} onChange={(e) => setAuditStart(e.target.value)} />
+              </label>
+              <label>
+                To
+                <input type="date" value={auditEnd} onChange={(e) => setAuditEnd(e.target.value)} />
+              </label>
+            </div>
+            <button type="button" className="btn-primary" disabled={auditExporting} onClick={handleAuditExport}>
+              {auditExporting ? 'Exporting…' : 'Download audit CSV'}
             </button>
           </div>
           <div className="settings-card" style={{ borderColor: 'var(--error-color, #c62828)' }}>
@@ -838,6 +982,37 @@ const AdminBranches = () => {
             >
               Clear all customer data
             </button>
+          </div>
+        </div>
+      )}
+
+      {tempPasswordReveal && (
+        <div className="modal-overlay" onClick={() => setTempPasswordReveal(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+            <div className="modal-header">
+              <h3>Temporary password</h3>
+            </div>
+            <p style={{ marginBottom: 12 }}>
+              User <strong>{tempPasswordReveal.username}</strong> must change this on next login. Copy it now — it will not be shown again.
+            </p>
+            <code style={{ display: 'block', padding: 12, marginBottom: 16, wordBreak: 'break-all', background: 'var(--bg-secondary)' }}>
+              {tempPasswordReveal.password}
+            </code>
+            <div className="form-actions" style={{ justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  navigator.clipboard?.writeText(tempPasswordReveal.password);
+                  showToast('Copied to clipboard', 'success');
+                }}
+              >
+                Copy
+              </button>
+              <button type="button" className="btn-primary" onClick={() => setTempPasswordReveal(null)}>
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

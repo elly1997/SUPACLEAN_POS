@@ -170,7 +170,7 @@ const Layout = ({ children }) => {
   }
 
   return (
-    <div className="layout">
+    <div className={`layout${user?.role === 'cashier' || user?.role === 'processor' ? ' layout--pos-touch' : ''}`}>
       <OfflineIndicator onBackOnline={handleBackOnline} />
       {isMobile && mobileMenuOpen && (
         <button

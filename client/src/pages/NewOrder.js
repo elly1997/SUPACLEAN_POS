@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import { formatCustomerReceiptId, formatBranchReceiptLine } from '../utils/receiptId';
 import { playSuccessSound } from '../utils/sound';
+import { loadBrandSettings } from '../utils/brandSettings';
 import './NewOrder.css';
 
 // Color Input Component - Defined outside to prevent recreation on each render
@@ -723,7 +724,8 @@ const NewOrder = () => {
         };
         // Always use consolidated receipt format for consistency (single or multiple items)
         try {
-          const combinedReceipt = await combineReceipts(receipts, selectedCustomer, payableTotal, orderData, discountAmount);
+          const brand = await loadBrandSettings().catch(() => null);
+          const combinedReceipt = await combineReceipts(receipts, selectedCustomer, payableTotal, orderData, discountAmount, brand);
           
           if (!combinedReceipt || !combinedReceipt.text || String(combinedReceipt.text).trim().length === 0) {
             console.error('Receipt text is empty:', combinedReceipt);
@@ -768,7 +770,11 @@ const NewOrder = () => {
 
   const RECEIPT_COMPACT_THRESHOLD = 12;
 
-  const combineReceipts = async (receipts, customer, total, paymentData, discount = 0) => {
+  const combineReceipts = async (receipts, customer, total, paymentData, discount = 0, brand = null) => {
+    const businessName = (brand && brand.business_name) || 'SUPACLEAN';
+    const tagline = (brand && brand.business_tagline) || 'Laundry & Dry Cleaning';
+    const footerLine = (brand && brand.receipt_footer) || 'Thank you for choosing SUPACLEAN!';
+
     const now = receipts[0]?.order?.order_date ? new Date(receipts[0].order.order_date) : new Date();
     const dateStr = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const calculatedTotal = receipts.reduce((sum, r) => sum + (parseFloat(r.order.total_amount) || 0), 0);
@@ -802,10 +808,10 @@ const NewOrder = () => {
     );
 
     const headerText = useCompact
-      ? `SUPACLEAN | ${branchLabel}\nReceipt: ${customerReceiptId} | ${dateStr}\n${estimatedCollectionDate}${customer.name} | ${customer.phone}\n`
+      ? `${businessName} | ${branchLabel}\nReceipt: ${customerReceiptId} | ${dateStr}\n${estimatedCollectionDate}${customer.name} | ${customer.phone}\n`
       : `
 ═══════════════════════════════════
-   Laundry & Dry Cleaning
+   ${tagline}
    ${branchLabel}, Tanzania
 ═══════════════════════════════════
 
@@ -816,7 +822,7 @@ Customer: ${customer.name}
 Phone: ${customer.phone}
 ───────────────────────────────────
 `;
-    const brandTitle = useCompact ? null : 'SUPACLEAN';
+    const brandTitle = useCompact ? null : businessName;
 
     const items = [];
     receipts.forEach((r) => {
@@ -847,7 +853,9 @@ Phone: ${customer.phone}
       const paid = parseFloat(paymentData.paid_amount) || 0;
       footerText += `ADVANCE | Paid TSh ${paid.toLocaleString()} | Due TSh ${(finalTotal - paid).toLocaleString()}\n`;
     }
-    footerText += useCompact ? `\nKeep for collection. Thank you!\n` : `\nPlease keep this receipt for collection.\nThank you for choosing SUPACLEAN!\n\n═══════════════════════════════════\n`;
+    footerText += useCompact
+      ? `\nKeep for collection. Thank you!\n`
+      : `\nPlease keep this receipt for collection.\n${footerLine}\n\n═══════════════════════════════════\n`;
 
     const text = (brandTitle ? `\n         ${brandTitle}\n` : '') + headerText.trimStart() + items.map((i) => `${i.qty}  ${i.desc}  ${i.amount}`).join('\n') + '\n' + footerText;
     return { text, headerText, items, footerText, brandTitle };
@@ -916,7 +924,7 @@ Phone: ${customer.phone}
         <!DOCTYPE html>
         <html>
           <head>
-            <title>Receipt - SUPACLEAN</title>
+            <title>Receipt - ${isStructured && receiptTextOrData.brandTitle ? receiptTextOrData.brandTitle : 'Receipt'}</title>
             <meta charset="UTF-8">
             <style>
               @media screen { body { font-family: 'Courier New', monospace; padding: 20px; max-width: ${receiptWidthCss}; margin: 0 auto; background: #f5f5f5; } }

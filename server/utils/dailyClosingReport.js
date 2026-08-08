@@ -13,7 +13,8 @@ function isReconciledFlag(value) {
   return value === true || value === 1 || value === '1' || value === 'true' || value === 't';
 }
 
-function buildDailyClosingReportText(row, branchName, cashierName, ymd) {
+function buildDailyClosingReportText(row, branchName, cashierName, ymd, brand = null) {
+  const businessName = (brand && brand.business_name) || 'SUPACLEAN';
   const opening = num(row.opening_balance);
   const openingDeclared = row.opening_cash_declared != null ? num(row.opening_cash_declared) : opening;
   const openingVariance = num(row.opening_variance);
@@ -45,7 +46,7 @@ function buildDailyClosingReportText(row, branchName, cashierName, ymd) {
   const fmt = (n) => Number(n).toLocaleString();
 
   return [
-    '*SUPACLEAN*',
+    `*${businessName}*`,
     '*Daily Closing Report*',
     '━━━━━━━━━━━━━━━━',
     `📅 ${dateFormatted}`,
@@ -107,6 +108,8 @@ async function getDirectorWhatsAppNumber() {
 }
 
 async function deliverDirectorDailyReport(row, branchName, cashierName, ymd) {
+  const { getBrandSettings } = require('./brandSettings');
+  const brand = await getBrandSettings();
   const directorPhone = await getDirectorWhatsAppNumber();
   if (!directorPhone) {
     return {
@@ -117,7 +120,7 @@ async function deliverDirectorDailyReport(row, branchName, cashierName, ymd) {
     };
   }
 
-  const report = buildDailyClosingReportText(row, branchName, cashierName, ymd);
+  const report = buildDailyClosingReportText(row, branchName, cashierName, ymd, brand);
   const { sendWhatsApp, formatPhoneNumber } = require('./whatsapp');
 
   try {
