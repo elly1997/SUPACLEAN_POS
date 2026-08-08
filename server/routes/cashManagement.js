@@ -12,6 +12,16 @@ const {
 } = require('../utils/dailyClosingReport');
 const { notifyCashShort, notifyReconciledDay } = require('../utils/adminInbox');
 
+function requireAdminForForceRecalc(req, res, next) {
+  const force = req.body?.force === true || req.query?.force === '1' || req.query?.force === 'true';
+  if (!force) return next();
+  if (req.user?.role === 'admin') return next();
+  return res.status(403).json({
+    error: 'Only an admin can force-recalculate a reconciled day. Unreconcile first, or ask an admin.',
+    code: 'force_requires_admin',
+  });
+}
+
 // All cash-management routes require branch feature 'cash_management' (admin bypasses)
 router.use(authenticate, requireBranchFeature('cash_management'));
 
@@ -397,7 +407,7 @@ router.get('/daily/:date', requireBranchAccess(), requirePermission('canManageCa
 });
 
 // Recalculate daily closing from live data. Use body.force / query force=1 to update reconciled days (recomputes sales/closing; keeps reconciliation lock).
-router.post('/daily/recalculate/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+router.post('/daily/recalculate/:date', requireBranchAccess(), requirePermission('canManageCash'), requireAdminForForceRecalc, async (req, res) => {
   const { date } = req.params;
   const branchId = getEffectiveBranchId(req);
   if (branchId == null) {
@@ -834,7 +844,7 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
 
 // Reconcile daily cash (managers and admins only)
 // If no daily summary exists for the date, create it from calculated values first, then mark reconciled.
-router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canReconcile'), async (req, res) => {
   const { date } = req.params;
   const { reconciled_by } = req.body;
   const branchId = getEffectiveBranchId(req);
@@ -917,7 +927,7 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canMan
 /**
  * Send daily closing report to director WhatsApp for one branch/date (independent per branch).
  */
-router.post('/send-report/:date', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+router.post('/send-report/:date', requireBranchAccess(), requirePermission('canReconcile'), async (req, res) => {
   const { date } = req.params;
   const branchId = getEffectiveBranchId(req);
   if (branchId == null) {

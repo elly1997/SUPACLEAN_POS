@@ -2,8 +2,12 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
 const { authenticate, requireBranchAccess } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 const { sqlActiveTransactionsOnly } = require('../utils/orderVoidFilter');
+
+const ALLOWED_MANUAL_TX_TYPES = ['expense', 'adjustment', 'note'];
+const ALLOWED_PAYMENT_METHODS = ['cash', 'card', 'mobile_money', 'bank', 'bank_transfer', 'mpesa'];
 
 // Get all transactions
 router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
@@ -87,12 +91,23 @@ router.get('/daily-summary', authenticate, requireBranchAccess(), async (req, re
   }
 });
 
-// Add manual transaction (for expenses, etc.)
-router.post('/', authenticate, requireBranchAccess(), async (req, res) => {
+// Add manual non-payment transaction (payments must go through order/receive-payment APIs)
+router.post('/', authenticate, requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
   const { transaction_type, amount, payment_method, description, created_by } = req.body;
 
-  if (!transaction_type || !amount) {
+  if (!transaction_type || amount == null) {
     return res.status(400).json({ error: 'Transaction type and amount are required' });
+  }
+
+  if (!ALLOWED_MANUAL_TX_TYPES.includes(String(transaction_type))) {
+    return res.status(400).json({
+      error: `Manual transaction type not allowed. Use order payment APIs for payments. Allowed: ${ALLOWED_MANUAL_TX_TYPES.join(', ')}`,
+    });
+  }
+
+  const method = payment_method || 'cash';
+  if (!ALLOWED_PAYMENT_METHODS.includes(String(method))) {
+    return res.status(400).json({ error: 'Invalid payment method' });
   }
 
   const branchId = getEffectiveBranchId(req);
@@ -102,12 +117,12 @@ router.post('/', authenticate, requireBranchAccess(), async (req, res) => {
   try {
     const result = await db.run(
       'INSERT INTO transactions (transaction_type, amount, payment_method, description, created_by, branch_id) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
-      [transaction_type, amount, payment_method || 'cash', description || null, created_by || null, branchId]
+      [transaction_type, amount, method, description || null, created_by || req.user?.username || null, branchId]
     );
     res.json({ id: result.lastID, message: 'Transaction recorded successfully' });
   } catch (err) {
     console.error('Error creating transaction:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to record transaction' });
   }
 });
 

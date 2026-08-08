@@ -197,7 +197,7 @@ export const AuthProvider = ({ children }) => {
         isLoggingInRef.current = false;
         debugLog('✅ Login complete');
         
-        return { success: true };
+        return { success: true, mustChangePassword: !!userData.mustChangePassword };
       } else {
         console.error('❌ Login failed - no success flag');
         isLoggingInRef.current = false;
@@ -251,6 +251,7 @@ export const AuthProvider = ({ children }) => {
         canCreateOrders: true,
         canViewReports: true,
         canManageCash: true,
+        canReconcile: true,
         canManageCustomers: true,
         canManageExpenses: true,
         canViewDashboard: true,
@@ -266,6 +267,7 @@ export const AuthProvider = ({ children }) => {
         canCreateOrders: true,
         canViewReports: true,
         canManageCash: true,
+        canReconcile: true,
         canManageCustomers: true,
         canManageExpenses: true,
         canViewDashboard: true,
@@ -281,6 +283,7 @@ export const AuthProvider = ({ children }) => {
         canCreateOrders: true,
         canViewReports: false,
         canManageCash: true,
+        canReconcile: false,
         canManageCustomers: false,
         canManageExpenses: false,
         canViewDashboard: true,
@@ -296,6 +299,7 @@ export const AuthProvider = ({ children }) => {
         canCreateOrders: false,
         canViewReports: false,
         canManageCash: false,
+        canReconcile: false,
         canManageCustomers: false,
         canManageExpenses: false,
         canViewDashboard: true,
@@ -307,6 +311,16 @@ export const AuthProvider = ({ children }) => {
     return permissions[user.role]?.[permission] === true;
   };
 
+  const clearMustChangePassword = () => {
+    if (!user) return;
+    const next = { ...user, mustChangePassword: false };
+    setUser(next);
+    userRef.current = next;
+    try {
+      localStorage.setItem('sessionUser', JSON.stringify(next));
+    } catch (e) {}
+  };
+
   const value = {
     user,
     branch,
@@ -314,6 +328,7 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     verifySession,
+    clearMustChangePassword,
     isAuthenticated: !!user,
     isAdmin: user?.role === 'admin',
     isManager: user?.role === 'manager',

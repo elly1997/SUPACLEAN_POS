@@ -1,24 +1,29 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
+const { authenticate, requireRole } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/permissions');
+
+router.use(authenticate);
 
 // Get all services
 router.get('/', async (req, res) => {
   try {
     const { include_inactive } = req.query;
     let query = 'SELECT * FROM services';
-    let params = [];
-    
+    const params = [];
+
     if (include_inactive !== 'true') {
       query += ' WHERE is_active = $1';
       params.push(true);
     }
     query += ' ORDER BY name';
-    
+
     const rows = await db.all(query, params);
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Services list error:', err);
+    res.status(500).json({ error: 'Failed to load services' });
   }
 });
 
@@ -32,12 +37,13 @@ router.get('/:id', async (req, res) => {
     }
     res.json(row);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Services get error:', err);
+    res.status(500).json({ error: 'Failed to load service' });
   }
 });
 
-// Create new service
-router.post('/', async (req, res) => {
+// Create new service — admin only
+router.post('/', requireRole('admin'), requirePermission('canEditPrices'), async (req, res) => {
   const { name, description, base_price, price_per_item, price_per_kg } = req.body;
 
   if (!name || base_price === undefined) {
@@ -51,26 +57,36 @@ router.post('/', async (req, res) => {
     );
     res.json({ id: result.lastID, name, description, base_price, price_per_item, price_per_kg });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Services create error:', err);
+    res.status(500).json({ error: 'Failed to create service' });
   }
 });
 
-// Update service
-router.put('/:id', async (req, res) => {
+// Update service — admin only
+router.put('/:id', requireRole('admin'), requirePermission('canEditPrices'), async (req, res) => {
   const { id } = req.params;
   const { name, description, base_price, price_per_item, price_per_kg, is_active } = req.body;
 
   try {
     const result = await db.run(
       'UPDATE services SET name = $1, description = $2, base_price = $3, price_per_item = $4, price_per_kg = $5, is_active = $6 WHERE id = $7',
-      [name, description, base_price, price_per_item || 0, price_per_kg || 0, is_active !== undefined ? is_active : true, id]
+      [
+        name,
+        description,
+        base_price,
+        price_per_item || 0,
+        price_per_kg || 0,
+        is_active !== undefined ? is_active : true,
+        id,
+      ]
     );
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Service not found' });
     }
     res.json({ message: 'Service updated successfully' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Services update error:', err);
+    res.status(500).json({ error: 'Failed to update service' });
   }
 });
 

@@ -1,30 +1,25 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
+const { authenticate, requireRole } = require('../middleware/auth');
 
-const MANAGER_WHATSAPP_DEFAULT = '+255752757635';
+router.use(authenticate);
 
-// Get all settings
+// Get all settings (authenticated staff)
 router.get('/', async (req, res) => {
   try {
     const rows = await db.all('SELECT * FROM settings ORDER BY setting_key', []);
     const settingsObj = {};
-    rows.forEach(row => {
+    rows.forEach((row) => {
       settingsObj[row.setting_key] = {
         value: row.setting_value,
-        description: row.description
+        description: row.description,
       };
     });
-    // Ensure director WhatsApp number exists (Daily Closing Report on reconcile)
-    if (!settingsObj.manager_whatsapp_number) {
-      settingsObj.manager_whatsapp_number = {
-        value: MANAGER_WHATSAPP_DEFAULT,
-        description: 'Director WhatsApp number – receives Daily Closing Report when a branch reconciles the day'
-      };
-    }
     res.json(settingsObj);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Settings list error:', err);
+    res.status(500).json({ error: 'Failed to load settings' });
   }
 });
 
@@ -38,12 +33,13 @@ router.get('/:key', async (req, res) => {
     }
     res.json(row);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Settings get error:', err);
+    res.status(500).json({ error: 'Failed to load setting' });
   }
 });
 
-// Update setting (creates row if key is allowed and missing, e.g. manager_whatsapp_number)
-router.put('/:key', async (req, res) => {
+// Update setting — admin only
+router.put('/:key', requireRole('admin'), async (req, res) => {
   const { key } = req.params;
   const { value, description } = req.body;
   const allowedUpsertKeys = ['manager_whatsapp_number'];
@@ -63,7 +59,8 @@ router.put('/:key', async (req, res) => {
     }
     res.json({ message: 'Setting updated successfully' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Settings update error:', err);
+    res.status(500).json({ error: 'Failed to update setting' });
   }
 });
 

@@ -33,6 +33,7 @@ const CashManagement = () => {
   const { showToast, ToastContainer } = useToast();
   const { user, selectedBranchId, isAdmin, hasPermission } = useAuth();
   const canManageExpenses = hasPermission?.('canManageExpenses') ?? false;
+  const canReconcile = hasPermission?.('canReconcile') ?? false;
   const [cashWorkspace, setCashWorkspace] = useState('close');
   const [closeStep, setCloseStep] = useState(1);
   const [todayExpenses, setTodayExpenses] = useState([]);
@@ -398,6 +399,10 @@ const CashManagement = () => {
   };
 
   const handleSendToDirector = async (dateToSend = today) => {
+    if (!canReconcile) {
+      showToast('Only a branch manager or admin can send the director report.', 'error');
+      return;
+    }
     if (summary?.all_branches) {
       showToast('Select a specific branch (e.g. UH or MN) to send that branch’s closing report.', 'error');
       return;
@@ -417,6 +422,10 @@ const CashManagement = () => {
   };
 
   const handleReconcile = async () => {
+    if (!canReconcile) {
+      showToast('Only a branch manager or admin can reconcile the day.', 'error');
+      return;
+    }
     if (summary?.all_branches) {
       showToast('Select a specific branch in the header before reconciling.', 'error');
       return;
@@ -449,6 +458,10 @@ const CashManagement = () => {
   };
 
   const handleReconcileUnreconciledDate = async (dateToReconcile) => {
+    if (!canReconcile) {
+      showToast('Only a branch manager or admin can reconcile.', 'error');
+      return;
+    }
     if (!dateToReconcile) return;
     if (summary?.all_branches) {
       showToast('Select a specific branch to reconcile past dates.', 'error');
@@ -543,9 +556,11 @@ const CashManagement = () => {
     setSalesDetailModal(kind);
     if (summary?.is_reconciled) {
       try {
-        await recalculateDailyCashForDate(today, { force: true });
-        const summaryRes = await getTodayCashSummary();
-        if (summaryRes?.data) setSummary(summaryRes.data);
+        if (isAdmin) {
+          await recalculateDailyCashForDate(today, { force: true });
+          const summaryRes = await getTodayCashSummary();
+          if (summaryRes?.data) setSummary(summaryRes.data);
+        }
       } catch (err) {
         showToast(err.response?.data?.error || err.message || 'Could not refresh summary', 'error');
       }
@@ -556,11 +571,13 @@ const CashManagement = () => {
   const handleRecalculateFromSalesDetailModal = async () => {
     setSalesDetailRecalculating(true);
     try {
-      await recalculateDailyCashForDate(today, { force: !!summary?.is_reconciled });
+      await recalculateDailyCashForDate(today, { force: !!(summary?.is_reconciled && isAdmin) });
       showToast(
-        summary?.is_reconciled
+        summary?.is_reconciled && isAdmin
           ? 'Stored summary updated from live data (day stays reconciled).'
-          : 'Daily totals refreshed from live data.',
+          : summary?.is_reconciled
+            ? 'Day is reconciled. Ask an admin to force-refresh or unreconcile first.'
+            : 'Daily totals refreshed from live data.',
         'success'
       );
       await loadData();
@@ -820,12 +837,12 @@ const CashManagement = () => {
           <button onClick={loadData} className="dk-btn dk-btn--secondary dk-btn--md" type="button">
             🔄 Refresh
           </button>
-          {!summary.all_branches && !summaryReconciled && (
+          {!summary.all_branches && !summaryReconciled && canReconcile && (
             <button onClick={handleReconcile} className="dk-btn dk-btn--success dk-btn--md" type="button">
               ✅ Reconcile & send to director
             </button>
           )}
-          {!summary.all_branches && summaryReconciled && (
+          {!summary.all_branches && summaryReconciled && canReconcile && (
             <button
               onClick={() => handleSendToDirector(today)}
               className="dk-btn dk-btn--primary dk-btn--md"
@@ -1262,6 +1279,7 @@ const CashManagement = () => {
         <div className="reconciled-badge">
           <span>✅ This day has been reconciled</span>
           <small>Reconciled by: {summary.reconciled_by || 'Cashier'}</small>
+          {canReconcile && (
           <button
             type="button"
             className="btn-secondary btn-small"
@@ -1270,6 +1288,7 @@ const CashManagement = () => {
           >
             {sendingReportDate === today ? 'Sending…' : '📤 Send report to director'}
           </button>
+          )}
         </div>
       ))}
 
@@ -1389,6 +1408,7 @@ const CashManagement = () => {
                         >
                           {chainRefreshingDate === rowDateKey(row) ? 'Recalc…' : 'Recalculate chain'}
                         </button>
+                        {canReconcile && (
                         <button
                           type="button"
                           className="btn-small btn-success"
@@ -1398,6 +1418,7 @@ const CashManagement = () => {
                         >
                           {reconcilingDate === rowDateKey(row) ? 'Reconciling…' : 'Reconcile'}
                         </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1499,7 +1520,7 @@ const CashManagement = () => {
                                 {chainRefreshingDate === dk ? '…' : 'Recalc chain'}
                               </button>
                             )}
-                            {!summary.all_branches && !reconciled && (
+                            {!summary.all_branches && !reconciled && canReconcile && (
                               <button
                                 type="button"
                                 className="btn-small btn-success"
@@ -1509,7 +1530,7 @@ const CashManagement = () => {
                                 {reconcilingDate === dk ? '…' : 'Reconcile'}
                               </button>
                             )}
-                            {!summary.all_branches && reconciled && (
+                            {!summary.all_branches && reconciled && canReconcile && (
                               <button
                                 type="button"
                                 className="btn-small btn-primary"

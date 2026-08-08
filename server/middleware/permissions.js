@@ -15,6 +15,7 @@ const ROLE_PERMISSIONS = {
     canCreateOrders: true,         // Can create new orders
     canViewReports: true,          // Can view all reports
     canManageCash: true,           // Can manage daily cash and reconciliation
+    canReconcile: true,            // Can lock a day and send director closing report
     canManageCustomers: true,      // Can add/edit/delete customers
     canManageExpenses: true,       // Can manage expenses
     canViewDashboard: true,        // Can view dashboard
@@ -30,6 +31,7 @@ const ROLE_PERMISSIONS = {
     canCreateOrders: true,         // Can create new orders
     canViewReports: true,          // Can view reports for their branch
     canManageCash: true,           // Can manage daily cash for their branch
+    canReconcile: true,            // Branch managers close the day
     canManageCustomers: true,      // Can add/edit customers
     canManageExpenses: true,       // Can manage expenses for their branch
     canViewDashboard: true,        // Can view dashboard
@@ -44,7 +46,8 @@ const ROLE_PERMISSIONS = {
     canManageOrders: false,        // Cannot edit/update order status
     canCreateOrders: true,         // Can create new orders
     canViewReports: false,         // Limited reports (only their own transactions)
-    canManageCash: true,           // Can record payments for orders
+    canManageCash: true,           // Can record payments / opening / deposits
+    canReconcile: false,           // Day lock + director report is manager+
     canManageCustomers: false,     // Cannot add/edit customers (only view/search)
     canManageExpenses: false,      // Cannot manage expenses
     canViewDashboard: true,        // Can view dashboard
@@ -60,6 +63,7 @@ const ROLE_PERMISSIONS = {
     canCreateOrders: false,        // Cannot create orders
     canViewReports: false,         // Cannot view reports
     canManageCash: false,          // Cannot manage cash
+    canReconcile: false,
     canManageCustomers: false,     // Cannot manage customers
     canManageExpenses: false,      // Cannot manage expenses
     canViewDashboard: true,        // Can view dashboard (to see pending orders)

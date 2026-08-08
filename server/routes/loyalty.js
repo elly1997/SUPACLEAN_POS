@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
+const { authenticate } = require('../middleware/auth');
+const { requirePermission, requireAnyPermission } = require('../middleware/permissions');
+
+router.use(authenticate);
 
 // Loyalty Configuration
 const LOYALTY_CONFIG = {
@@ -87,8 +91,8 @@ router.get('/customer/:customerId/transactions', async (req, res) => {
   }
 });
 
-// Award points on order collection
-router.post('/earn', async (req, res) => {
+// Award points (prefer server-side awardPointsOnCollection from orders; this route is staff-gated)
+router.post('/earn', requireAnyPermission('canManageOrders', 'canManageCash'), async (req, res) => {
   const { customerId, orderId, orderAmount } = req.body;
 
   if (!customerId || !orderAmount) {
@@ -156,7 +160,7 @@ router.post('/earn', async (req, res) => {
 });
 
 // Redeem points for free wash (100 points = 10,000 TSh discount)
-router.post('/redeem', async (req, res) => {
+router.post('/redeem', requireAnyPermission('canManageOrders', 'canManageCash'), async (req, res) => {
   const { customerId, points, orderId, rewardId } = req.body;
 
   if (!customerId || !points || points <= 0) {

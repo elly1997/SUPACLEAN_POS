@@ -2,12 +2,17 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const compression = require('compression');
+const helmet = require('helmet');
 const path = require('path');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const isProduction = process.env.NODE_ENV === 'production';
 
+if (isProduction || process.env.TRUST_PROXY === '1') {
+  app.set('trust proxy', 1);
+}
 function normalizeOrigin(value) {
   return String(value || '').trim().replace(/\/+$/, '');
 }
@@ -28,13 +33,17 @@ function buildAllowedOrigins() {
 
 const allowedOrigins = buildAllowedOrigins();
 
-// Compression middleware (should be early in the stack)
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
 app.use(compression());
 
-// Middleware
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow non-browser tools (no Origin header) and explicitly configured origins.
     if (!origin) return callback(null, true);
     const normalized = normalizeOrigin(origin);
     if (allowedOrigins.includes(normalized)) return callback(null, true);
@@ -42,31 +51,26 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(bodyParser.json({ limit: '10mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+app.use(bodyParser.json({ limit: '2mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '2mb' }));
 
-// Set timeout for requests (30 seconds)
 app.use((req, res, next) => {
   req.setTimeout(30000);
   res.setTimeout(30000);
   next();
 });
 
-// Log all requests for debugging (only in development)
-if (process.env.NODE_ENV !== 'production') {
+if (!isProduction) {
   app.use((req, res, next) => {
     console.log(`${req.method} ${req.path}`);
     next();
   });
 }
 
-// Initialize database: db.js uses PostgreSQL when DATABASE_URL is set (Render/Supabase), else SQLite (local)
 require('./database/db');
-// Ensure bank_accounts table exists in PostgreSQL (no-op for SQLite)
 require('./database/ensureBankingSchema');
 require('./database/ensureNotificationsDedupeKey');
 require('./database/ensureUsersAuthSchema');
-// Ensure payroll and accounting control tables exist in PostgreSQL
 require('./database/ensurePayrollSchema');
 require('./database/ensureExpenseCategoriesSchema');
 require('./database/ensureCleaningSchema');
@@ -76,7 +80,6 @@ require('./database/ensureAdminInboxSchema');
 require('./database/ensurePerformanceIndexes');
 require('./database/ensureLongevitySchema');
 
-// Routes - with error handling
 try {
   app.use('/api/auth', require('./routes/auth'));
   app.use('/api/branches', require('./routes/branches'));
@@ -112,7 +115,6 @@ try {
   process.exit(1);
 }
 
-// Health check (includes DB connectivity for monitoring / uptime probes)
 app.get('/api/health', async (req, res) => {
   const started = Date.now();
   try {
@@ -125,17 +127,19 @@ app.get('/api/health', async (req, res) => {
       latency_ms: Date.now() - started,
     });
   } catch (err) {
+    console.error('Health check DB error:', err.message);
     res.status(503).json({
       status: 'DEGRADED',
       message: 'API is up but database is unreachable',
       database: 'unreachable',
-      error: err.message,
+      ...(isProduction ? {} : { error: err.message }),
     });
   }
 });
 
-// SMS config status (no secrets) – helps troubleshoot why SMS might not send
-app.get('/api/sms-status', (req, res) => {
+const { authenticate, requireRole } = require('./middleware/auth');
+
+app.get('/api/sms-status', authenticate, requireRole('admin'), (req, res) => {
   const provider = (process.env.SMS_PROVIDER || 'africastalking').toLowerCase();
   const hasApiKey = !!(process.env.SMS_API_KEY || (provider === 'twilio' && process.env.TWILIO_AUTH_TOKEN));
   const hasUsername = !!(provider !== 'africastalking' || process.env.SMS_USERNAME);
@@ -145,16 +149,15 @@ app.get('/api/sms-status', (req, res) => {
   if (provider === 'africastalking' && !hasUsername) hints.push('Set SMS_USERNAME in .env (e.g. "sandbox" or your app username).');
   if (configured && provider === 'africastalking') {
     hints.push('If SMS still does not send: check Africa\'s Talking account has credit; sender ID may need to be approved for Tanzania.');
-    hints.push('Check server logs when you trigger an SMS (e.g. mark order Ready) for the exact API error.');
   }
   res.json({ configured, provider, hasApiKey, hasUsername, hints });
 });
 
-// Serve uploaded files (item photos, etc.)
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+app.use('/uploads', authenticate, express.static(path.join(__dirname, '../uploads'), {
+  fallthrough: false,
+}));
 
-// Serve static files in production
-if (process.env.NODE_ENV === 'production') {
+if (isProduction) {
   const buildDir = path.join(__dirname, '../client/build');
   const fs = require('fs');
   if (!fs.existsSync(path.join(buildDir, 'index.html'))) {
@@ -162,9 +165,7 @@ if (process.env.NODE_ENV === 'production') {
     console.error('   Expected: client/build/index.html');
   }
   app.use(express.static(buildDir));
-  // SPA fallback: serve index.html for all non-API routes. Use no-cache so after a deploy
-  // clients get the new bundle instead of 304 cached old JS (which can cause redirect/nav bugs).
-  app.get('*', (req, res, next) => {
+  app.get('*', (req, res) => {
     const indexPath = path.join(buildDir, 'index.html');
     if (!fs.existsSync(indexPath)) {
       return res.status(503).json({
@@ -179,22 +180,20 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-// Error handling middleware (must be after all routes)
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
-  res.status(err.status || 500).json({ 
-    error: err.message || 'Internal server error',
-    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
+  const status = err.status || 500;
+  res.status(status).json({
+    error: isProduction ? 'Internal server error' : (err.message || 'Internal server error'),
+    ...(!isProduction && { stack: err.stack }),
   });
 });
 
-// Start server
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 SUPACLEAN POS Server running on port ${PORT}`);
   console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
-// Handle server errors
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`❌ Port ${PORT} is already in use. Please kill the process or use a different port.`);
@@ -206,7 +205,6 @@ server.on('error', (err) => {
   }
 });
 
-// Graceful shutdown handlers
 function gracefulShutdown(signal) {
   console.log(`\n${signal} signal received: closing HTTP server`);
   server.close(() => {
@@ -222,8 +220,7 @@ function gracefulShutdown(signal) {
       process.exit(0);
     }
   });
-  
-  // Force close after 10 seconds
+
   setTimeout(() => {
     console.error('Forcing shutdown after timeout');
     process.exit(1);
@@ -233,13 +230,11 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
   gracefulShutdown('uncaughtException');
 });
 
-// Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
   gracefulShutdown('unhandledRejection');

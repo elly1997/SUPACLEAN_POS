@@ -960,6 +960,8 @@ export const getLoyaltyTiers = () => api.get('/loyalty/tiers');
 
 // Health check (shorter timeout so login page detects unreachable server quickly)
 export const checkServerHealth = () => api.get('/health', { timeout: 5000 });
+export const changePassword = (current_password, new_password) =>
+  api.post('/auth/change-password', { current_password, new_password });
 
 // Branches
 // Branches (offline-first)
