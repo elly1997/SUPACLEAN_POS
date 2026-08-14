@@ -261,8 +261,8 @@ export default function AdminNotificationCenter() {
                       )}
                       <span className="admin-inbox__when">{formatWhen(item.created_at)}</span>
                     </div>
-                    <h3>{item.title}</h3>
-                    {item.body && <p>{item.body}</p>}
+                    <h3 className="admin-inbox__title">{item.title}</h3>
+                    {item.body && <p className="admin-inbox__body">{item.body}</p>}
                     <div className="admin-inbox__meta">
                       {item.requested_by && <span>From {item.requested_by}</span>}
                       {amount != null && <span>{amount} TZS</span>}
