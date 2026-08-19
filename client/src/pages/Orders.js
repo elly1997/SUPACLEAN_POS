@@ -8,7 +8,7 @@ import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import ReceiptDetailPanel from '../components/ReceiptDetailPanel';
-import { exportToPDF, exportToExcel, exportOrdersDetailedExcel } from '../utils/exportUtils';
+import { exportToPDF, exportToExcel, exportOrdersPackagingExcel } from '../utils/exportUtils';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import { formatCustomerReceiptId, formatReceiptForDisplay, formatBranchReceiptLine } from '../utils/receiptId';
 import { isMissingCustomerPhone, formatCustomerPhoneDisplay } from '../utils/customerPhone';
@@ -1167,6 +1167,64 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
     return 'Unpaid';
   };
 
+  const buildPackagingExportRows = (receiptGroups) => {
+    return receiptGroups.map((g) => {
+      const items = g.items || [];
+      const lineCount = items.length;
+      const balance = roundMoney((g.total_amount || 0) - (g.paid_amount || 0));
+      const paid = roundMoney(g.paid_amount || 0);
+      const total = roundMoney(g.total_amount || 0);
+
+      const itemLines = items.map((item) => {
+        const name = item.garment_type || item.service_name || 'Item';
+        const qty = Number(item.quantity) || 1;
+        let line = `${name} x${qty}`;
+        if (item.color) line += ` (${item.color})`;
+        return line;
+      });
+
+      const itemsCell = [
+        `${lineCount} ${lineCount === 1 ? 'item' : 'items'}`,
+        ...itemLines,
+      ].join('\n');
+
+      const paymentStatusLabel = g.payment_status === 'not_paid'
+        ? 'Not Paid'
+        : g.payment_status === 'advance'
+          ? 'Advance'
+          : 'Paid Full';
+
+      const paymentCell = [
+        `Paid: TSh ${paid.toLocaleString()}`,
+        balance > 0 ? `Balance: TSh ${balance.toLocaleString()}` : 'Paid Full',
+        paymentStatusLabel,
+      ].join('\n');
+
+      const estCollection = g.estimated_collection_date
+        ? new Date(g.estimated_collection_date).toLocaleString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+        : 'Not set';
+
+      return {
+        branch_name: g.branch_name || g.branch_code || '',
+        receipt_no: formatReceiptForDisplay(g.receipt_number, items, g.branch_code),
+        customer: [g.customer_name || '', formatCustomerPhoneDisplay(g.customer_phone)]
+          .filter(Boolean)
+          .join('\n'),
+        items: itemsCell,
+        total_amount: `TSh ${total.toLocaleString()}`,
+        payment: paymentCell,
+        order_date: g.order_date ? new Date(g.order_date).toLocaleDateString() : '',
+        est_collection: estCollection,
+      };
+    });
+  };
+
   const buildOrderExportRows = (ordersList) => {
     const grouped = groupOrdersByReceipt(ordersList);
     return grouped.map(g => {
@@ -1222,9 +1280,9 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
         showToast(`Exported ${rows.length} receipt(s) as Excel`, 'success');
       } else if (format === 'excel-detail') {
         const groups = groupOrdersByReceipt(data);
-        await exportOrdersDetailedExcel(groups, exportBranch, title);
-        const itemCount = groups.reduce((s, g) => s + (g.items?.length || 0), 0);
-        showToast(`Exported ${groups.length} receipt(s) / ${itemCount} item(s) — Items Detail Excel ready`, 'success');
+        const packagingRows = buildPackagingExportRows(groups);
+        await exportOrdersPackagingExcel(packagingRows, exportBranch, title);
+        showToast(`Exported ${packagingRows.length} receipt(s) for packaging managers`, 'success');
       }
       setShowExportPopup(false);
     } catch (error) {
@@ -1293,9 +1351,9 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
         showToast(`Exported ${rows.length} uncollected receipt(s) as Excel`, 'success');
       } else if (format === 'excel-detail') {
         const groups = groupOrdersByReceipt(data);
-        await exportOrdersDetailedExcel(groups, exportBranch, title);
-        const itemCount = groups.reduce((s, g) => s + (g.items?.length || 0), 0);
-        showToast(`Exported ${groups.length} receipt(s) / ${itemCount} item(s) — Items Detail Excel ready`, 'success');
+        const packagingRows = buildPackagingExportRows(groups);
+        await exportOrdersPackagingExcel(packagingRows, exportBranch, title);
+        showToast(`Exported ${packagingRows.length} receipt(s) for packaging managers`, 'success');
       }
       setShowExportPopup(false);
     } catch (error) {
@@ -1331,9 +1389,9 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                   style={{ background: '#0f5132', minWidth: 130 }}
                   onClick={() => handleExportOrders('excel-detail')}
                   disabled={exporting}
-                  title="Two-sheet Excel: one row per item (service, color, qty, instructions) + receipt summary. Designed for packaging managers."
+                  title="Excel matching the Orders table: receipt, customer, full item list with qty and color, payment, and collection date. For packaging managers."
                 >
-                  {exporting ? 'Exporting…' : 'Excel — Items Detail'}
+                  {exporting ? 'Exporting…' : 'Excel — Packaging'}
                 </button>
               </div>
             </div>
@@ -1347,9 +1405,9 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                   style={{ background: '#0f5132', minWidth: 130 }}
                   onClick={() => handleExportUncollectedStock('excel-detail')}
                   disabled={exportingUncollected}
-                  title="Two-sheet Excel: one row per item with full description. For packaging managers."
+                  title="Excel matching the Orders table for overdue uncollected stock. For packaging managers."
                 >
-                  {exportingUncollected ? 'Exporting…' : 'Excel — Items Detail'}
+                  {exportingUncollected ? 'Exporting…' : 'Excel — Packaging'}
                 </button>
               </div>
             </div>
