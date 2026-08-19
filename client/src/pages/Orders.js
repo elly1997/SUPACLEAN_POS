@@ -8,7 +8,7 @@ import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import ReceiptDetailPanel from '../components/ReceiptDetailPanel';
-import { exportToPDF, exportToExcel } from '../utils/exportUtils';
+import { exportToPDF, exportToExcel, exportOrdersDetailedExcel } from '../utils/exportUtils';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import { formatCustomerReceiptId, formatReceiptForDisplay, formatBranchReceiptLine } from '../utils/receiptId';
 import { isMissingCustomerPhone, formatCustomerPhoneDisplay } from '../utils/customerPhone';
@@ -1210,12 +1210,22 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
         showToast('No orders to export', 'info');
         return;
       }
-      const rows = buildOrderExportRows(data);
       const title = `Orders_${filter}_${new Date().toISOString().slice(0, 10)}`;
-      const exportBranch = { branchName: branch?.name || rows[0]?.branch_name, branchId: branch?.id ?? selectedBranchId ?? rows[0]?.branch_id };
-      if (format === 'pdf') await exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
-      else await exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
-      showToast(`Exported ${rows.length} receipt(s) as ${format.toUpperCase()}`, 'success');
+      const exportBranch = { branchName: branch?.name, branchId: branch?.id ?? selectedBranchId };
+      if (format === 'pdf') {
+        const rows = buildOrderExportRows(data);
+        await exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+        showToast(`Exported ${rows.length} receipt(s) as PDF`, 'success');
+      } else if (format === 'excel-summary') {
+        const rows = buildOrderExportRows(data);
+        await exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+        showToast(`Exported ${rows.length} receipt(s) as Excel`, 'success');
+      } else if (format === 'excel-detail') {
+        const groups = groupOrdersByReceipt(data);
+        await exportOrdersDetailedExcel(groups, exportBranch, title);
+        const itemCount = groups.reduce((s, g) => s + (g.items?.length || 0), 0);
+        showToast(`Exported ${groups.length} receipt(s) / ${itemCount} item(s) — Items Detail Excel ready`, 'success');
+      }
       setShowExportPopup(false);
     } catch (error) {
       showToast('Export failed: ' + (error.response?.data?.error || error.message), 'error');
@@ -1271,12 +1281,22 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
         showToast('No uncollected (overdue) stock to export', 'info');
         return;
       }
-      const rows = buildOrderExportRows(data);
       const title = 'Uncollected_Stock_' + new Date().toISOString().slice(0, 10);
-      const exportBranch = { branchName: branch?.name || rows[0]?.branch_name, branchId: branch?.id ?? selectedBranchId ?? rows[0]?.branch_id };
-      if (format === 'pdf') await exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
-      else await exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
-      showToast(`Exported ${rows.length} uncollected receipt(s) as ${format.toUpperCase()}`, 'success');
+      const exportBranch = { branchName: branch?.name, branchId: branch?.id ?? selectedBranchId };
+      if (format === 'pdf') {
+        const rows = buildOrderExportRows(data);
+        await exportToPDF(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+        showToast(`Exported ${rows.length} uncollected receipt(s) as PDF`, 'success');
+      } else if (format === 'excel-summary') {
+        const rows = buildOrderExportRows(data);
+        await exportToExcel(title, ORDERS_EXPORT_COLUMNS, rows, exportBranch);
+        showToast(`Exported ${rows.length} uncollected receipt(s) as Excel`, 'success');
+      } else if (format === 'excel-detail') {
+        const groups = groupOrdersByReceipt(data);
+        await exportOrdersDetailedExcel(groups, exportBranch, title);
+        const itemCount = groups.reduce((s, g) => s + (g.items?.length || 0), 0);
+        showToast(`Exported ${groups.length} receipt(s) / ${itemCount} item(s) — Items Detail Excel ready`, 'success');
+      }
       setShowExportPopup(false);
     } catch (error) {
       showToast('Export failed: ' + (error.response?.data?.error || error.message), 'error');
@@ -1302,17 +1322,35 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
               <button type="button" className="export-popup-close" onClick={() => setShowExportPopup(false)} aria-label="Close">×</button>
             </div>
             <div className="export-popup-section">
-              <p className="export-popup-label">Current orders (this tab & filters)</p>
+              <p className="export-popup-label">Current orders (this tab &amp; filters)</p>
               <div className="export-popup-actions">
                 <button className="btn-primary" onClick={() => handleExportOrders('pdf')} disabled={exporting}>PDF</button>
-                <button className="btn-primary" onClick={() => handleExportOrders('excel')} disabled={exporting}>Excel</button>
+                <button className="btn-primary" onClick={() => handleExportOrders('excel-summary')} disabled={exporting}>Excel</button>
+                <button
+                  className="btn-primary"
+                  style={{ background: '#0f5132', minWidth: 130 }}
+                  onClick={() => handleExportOrders('excel-detail')}
+                  disabled={exporting}
+                  title="Two-sheet Excel: one row per item (service, color, qty, instructions) + receipt summary. Designed for packaging managers."
+                >
+                  {exporting ? 'Exporting…' : 'Excel — Items Detail'}
+                </button>
               </div>
             </div>
             <div className="export-popup-section">
               <p className="export-popup-label">Uncollected stock (overdue, not collected)</p>
               <div className="export-popup-actions">
                 <button className="btn-primary" onClick={() => handleExportUncollectedStock('pdf')} disabled={exportingUncollected}>PDF</button>
-                <button className="btn-primary" onClick={() => handleExportUncollectedStock('excel')} disabled={exportingUncollected}>Excel</button>
+                <button className="btn-primary" onClick={() => handleExportUncollectedStock('excel-summary')} disabled={exportingUncollected}>Excel</button>
+                <button
+                  className="btn-primary"
+                  style={{ background: '#0f5132', minWidth: 130 }}
+                  onClick={() => handleExportUncollectedStock('excel-detail')}
+                  disabled={exportingUncollected}
+                  title="Two-sheet Excel: one row per item with full description. For packaging managers."
+                >
+                  {exportingUncollected ? 'Exporting…' : 'Excel — Items Detail'}
+                </button>
               </div>
             </div>
           </div>
