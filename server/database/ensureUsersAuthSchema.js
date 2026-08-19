@@ -15,6 +15,10 @@ async function ensure() {
       []
     );
     await db.run(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+      []
+    );
+    await db.run(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized
        ON users (lower(trim(email)))
        WHERE email IS NOT NULL AND length(trim(email)) > 0`,

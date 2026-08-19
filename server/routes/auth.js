@@ -161,6 +161,12 @@ router.post('/change-password', authenticate, async (req, res) => {
     res.json({ success: true, message: 'Password updated successfully' });
   } catch (err) {
     console.error('Change password error:', err);
+    const msg = String(err?.message || '');
+    if (/updated_at|column .* does not exist/i.test(msg)) {
+      return res.status(500).json({
+        error: 'Password update failed due to a database schema issue. Please redeploy the server or contact support.',
+      });
+    }
     res.status(500).json({ error: 'Failed to update password' });
   }
 });

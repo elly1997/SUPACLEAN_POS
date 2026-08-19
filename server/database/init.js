@@ -500,6 +500,16 @@ function migrateDatabase() {
               if (!alterErr) console.log('✅ Added email column to users (SQLite)');
             });
           }
+          if (!names.includes('must_change_password')) {
+            db.run('ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0', (alterErr) => {
+              if (!alterErr) console.log('✅ Added must_change_password column to users (SQLite)');
+            });
+          }
+          if (!names.includes('updated_at')) {
+            db.run('ALTER TABLE users ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP', (alterErr) => {
+              if (!alterErr) console.log('✅ Added updated_at column to users (SQLite)');
+            });
+          }
         }
       });
 
