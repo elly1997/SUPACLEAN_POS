@@ -126,7 +126,9 @@ async function voidReceiptByNumber(receiptNumber, options = {}) {
     voidedBy = 'User',
     acknowledgeReconciledDay = false,
     branchFilterClause = '',
-    branchFilterParams = []
+    branchFilterParams = [],
+    // When true, skip the synchronous chain-refresh so the caller can run it in the background.
+    _skipChainRefresh = false,
   } = options;
 
   const allOrders = await db.all(
@@ -234,9 +236,23 @@ async function voidReceiptByNumber(receiptNumber, options = {}) {
     notes: voidReason
   });
 
-  const closingRefresh = branchId != null
-    ? await refreshDailyClosingForOrderDates(branchId, ...affectedDates)
-    : { reconciledDaysForced: [] };
+  let closingRefresh = { reconciledDaysForced: [] };
+  if (!_skipChainRefresh && branchId != null) {
+    closingRefresh = await refreshDailyClosingForOrderDates(branchId, ...affectedDates);
+  } else if (_skipChainRefresh && branchId != null) {
+    // Force-refresh just the directly affected reconciled days synchronously (fast, 1-2 queries each)
+    // then skip the full chain; the caller runs that in background.
+    for (const d of affectedDates) {
+      if (await isReconciledDay(d, branchId)) {
+        try {
+          await cashManagement.refreshDailySummaryForce(d, branchId);
+          closingRefresh.reconciledDaysForced.push(d);
+        } catch (err) {
+          console.error('refreshDailySummaryForce failed for', d, err.message);
+        }
+      }
+    }
+  }
 
   return {
     message: `Receipt voided successfully (${allOrders.length} item${allOrders.length === 1 ? '' : 's'})`,
@@ -244,7 +260,10 @@ async function voidReceiptByNumber(receiptNumber, options = {}) {
     items_voided: allOrders.length,
     transactions_voided: transactionsVoided,
     loyalty_points_reversed: loyaltyPointsReversed,
-    reconciled_days_refreshed: closingRefresh.reconciledDaysForced || []
+    reconciled_days_refreshed: closingRefresh.reconciledDaysForced || [],
+    // Private fields used by adminInbox for background refresh scheduling
+    _branchId: branchId,
+    _affectedDates: [...affectedDates],
   };
 }
 

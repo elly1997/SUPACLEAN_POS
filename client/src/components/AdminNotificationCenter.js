@@ -175,31 +175,26 @@ export default function AdminNotificationCenter() {
 
   const badge = Math.max(counts.pending_actions || 0, counts.unread || 0);
 
-  const handleApprove = async (item) => {
+  const handleApprove = async (item, acknowledgeReconciled = false) => {
     setBusyId(item.id);
     try {
-      await approveAdminInboxItem(item.id, {});
+      await approveAdminInboxItem(item.id, acknowledgeReconciled ? { acknowledge_reconciled_day: true } : {});
       await load();
     } catch (error) {
       const status = error.response?.status;
       const code = error.response?.data?.code;
       if (status === 409 && code === 'reconciled_day') {
-        if (
-          !window.confirm(
-            'This receipt touches a reconciled day. Approving will recalculate the locked daily summary. Continue?'
-          )
-        ) {
-          return;
-        }
-        try {
-          await approveAdminInboxItem(item.id, { acknowledge_reconciled_day: true });
-          await load();
-        } catch (err2) {
-          window.alert(err2.response?.data?.error || err2.message || 'Approve failed');
-        }
+        setBusyId(null);
+        const confirmed = window.confirm(
+          'This receipt touches a reconciled day.\n\nApproving will recalculate the locked daily summary and refresh any later pending days.\n\nContinue?'
+        );
+        if (!confirmed) return;
+        // Re-approve with acknowledgement
+        await handleApprove(item, true);
         return;
       }
-      window.alert(error.response?.data?.error || error.message || 'Approve failed');
+      const msg = error.response?.data?.error || error.message || 'Approve failed';
+      window.alert('Could not approve void request:\n\n' + msg);
     } finally {
       setBusyId(null);
     }

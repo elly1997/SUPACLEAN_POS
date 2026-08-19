@@ -338,15 +338,35 @@ async function approveVoidRequest(inboxId, {
   const receiptNumber = payload.receipt_number;
   const voidReason = payload.void_reason || 'Approved void request';
 
-  // Lazy require avoids circular dependency with cashManagement ↔ orderVoid ↔ adminInbox
-  const { voidReceiptByNumber } = require('./orderVoid');
+  const shouldAcknowledge = acknowledgeReconciledDay === true || !!payload.acknowledge_reconciled_day;
+
+  // Lazy require — avoids circular: orders.js→adminInbox→orderVoid→cashManagement
+  const { voidReceiptByNumber, refreshDailyClosingForOrderDates, normalizeDate } = require('./orderVoid');
+
+  // Collect affected dates WITHOUT running the expensive chain refresh yet
+  // so we can respond quickly and run the refresh in the background.
+  const voidReason2 = `[Approved] ${voidReason}`;
+  const voidedBy2 = reviewedBy || 'Admin';
+
   const result = await voidReceiptByNumber(receiptNumber, {
-    voidReason: `[Approved] ${voidReason}`,
-    voidedBy: reviewedBy || 'Admin',
-    acknowledgeReconciledDay: acknowledgeReconciledDay || !!payload.acknowledge_reconciled_day,
+    voidReason: voidReason2,
+    voidedBy: voidedBy2,
+    acknowledgeReconciledDay: shouldAcknowledge,
     branchFilterClause,
     branchFilterParams,
+    // Skip the chain refresh inside voidReceiptByNumber; we run it in the background below
+    _skipChainRefresh: true,
   });
+
+  // Store only a compact summary — avoid circular refs or large objects in JSON.stringify
+  const executionSummary = {
+    items_voided: result.items_voided,
+    transactions_voided: result.transactions_voided,
+    loyalty_points_reversed: result.loyalty_points_reversed,
+    reconciled_days_refreshed: result.reconciled_days_refreshed || [],
+    acknowledged_reconciled_day: shouldAcknowledge,
+    voided_at: new Date().toISOString(),
+  };
 
   await db.run(
     `UPDATE admin_inbox
@@ -356,21 +376,29 @@ async function approveVoidRequest(inboxId, {
          reviewed_by_user_id = ?,
          reviewed_at = CURRENT_TIMESTAMP,
          review_note = ?,
-         payload = COALESCE(payload, '{}'::jsonb) || ?::jsonb,
+         payload = payload || ?::jsonb,
          dedupe_key = NULL,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
     [
       reviewedBy,
       reviewedByUserId,
-      reviewNote,
-      JSON.stringify({
-        execution_result: result,
-        acknowledged_reconciled_day: !!acknowledgeReconciledDay,
-      }),
+      reviewNote || null,
+      JSON.stringify({ execution_result: executionSummary }),
       inboxId,
     ]
   );
+
+  // Run chain refresh in background so the HTTP response is not blocked
+  if (result._affectedDates && result._branchId != null) {
+    setImmediate(async () => {
+      try {
+        await refreshDailyClosingForOrderDates(result._branchId, ...result._affectedDates);
+      } catch (err) {
+        console.error('[adminInbox] background chain refresh failed:', err.message);
+      }
+    });
+  }
 
   return { result, item: await getInboxItem(inboxId) };
 }
