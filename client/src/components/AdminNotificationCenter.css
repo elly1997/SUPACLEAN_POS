@@ -180,6 +180,7 @@
 }
 
 .admin-inbox__item {
+  flex-shrink: 0;
   border: 1px solid var(--border-color, #e5eaf2);
   border-radius: 12px;
   background: var(--bg-primary, #f8fafc);
@@ -203,11 +204,18 @@
   text-align: left;
   border: 0;
   background: transparent;
-  padding: 10px 12px 8px;
+  padding: 12px 12px 10px;
   cursor: pointer;
   font-family: inherit;
+  font-weight: 400;
   color: var(--text-primary, #122033);
   overflow: visible;
+}
+
+.admin-inbox__item-main:focus-visible {
+  outline: 2px solid var(--primary-color, #007aff);
+  outline-offset: -2px;
+  border-radius: 12px;
 }
 
 .admin-inbox__item-top {
@@ -266,34 +274,72 @@
 }
 
 .admin-inbox__title {
-  margin: 0 0 4px;
-  font-size: 0.92rem;
+  margin: 0 0 6px;
+  font-size: 0.94rem;
   font-weight: 700;
-  line-height: 1.35;
+  line-height: 1.45;
   color: var(--text-primary, #122033);
   overflow: visible;
   word-break: break-word;
 }
 
-.admin-inbox__body {
+.admin-inbox__details {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(15, 39, 68, 0.04);
+  display: grid;
+  gap: 6px;
+}
+
+.admin-inbox__detail-row {
+  display: grid;
+  grid-template-columns: minmax(4.5rem, auto) 1fr;
+  gap: 8px;
+  align-items: start;
+  margin: 0;
+}
+
+.admin-inbox__detail-label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted, #64748b);
+  line-height: 1.45;
+}
+
+.admin-inbox__detail-value {
   margin: 0;
   font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-primary, #122033);
   line-height: 1.45;
+  word-break: break-word;
+}
+
+.admin-inbox__body {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  line-height: 1.5;
   color: var(--text-secondary, #475569);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .admin-inbox__meta {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 4px;
   font-size: 0.74rem;
   line-height: 1.35;
   color: var(--text-muted, #64748b);
+}
+
+.admin-inbox__reviewed {
+  color: var(--text-secondary, #475569);
 }
 
 .admin-inbox__status-pill {
@@ -355,8 +401,17 @@
 }
 
 [data-theme='dark'] .admin-inbox__header h2,
-[data-theme='dark'] .admin-inbox__title {
+[data-theme='dark'] .admin-inbox__title,
+[data-theme='dark'] .admin-inbox__detail-value {
   color: #f8fafc;
+}
+
+[data-theme='dark'] .admin-inbox__details {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme='dark'] .admin-inbox__detail-label {
+  color: #a1a1aa;
 }
 
 [data-theme='dark'] .admin-inbox__header p,

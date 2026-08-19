@@ -38,6 +38,75 @@ function formatWhen(iso) {
   }
 }
 
+function getInboxDetailLines(item) {
+  const payload = item.payload || {};
+  const lines = [];
+
+  if (item.type === 'void_receipt') {
+    if (payload.receipt_number) {
+      lines.push({ label: 'Receipt', value: String(payload.receipt_number).toUpperCase() });
+    }
+    if (payload.customer_name) {
+      lines.push({ label: 'Customer', value: payload.customer_name });
+    }
+    if (payload.void_reason) {
+      lines.push({ label: 'Reason', value: payload.void_reason });
+    }
+    const total = formatMoney(payload.total_amount);
+    const paid = formatMoney(payload.paid_amount);
+    if (total != null) {
+      lines.push({ label: 'Total', value: `${total} TZS` });
+    }
+    if (paid != null && paid !== total) {
+      lines.push({ label: 'Paid', value: `${paid} TZS` });
+    }
+    if (payload.item_count > 1) {
+      lines.push({ label: 'Items', value: String(payload.item_count) });
+    }
+  } else if (item.type === 'cash_short') {
+    if (payload.date) {
+      lines.push({ label: 'Date', value: payload.date });
+    }
+    const shortAmt = formatMoney(payload.opening_short ?? Math.abs(payload.opening_variance || 0));
+    if (shortAmt != null) {
+      lines.push({ label: 'Short by', value: `${shortAmt} TZS` });
+    }
+    const declared = formatMoney(payload.opening_cash_declared);
+    const expected = formatMoney(payload.expected_opening);
+    if (declared != null) {
+      lines.push({ label: 'Declared', value: `${declared} TZS` });
+    }
+    if (expected != null) {
+      lines.push({ label: 'Expected', value: `${expected} TZS` });
+    }
+  } else if (item.type === 'system' || item.type === 'ai_suggestion') {
+    if (payload.date) {
+      lines.push({ label: 'Date', value: payload.date });
+    }
+    const closing = formatMoney(payload.closing_balance);
+    if (closing != null) {
+      lines.push({ label: 'Closing', value: `${closing} TZS` });
+    }
+  }
+
+  if (item.requested_by) {
+    lines.push({ label: 'From', value: item.requested_by });
+  }
+
+  if (item.review_note) {
+    lines.push({ label: 'Note', value: item.review_note });
+  }
+
+  return lines;
+}
+
+function handleItemKeyDown(event, item, onOpen) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    onOpen(item);
+  }
+}
+
 export default function AdminNotificationCenter() {
   const { isAdmin, selectedBranchId } = useAuth();
   const navigate = useNavigate();
@@ -244,16 +313,22 @@ export default function AdminNotificationCenter() {
               </div>
             )}
             {items.map((item) => {
-              const payload = item.payload || {};
               const pending = item.action_status === 'pending';
               const typeLabel = TYPE_LABELS[item.type] || item.type;
-              const amount = formatMoney(payload.total_amount ?? payload.opening_short);
+              const detailLines = getInboxDetailLines(item);
+              const showBody = item.body && detailLines.length === 0;
               return (
                 <article
                   key={item.id}
                   className={`admin-inbox__item admin-inbox__item--${item.type}${item.status === 'unread' ? ' is-unread' : ''}${pending ? ' is-pending' : ''}`}
                 >
-                  <button type="button" className="admin-inbox__item-main" onClick={() => handleOpenItem(item)}>
+                  <div
+                    className="admin-inbox__item-main"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleOpenItem(item)}
+                    onKeyDown={(event) => handleItemKeyDown(event, item, handleOpenItem)}
+                  >
                     <div className="admin-inbox__item-top">
                       <span className={`admin-inbox__type admin-inbox__type--${item.type}`}>{typeLabel}</span>
                       {item.branch_name && (
@@ -261,16 +336,27 @@ export default function AdminNotificationCenter() {
                       )}
                       <span className="admin-inbox__when">{formatWhen(item.created_at)}</span>
                     </div>
-                    <h3 className="admin-inbox__title">{item.title}</h3>
-                    {item.body && <p className="admin-inbox__body">{item.body}</p>}
+                    <div className="admin-inbox__title">{item.title}</div>
+                    {detailLines.length > 0 && (
+                      <dl className="admin-inbox__details">
+                        {detailLines.map((line) => (
+                          <div key={`${item.id}-${line.label}`} className="admin-inbox__detail-row">
+                            <dt className="admin-inbox__detail-label">{line.label}</dt>
+                            <dd className="admin-inbox__detail-value">{line.value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    )}
+                    {showBody && <p className="admin-inbox__body">{item.body}</p>}
                     <div className="admin-inbox__meta">
-                      {item.requested_by && <span>From {item.requested_by}</span>}
-                      {amount != null && <span>{amount} TZS</span>}
                       {item.action_status && item.action_status !== 'pending' && (
                         <span className="admin-inbox__status-pill">{item.action_status}</span>
                       )}
+                      {item.reviewed_by && (
+                        <span className="admin-inbox__reviewed">Reviewed by {item.reviewed_by}</span>
+                      )}
                     </div>
-                  </button>
+                  </div>
 
                   {pending && (
                     <div className="admin-inbox__actions">
