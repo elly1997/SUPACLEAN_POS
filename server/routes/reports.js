@@ -253,8 +253,36 @@ router.get('/financial', requireBranchAccess(), async (req, res) => {
       acc.total_revenue += parseFloat(row.total_revenue || 0);
       acc.total_expenses += parseFloat(row.total_expenses || 0);
       acc.total_profit += parseFloat(row.profit || 0);
+      acc.cash_revenue += parseFloat(row.cash_revenue || 0);
+      acc.book_revenue += parseFloat(row.book_revenue || 0);
+      acc.digital_revenue += parseFloat(row.digital_revenue || 0);
+      acc.cash_expenses += parseFloat(row.cash_expenses || 0);
+      acc.bank_expenses += parseFloat(row.bank_expenses || 0);
+      acc.mpesa_expenses += parseFloat(row.mpesa_expenses || 0);
+      acc.reconciled_days += parseInt(row.reconciled_days, 10) || 0;
+      acc.days_count += parseInt(row.days_count, 10) || 0;
       return acc;
-    }, { total_revenue: 0, total_expenses: 0, total_profit: 0 });
+    }, {
+      total_revenue: 0,
+      total_expenses: 0,
+      total_profit: 0,
+      cash_revenue: 0,
+      book_revenue: 0,
+      digital_revenue: 0,
+      cash_expenses: 0,
+      bank_expenses: 0,
+      mpesa_expenses: 0,
+      reconciled_days: 0,
+      days_count: 0,
+    });
+
+    if (totals.total_revenue > 0) {
+      totals.profit_margin_pct = Math.round((totals.total_profit / totals.total_revenue) * 1000) / 10;
+      totals.expense_ratio_pct = Math.round((totals.total_expenses / totals.total_revenue) * 1000) / 10;
+    } else {
+      totals.profit_margin_pct = 0;
+      totals.expense_ratio_pct = 0;
+    }
     
     res.json({
       period,
@@ -324,14 +352,16 @@ router.get('/overview', requireBranchAccess(), async (req, res) => {
   try {
     let query = `
       SELECT 
-        d.date,
-        d.cash_sales + d.book_sales + d.card_sales + d.mobile_money_sales as total_income,
-        d.cash_sales as cash_income,
-        d.card_sales + d.mobile_money_sales as digital_income,
-        d.expenses_from_cash + d.expenses_from_bank + d.expenses_from_mpesa as total_expenses,
-        (d.cash_sales + d.book_sales + d.card_sales + d.mobile_money_sales) - 
-        (d.expenses_from_cash + d.expenses_from_bank + d.expenses_from_mpesa) as net_income,
-        d.is_reconciled
+        $1::date as date,
+        COALESCE(SUM(d.cash_sales + d.book_sales + d.card_sales + d.mobile_money_sales), 0) as total_income,
+        COALESCE(SUM(d.cash_sales), 0) as cash_income,
+        COALESCE(SUM(d.card_sales + d.mobile_money_sales), 0) as digital_income,
+        COALESCE(SUM(d.book_sales), 0) as book_income,
+        COALESCE(SUM(d.expenses_from_cash + d.expenses_from_bank + d.expenses_from_mpesa), 0) as total_expenses,
+        COALESCE(SUM(d.cash_sales + d.book_sales + d.card_sales + d.mobile_money_sales), 0) -
+        COALESCE(SUM(d.expenses_from_cash + d.expenses_from_bank + d.expenses_from_mpesa), 0) as net_income,
+        BOOL_AND(COALESCE(d.is_reconciled, FALSE)) as is_reconciled,
+        COUNT(*)::int as branch_rows
       FROM daily_cash_summaries d
       WHERE d.date = $1
     `;
@@ -343,7 +373,9 @@ router.get('/overview', requireBranchAccess(), async (req, res) => {
       branchClause = branchClause.replace(/\?/g, () => `$${clauseParamIndex++}`);
       query += ' ' + branchClause;
     }
-    
+
+    query += ' GROUP BY d.date';
+
     // Get transaction count separately
     let transactionQuery = `
       SELECT COUNT(*) as total_transactions
@@ -384,6 +416,216 @@ router.get('/overview', requireBranchAccess(), async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching overview:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function priorPeriodRange(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  const dayMs = 86400000;
+  const spanDays = Math.max(1, Math.round((end - start) / dayMs) + 1);
+  const priorEnd = new Date(start.getTime() - dayMs);
+  const priorStart = new Date(priorEnd.getTime() - (spanDays - 1) * dayMs);
+  const toYmd = (d) => d.toISOString().split('T')[0];
+  return { start: toYmd(priorStart), end: toYmd(priorEnd), span_days: spanDays };
+}
+
+function pctChange(current, previous) {
+  const cur = Number(current) || 0;
+  const prev = Number(previous) || 0;
+  if (prev === 0) return cur > 0 ? 100 : 0;
+  return Math.round(((cur - prev) / prev) * 1000) / 10;
+}
+
+async function fetchFinancialTotals(startDate, endDate, branchFilter) {
+  let query = `
+    SELECT
+      COALESCE(SUM(d.cash_sales + d.book_sales + d.card_sales + d.mobile_money_sales), 0) as total_revenue,
+      COALESCE(SUM(d.expenses_from_cash + d.expenses_from_bank + d.expenses_from_mpesa), 0) as total_expenses,
+      COALESCE(SUM(d.cash_sales + d.book_sales + d.card_sales + d.mobile_money_sales), 0) -
+      COALESCE(SUM(d.expenses_from_cash + d.expenses_from_bank + d.expenses_from_mpesa), 0) as total_profit,
+      COALESCE(SUM(d.cash_sales), 0) as cash_revenue,
+      COALESCE(SUM(d.book_sales), 0) as book_revenue,
+      COALESCE(SUM(d.card_sales + d.mobile_money_sales), 0) as digital_revenue,
+      COUNT(*)::int as summary_rows,
+      COUNT(CASE WHEN d.is_reconciled = TRUE THEN 1 END)::int as reconciled_rows,
+      COUNT(CASE WHEN COALESCE(d.is_reconciled, FALSE) = FALSE THEN 1 END)::int as open_rows
+    FROM daily_cash_summaries d
+    WHERE d.date >= $1 AND d.date <= $2
+  `;
+  if (branchFilter.clause) {
+    let branchClause = branchFilter.clause.replace(/AND\s+(\w+)\./, 'AND d.');
+    let clauseParamIndex = 3;
+    branchClause = branchClause.replace(/\?/g, () => `$${clauseParamIndex++}`);
+    query += ' ' + branchClause;
+  }
+  const params = [startDate, endDate, ...(branchFilter.params || [])];
+  const row = await db.get(query, params);
+  const totalRevenue = parseFloat(row?.total_revenue || 0);
+  const totalProfit = parseFloat(row?.total_profit || 0);
+  const totalExpenses = parseFloat(row?.total_expenses || 0);
+  return {
+    total_revenue: totalRevenue,
+    total_expenses: totalExpenses,
+    total_profit: totalProfit,
+    cash_revenue: parseFloat(row?.cash_revenue || 0),
+    book_revenue: parseFloat(row?.book_revenue || 0),
+    digital_revenue: parseFloat(row?.digital_revenue || 0),
+    summary_rows: parseInt(row?.summary_rows, 10) || 0,
+    reconciled_rows: parseInt(row?.reconciled_rows, 10) || 0,
+    open_rows: parseInt(row?.open_rows, 10) || 0,
+    profit_margin_pct: totalRevenue > 0 ? Math.round((totalProfit / totalRevenue) * 1000) / 10 : 0,
+    expense_ratio_pct: totalRevenue > 0 ? Math.round((totalExpenses / totalRevenue) * 1000) / 10 : 0,
+  };
+}
+
+async function fetchSalesTotals(startDate, endDate, branchFilter) {
+  let query = `
+    SELECT
+      COUNT(*)::int as total_orders,
+      COALESCE(SUM(o.total_amount), 0) as total_revenue,
+      COALESCE(SUM(CASE WHEN o.status = 'collected' THEN o.total_amount ELSE 0 END), 0) as collected_revenue
+    FROM orders o
+    WHERE DATE(o.order_date) BETWEEN $1 AND $2
+      AND COALESCE(o.is_voided, FALSE) = FALSE
+  `;
+  if (branchFilter.clause) {
+    let branchClause = branchFilter.clause.replace(/AND\s+(\w+)\./, 'AND o.');
+    let clauseParamIndex = 3;
+    branchClause = branchClause.replace(/\?/g, () => `$${clauseParamIndex++}`);
+    query += ' ' + branchClause;
+  }
+  const params = [startDate, endDate, ...(branchFilter.params || [])];
+  const row = await db.get(query, params);
+  const orders = parseInt(row?.total_orders, 10) || 0;
+  const revenue = parseFloat(row?.total_revenue || 0);
+  return {
+    total_orders: orders,
+    total_revenue: revenue,
+    collected_revenue: parseFloat(row?.collected_revenue || 0),
+    average_order_value: orders > 0 ? Math.round(revenue / orders) : 0,
+    collection_rate_pct: revenue > 0
+      ? Math.round((parseFloat(row?.collected_revenue || 0) / revenue) * 1000) / 10
+      : 0,
+  };
+}
+
+async function fetchMonthlyTarget(branchId) {
+  const keys = branchId != null
+    ? [`reports_monthly_target_branch_${branchId}`, 'reports_monthly_target']
+    : ['reports_monthly_target'];
+  for (const key of keys) {
+    const row = await db.get('SELECT setting_value FROM settings WHERE setting_key = $1', [key]);
+    const val = parseFloat(row?.setting_value);
+    if (Number.isFinite(val) && val > 0) return val;
+  }
+  return null;
+}
+
+// Business health snapshot: current vs prior period, ratios, alerts (Personal MBA finance layer)
+router.get('/business-health', requireBranchAccess(), async (req, res) => {
+  const { start_date, end_date } = req.query;
+  if (!start_date || !end_date) {
+    return res.status(400).json({ error: 'Start date and end date are required' });
+  }
+
+  const branchFilter = getBranchFilter(req, 'd');
+  const prior = priorPeriodRange(start_date, end_date);
+  const branchId = req.effectiveBranchId ?? req.user?.branchId ?? null;
+
+  try {
+    const [current, previous, salesCurrent, salesPrevious, monthlyTarget] = await Promise.all([
+      fetchFinancialTotals(start_date, end_date, branchFilter),
+      fetchFinancialTotals(prior.start, prior.end, branchFilter),
+      fetchSalesTotals(start_date, end_date, branchFilter),
+      fetchSalesTotals(prior.start, prior.end, branchFilter),
+      fetchMonthlyTarget(branchId),
+    ]);
+
+    const comparison = {
+      prior_start: prior.start,
+      prior_end: prior.end,
+      span_days: prior.span_days,
+      revenue_change_pct: pctChange(current.total_revenue, previous.total_revenue),
+      profit_change_pct: pctChange(current.total_profit, previous.total_profit),
+      expenses_change_pct: pctChange(current.total_expenses, previous.total_expenses),
+      orders_change_pct: pctChange(salesCurrent.total_orders, salesPrevious.total_orders),
+      aov_change_pct: pctChange(salesCurrent.average_order_value, salesPrevious.average_order_value),
+    };
+
+    const alerts = [];
+    if (current.open_rows > 0) {
+      alerts.push({
+        type: 'unreconciled',
+        severity: 'warning',
+        message: `${current.open_rows} daily cash summary row(s) in this period are not reconciled. Financial totals may change after close.`,
+      });
+    }
+    if (current.total_profit < 0) {
+      alerts.push({
+        type: 'negative_profit',
+        severity: 'danger',
+        message: `Period profit is ${current.total_profit.toLocaleString()} TZS. Review expenses and revenue mix.`,
+      });
+    }
+    const collectionGap = salesCurrent.total_revenue - current.total_revenue;
+    if (Math.abs(collectionGap) > Math.max(50000, current.total_revenue * 0.05)) {
+      alerts.push({
+        type: 'sales_vs_reconciled',
+        severity: 'info',
+        message: `Order book revenue differs from reconciled revenue by ${Math.round(collectionGap).toLocaleString()} TZS. Check unreconciled days or timing of collections.`,
+      });
+    }
+
+    let target_progress_pct = null;
+    if (monthlyTarget && current.total_revenue > 0) {
+      target_progress_pct = Math.min(999, Math.round((current.total_revenue / monthlyTarget) * 1000) / 10);
+    }
+
+    res.json({
+      period: { start: start_date, end: end_date },
+      current: { financial: current, sales: salesCurrent },
+      previous: { financial: previous, sales: salesPrevious },
+      comparison,
+      monthly_target: monthlyTarget,
+      target_progress_pct,
+      alerts,
+    });
+  } catch (err) {
+    console.error('Error fetching business health report:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update monthly revenue target (admin/manager)
+router.put('/monthly-target', requireBranchAccess(), async (req, res) => {
+  const amount = parseFloat(req.body?.amount);
+  if (!Number.isFinite(amount) || amount < 0) {
+    return res.status(400).json({ error: 'A valid non-negative amount is required' });
+  }
+  const branchId = req.effectiveBranchId ?? req.user?.branchId ?? null;
+  const key = branchId != null ? `reports_monthly_target_branch_${branchId}` : 'reports_monthly_target';
+  const description = branchId != null
+    ? `Monthly revenue target for branch ${branchId}`
+    : 'Global monthly revenue target';
+
+  try {
+    const existing = await db.get('SELECT id FROM settings WHERE setting_key = $1', [key]);
+    if (existing) {
+      await db.run(
+        'UPDATE settings SET setting_value = $1, description = $2, updated_at = CURRENT_TIMESTAMP WHERE setting_key = $3',
+        [String(amount), description, key]
+      );
+    } else {
+      await db.run(
+        'INSERT INTO settings (setting_key, setting_value, description) VALUES ($1, $2, $3)',
+        [key, String(amount), description]
+      );
+    }
+    res.json({ success: true, monthly_target: amount, setting_key: key });
+  } catch (err) {
+    console.error('Error saving monthly target:', err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -700,6 +700,34 @@ export async function getOverviewReport(date) {
   }
 }
 
+export async function getBusinessHealthReport(startDate, endDate) {
+  if (isOffline()) {
+    try {
+      const cached = await getSyncCache('reports_business_health');
+      if (cached != null && cached.data != null) return { data: cached.data, fromCache: true, syncedAt: cached.syncedAt };
+      return { data: null };
+    } catch (e) {
+      return { data: null };
+    }
+  }
+  try {
+    const res = await api.get('/reports/business-health', { params: { start_date: startDate, end_date: endDate } });
+    await setSyncCache('reports_business_health', res.data);
+    return res;
+  } catch (err) {
+    if (isNetworkError(err)) {
+      try {
+        const cached = await getSyncCache('reports_business_health');
+        if (cached != null && cached.data != null) return { data: cached.data, fromCache: true, syncedAt: cached.syncedAt };
+      } catch (e) {}
+    }
+    throw err;
+  }
+}
+
+export const setReportsMonthlyTarget = (amount) =>
+  api.put('/reports/monthly-target', { amount });
+
 // Settings (offline-first)
 export async function getSettings() {
   if (isOffline()) {

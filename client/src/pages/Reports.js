@@ -7,6 +7,8 @@ import {
   getSalesReport,
   getServiceReport,
   getCustomerReport,
+  getBusinessHealthReport,
+  setReportsMonthlyTarget,
   unreconcileDailyCash,
   getBankDeposits,
   getBranches
@@ -45,6 +47,13 @@ class ChartErrorBoundary extends React.Component {
 }
 
 const formatTSh = (n) => (n != null && !Number.isNaN(n) ? `TSh ${Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'TSh 0');
+
+const formatDelta = (pct) => {
+  const v = Number(pct);
+  if (!Number.isFinite(v) || v === 0) return { label: '0%', className: 'reports-delta--flat' };
+  if (v > 0) return { label: `+${v}%`, className: 'reports-delta--up' };
+  return { label: `${v}%`, className: 'reports-delta--down' };
+};
 
 const reportsChartSuspenseFallback = (
   <div className="report-chart-wrap report-chart-fallback" role="status" aria-live="polite">
@@ -147,6 +156,7 @@ const Reports = () => {
   const [unreconcileReason, setUnreconcileReason] = useState('');
   const [unreconcileSubmitting, setUnreconcileSubmitting] = useState(false);
   const [bankDeposits, setBankDeposits] = useState([]);
+  const [businessHealth, setBusinessHealth] = useState(null);
   const [branchesList, setBranchesList] = useState([]);
   const tableScrollHandlers = useHorizontalScrollRegion();
   const isAdmin = user?.role === 'admin';
@@ -219,16 +229,20 @@ const Reports = () => {
           ? getBankDeposits({ start_date: dateRange.start, end_date: dateRange.end }).catch(() => ({ data: [] }))
           : Promise.resolve({ data: [] });
 
-      const [summaryRes, financialRes, profitRes, depRes] = await Promise.all([
+      const [summaryRes, financialRes, profitRes, salesRes, healthRes, depRes] = await Promise.all([
         getOverviewReport(today),
         getFinancialReport(dateRange.start, dateRange.end, reportPeriod),
         getDailyProfitReport(dateRange.start, dateRange.end),
+        getSalesReport(dateRange.start, dateRange.end),
+        getBusinessHealthReport(dateRange.start, dateRange.end),
         depositPromise
       ]);
 
       setSummary(summaryRes.data);
       setFinancialReport(financialRes.data);
       setProfitReport(profitRes.data || []);
+      setSalesReport(salesRes.data || []);
+      setBusinessHealth(healthRes.data || null);
       setBankDeposits(Array.isArray(depRes.data) ? depRes.data : []);
       setLoadedTabs((prev) => ({ ...prev, overview: true }));
       const synced = [summaryRes, financialRes].find((r) => r.fromCache && r.syncedAt);
@@ -244,6 +258,8 @@ const Reports = () => {
       setSummary(null);
       setFinancialReport(null);
       setProfitReport([]);
+      setSalesReport([]);
+      setBusinessHealth(null);
       setBankDeposits([]);
     } finally {
       if (isInitial) setLoading(false);
@@ -392,6 +408,25 @@ const Reports = () => {
     ? `Top ${Math.min(20, customerReport.length)} customers · ${customerFilter.month}/${customerFilter.year}`
     : 'No customer data for this month.';
 
+  const periodRangeLabel = `${dateRange.start} → ${dateRange.end}`;
+
+  const handleSaveMonthlyTarget = async () => {
+    const raw = window.prompt('Monthly revenue target (TZS) for this scope:', businessHealth?.monthly_target ?? '');
+    if (raw === null) return;
+    const amount = parseFloat(String(raw).replace(/,/g, ''));
+    if (!Number.isFinite(amount) || amount < 0) {
+      showToast('Enter a valid non-negative amount.', 'error');
+      return;
+    }
+    try {
+      await setReportsMonthlyTarget(amount);
+      showToast('Monthly target saved.', 'success');
+      await loadOverviewTab(false);
+    } catch (e) {
+      showToast(e.response?.data?.error || e.message || 'Could not save target', 'error');
+    }
+  };
+
   if (loadError && !summary && !financialReport) {
     return (
       <div className="reports-page">
@@ -535,6 +570,80 @@ const Reports = () => {
         <>
           <p className="reports-live-line" aria-live="polite">{overviewSummaryLine}</p>
 
+          {businessHealth?.alerts?.length > 0 && (
+            <section className="reports-alerts" aria-label="Business alerts">
+              {businessHealth.alerts.map((alert) => (
+                <div key={alert.type} className={`reports-alert reports-alert--${alert.severity || 'info'}`} role="status">
+                  {alert.message}
+                </div>
+              ))}
+            </section>
+          )}
+
+          {businessHealth?.current?.financial && (
+            <section className="reports-panel reports-panel--health" aria-label="Business health">
+              <div className="reports-health-head">
+                <div>
+                  <h2 className="reports-panel-heading">Business health</h2>
+                  <p className="reports-panel-lead">
+                    Reconciled financials vs prior {businessHealth.comparison?.span_days || '—'} day(s) ({businessHealth.comparison?.prior_start} → {businessHealth.comparison?.prior_end}).
+                  </p>
+                </div>
+                {(isAdmin || user?.role === 'manager') && (
+                  <button type="button" className="btn-secondary reports-target-btn" onClick={handleSaveMonthlyTarget}>
+                    Set monthly target
+                  </button>
+                )}
+              </div>
+              <div className="reports-kpi-grid reports-kpi-grid--health">
+                <div className="reports-kpi reports-kpi--revenue">
+                  <span className="reports-kpi-label">Revenue (reconciled)</span>
+                  <span className="reports-kpi-value">{formatTSh(businessHealth.current.financial.total_revenue)}</span>
+                  <span className={`reports-delta ${formatDelta(businessHealth.comparison?.revenue_change_pct).className}`}>
+                    {formatDelta(businessHealth.comparison?.revenue_change_pct).label} vs prior
+                  </span>
+                </div>
+                <div className="reports-kpi reports-kpi--profit">
+                  <span className="reports-kpi-label">Profit</span>
+                  <span className="reports-kpi-value">{formatTSh(businessHealth.current.financial.total_profit)}</span>
+                  <span className={`reports-delta ${formatDelta(businessHealth.comparison?.profit_change_pct).className}`}>
+                    {formatDelta(businessHealth.comparison?.profit_change_pct).label} vs prior
+                  </span>
+                </div>
+                <div className="reports-kpi">
+                  <span className="reports-kpi-label">Profit margin</span>
+                  <span className="reports-kpi-value">{businessHealth.current.financial.profit_margin_pct ?? 0}%</span>
+                  <span className="reports-kpi-foot">Expense ratio {businessHealth.current.financial.expense_ratio_pct ?? 0}%</span>
+                </div>
+                <div className="reports-kpi">
+                  <span className="reports-kpi-label">Orders</span>
+                  <span className="reports-kpi-value">{businessHealth.current.sales?.total_orders ?? 0}</span>
+                  <span className={`reports-delta ${formatDelta(businessHealth.comparison?.orders_change_pct).className}`}>
+                    {formatDelta(businessHealth.comparison?.orders_change_pct).label} vs prior
+                  </span>
+                </div>
+                <div className="reports-kpi">
+                  <span className="reports-kpi-label">Avg order value</span>
+                  <span className="reports-kpi-value">{formatTSh(businessHealth.current.sales?.average_order_value)}</span>
+                  <span className={`reports-delta ${formatDelta(businessHealth.comparison?.aov_change_pct).className}`}>
+                    {formatDelta(businessHealth.comparison?.aov_change_pct).label} vs prior
+                  </span>
+                </div>
+                {businessHealth.monthly_target != null && (
+                  <div className="reports-kpi reports-kpi--target">
+                    <span className="reports-kpi-label">Monthly target</span>
+                    <span className="reports-kpi-value">{formatTSh(businessHealth.monthly_target)}</span>
+                    <span className="reports-kpi-foot">
+                      {businessHealth.target_progress_pct != null
+                        ? `${businessHealth.target_progress_pct}% of target in this period`
+                        : 'Target set'}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           <section className="reports-panel reports-panel--today">
             <h2 className="reports-panel-heading">Today (live)</h2>
             <div className="reports-kpi-grid reports-kpi-grid--sm">
@@ -671,6 +780,26 @@ const Reports = () => {
               <span className="reports-kpi-foot">daily summaries</span>
             </div>
           </section>
+
+          {financialReport?.totals && (financialReport.totals.cash_revenue > 0 || financialReport.totals.book_revenue > 0 || financialReport.totals.digital_revenue > 0) && (
+            <section className="reports-panel reports-panel--mix" aria-label="Revenue by payment channel">
+              <h2 className="reports-panel-heading">Revenue mix (reconciled)</h2>
+              <div className="reports-mix-grid">
+                <div className="reports-mix-item">
+                  <span>Cash</span>
+                  <strong>{formatTSh(financialReport.totals.cash_revenue)}</strong>
+                </div>
+                <div className="reports-mix-item">
+                  <span>Book / credit</span>
+                  <strong>{formatTSh(financialReport.totals.book_revenue)}</strong>
+                </div>
+                <div className="reports-mix-item">
+                  <span>Card / M-Pesa</span>
+                  <strong>{formatTSh(financialReport.totals.digital_revenue)}</strong>
+                </div>
+              </div>
+            </section>
+          )}
 
           {reportPeriod === 'month' && hasFinancialData && (
             <section className="reports-panel reports-panel--monthly" aria-label="Monthly summary">
@@ -922,6 +1051,13 @@ const Reports = () => {
         <div className="reports-tab-skeleton" role="status" aria-live="polite">
           <Loader message={`Loading ${activeTab} data…`} fullPage={false} />
         </div>
+      )}
+
+      {activeTab !== 'overview' && (
+        <p className="reports-period-banner">
+          Period: <strong>{periodRangeLabel}</strong> · Scope: <strong>{scopeLabel}</strong>
+          {' '}— change dates on the <button type="button" className="reports-inline-link" onClick={() => handleTabSwitch('overview')}>Overview</button> tab.
+        </p>
       )}
 
       {activeTab === 'sales' && loadedTabs.sales && (
