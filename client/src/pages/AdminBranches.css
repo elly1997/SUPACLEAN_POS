@@ -514,7 +514,7 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  z-index: 2000;
+  z-index: 4000;
   animation: fadeIn 0.2s ease-out;
   padding: 20px;
 }
@@ -543,7 +543,29 @@
 .modal-header {
   margin-bottom: 32px;
   padding-bottom: 20px;
+  padding-right: 36px;
   border-bottom: 2px solid var(--border-color);
+  position: relative;
+}
+
+.modal-close-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modal-close-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .modal-header h3 {

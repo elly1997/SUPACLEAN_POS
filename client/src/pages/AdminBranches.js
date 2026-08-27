@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/useToast';
 import {
@@ -13,6 +14,20 @@ import {
 import Loader from '../components/Loader';
 import { clearBrandSettingsCache } from '../utils/brandSettings';
 import './AdminBranches.css';
+
+/** Close a modal only when the pointer press and release both happen on the backdrop.
+ *  Autofill dropdowns and scroll-into-view can fire a click on the overlay after a
+ *  mousedown inside the form — that must not dismiss the create-user screen. */
+const overlayDismissProps = (onClose) => ({
+  onMouseDown: (e) => {
+    e.currentTarget.dataset.overlayDown = e.target === e.currentTarget ? '1' : '0';
+  },
+  onClick: (e) => {
+    const startedOnOverlay = e.currentTarget.dataset.overlayDown === '1';
+    e.currentTarget.dataset.overlayDown = '0';
+    if (startedOnOverlay && e.target === e.currentTarget) onClose();
+  },
+});
 
 const AdminBranches = () => {
   const { isAdmin } = useAuth();
@@ -35,6 +50,7 @@ const AdminBranches = () => {
   const [auditEnd, setAuditEnd] = useState(() => new Date().toISOString().slice(0, 10));
   const [auditExporting, setAuditExporting] = useState(false);
   const [tempPasswordReveal, setTempPasswordReveal] = useState(null);
+  const initialLoadDoneRef = useRef(false);
   
   // Branch form state
   const [showBranchForm, setShowBranchForm] = useState(false);
@@ -103,11 +119,17 @@ const AdminBranches = () => {
     });
     
     loadData();
-  }, [isAdmin, showToast]);
+    // Do not depend on showToast: a new identity would re-run loadData, swap in the
+    // full-page loader, and unmount an open create-user form.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
 
   const loadData = async () => {
     try {
-      setLoading(true);
+      // After the first load, refresh in place so an open modal is not unmounted.
+      if (!initialLoadDoneRef.current) {
+        setLoading(true);
+      }
       
       // Check server connection first
       const connectionCheck = await checkServerConnection();
@@ -141,6 +163,7 @@ const AdminBranches = () => {
       }
     } finally {
       setLoading(false);
+      initialLoadDoneRef.current = true;
     }
   };
 
@@ -234,6 +257,14 @@ const AdminBranches = () => {
   // User handlers
   const handleCreateUser = async (e) => {
     e.preventDefault();
+    if (!String(userForm.username || '').trim() || !String(userForm.full_name || '').trim()) {
+      showToast('Username and full name are required', 'error');
+      return;
+    }
+    if (userForm.role !== 'admin' && !userForm.branch_id) {
+      showToast('Please select a branch', 'error');
+      return;
+    }
     if (!userForm.password) {
       showToast('Password is required for new users', 'error');
       return;
@@ -367,6 +398,22 @@ const AdminBranches = () => {
     setEditingUser(null);
   };
 
+  const closeUserForm = () => {
+    setShowUserForm(false);
+    resetUserForm();
+  };
+
+  useEffect(() => {
+    if (!showUserForm) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') closeUserForm();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // closeUserForm is stable enough for this mount/unmount of the listener
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showUserForm]);
+
   // Branch features/privileges handlers
   const handleManageFeatures = async (branch) => {
     try {
@@ -425,7 +472,7 @@ const AdminBranches = () => {
     );
   }
 
-  if (loading) {
+  if (loading && !showUserForm && !showBranchForm) {
     return (
       <div className="admin-branches">
         <Loader message="Loading…" fullPage />
@@ -674,131 +721,6 @@ const AdminBranches = () => {
               ➕ Add User
             </button>
           </div>
-
-          {showUserForm && (
-            <div className="modal-overlay" onClick={(e) => {
-              if (e.target === e.currentTarget) {
-                setShowUserForm(false);
-                resetUserForm();
-              }
-            }}>
-              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-                <div className="modal-header">
-                  <h3>{editingUser ? '✏️ Edit User' : '➕ Create New User'}</h3>
-                  {editingUser && (
-                    <div className="modal-subtitle">{editingUser.full_name}</div>
-                  )}
-                </div>
-                <form onSubmit={editingUser ? handleUpdateUser : handleCreateUser}>
-                  <div className="form-group">
-                    <label>Username *</label>
-                    <input
-                      type="text"
-                      value={userForm.username}
-                      onChange={(e) => setUserForm({ ...userForm, username: e.target.value })}
-                      required
-                      placeholder="Login name for this user"
-                    />
-                    {editingUser && (
-                      <small className="field-hint">You can change the username; the user will log in with the new name.</small>
-                    )}
-                  </div>
-                  <div className="form-group">
-                    <label>Password {editingUser ? '(leave blank to keep current)' : '*'}</label>
-                    <input
-                      type="password"
-                      value={userForm.password}
-                      onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
-                      required={!editingUser}
-                      placeholder={editingUser ? 'Enter new password to change' : 'Set password'}
-                      autoComplete={editingUser ? 'new-password' : 'off'}
-                    />
-                    {editingUser && (
-                      <small className="field-hint">Passwords are stored securely and cannot be viewed. Enter a new password above only if you want to change it.</small>
-                    )}
-                  </div>
-                  <div className="form-group">
-                    <label>Full Name *</label>
-                    <input
-                      type="text"
-                      value={userForm.full_name}
-                      onChange={(e) => setUserForm({ ...userForm, full_name: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Role *</label>
-                    <select
-                      value={userForm.role}
-                      onChange={(e) => setUserForm({ ...userForm, role: e.target.value, branch_id: e.target.value === 'admin' ? '' : userForm.branch_id })}
-                      required
-                    >
-                      <option value="admin">Admin</option>
-                      <option value="manager">Manager</option>
-                      <option value="cashier">Cashier</option>
-                      <option value="processor">Processor</option>
-                    </select>
-                  </div>
-                  {userForm.role !== 'admin' && (
-                    <div className="form-group">
-                      <label>Branch *</label>
-                      <select
-                        value={userForm.branch_id}
-                        onChange={(e) => setUserForm({ ...userForm, branch_id: e.target.value })}
-                        required={userForm.role !== 'admin'}
-                      >
-                        <option value="">Select a branch</option>
-                        {branches.map(branch => (
-                          <option key={branch.id} value={branch.id}>
-                            {branch.code} - {branch.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  <div className="form-group">
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={userForm.is_active}
-                        onChange={(e) => setUserForm({ ...userForm, is_active: e.target.checked })}
-                      />
-                      {' '}Active
-                    </label>
-                  </div>
-                  {!editingUser && (
-                    <div className="form-group">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={!!userForm.invite}
-                          onChange={(e) => setUserForm({ ...userForm, invite: e.target.checked })}
-                        />
-                        {' '}Require password change on first login (invite)
-                      </label>
-                    </div>
-                  )}
-                  <div className="form-actions">
-                    <button 
-                      type="button" 
-                      className="btn-secondary"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setShowUserForm(false);
-                        resetUserForm();
-                      }}
-                    >
-                      Cancel
-                    </button>
-                    <button type="submit" className="btn-primary">
-                      {editingUser ? 'Update User' : 'Create User'}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          )}
 
           <div className="users-table">
             <table>
@@ -1129,6 +1051,165 @@ const AdminBranches = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {showUserForm && typeof document !== 'undefined' && createPortal(
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="user-form-title"
+          {...overlayDismissProps(closeUserForm)}
+        >
+          <div className="modal-content">
+            <div className="modal-header">
+              <h3 id="user-form-title">{editingUser ? '✏️ Edit User' : '➕ Create New User'}</h3>
+              {editingUser && (
+                <div className="modal-subtitle">{editingUser.full_name}</div>
+              )}
+              <button
+                type="button"
+                className="modal-close-btn"
+                aria-label="Close"
+                onClick={closeUserForm}
+              >
+                ×
+              </button>
+            </div>
+            <form
+              autoComplete="off"
+              onSubmit={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (editingUser) handleUpdateUser(e);
+                else handleCreateUser(e);
+              }}
+            >
+              <div className="form-group">
+                <label htmlFor="new-user-username">Username *</label>
+                <input
+                  id="new-user-username"
+                  type="text"
+                  name="new-username"
+                  value={userForm.username}
+                  onChange={(e) => setUserForm((prev) => ({ ...prev, username: e.target.value }))}
+                  required
+                  placeholder="Login name for this user"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                />
+                {editingUser && (
+                  <small className="field-hint">You can change the username; the user will log in with the new name.</small>
+                )}
+              </div>
+              <div className="form-group">
+                <label htmlFor="new-user-password">Password {editingUser ? '(leave blank to keep current)' : '*'}</label>
+                <input
+                  id="new-user-password"
+                  type="password"
+                  name="new-password"
+                  value={userForm.password}
+                  onChange={(e) => setUserForm((prev) => ({ ...prev, password: e.target.value }))}
+                  required={!editingUser}
+                  placeholder={editingUser ? 'Enter new password to change' : 'Set password'}
+                  autoComplete="new-password"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                />
+                {editingUser && (
+                  <small className="field-hint">Passwords are stored securely and cannot be viewed. Enter a new password above only if you want to change it.</small>
+                )}
+              </div>
+              <div className="form-group">
+                <label htmlFor="new-user-fullname">Full Name *</label>
+                <input
+                  id="new-user-fullname"
+                  type="text"
+                  name="new-full-name"
+                  value={userForm.full_name}
+                  onChange={(e) => setUserForm((prev) => ({ ...prev, full_name: e.target.value }))}
+                  required
+                  autoComplete="off"
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="new-user-role">Role *</label>
+                <select
+                  id="new-user-role"
+                  value={userForm.role}
+                  onChange={(e) => setUserForm((prev) => ({
+                    ...prev,
+                    role: e.target.value,
+                    branch_id: e.target.value === 'admin' ? '' : prev.branch_id,
+                  }))}
+                  required
+                >
+                  <option value="admin">Admin</option>
+                  <option value="manager">Manager</option>
+                  <option value="cashier">Cashier</option>
+                  <option value="processor">Processor</option>
+                </select>
+              </div>
+              {userForm.role !== 'admin' && (
+                <div className="form-group">
+                  <label htmlFor="new-user-branch">Branch *</label>
+                  <select
+                    id="new-user-branch"
+                    value={userForm.branch_id}
+                    onChange={(e) => setUserForm((prev) => ({ ...prev, branch_id: e.target.value }))}
+                    required={userForm.role !== 'admin'}
+                  >
+                    <option value="">Select a branch</option>
+                    {branches.map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.code} - {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div className="form-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={userForm.is_active}
+                    onChange={(e) => setUserForm((prev) => ({ ...prev, is_active: e.target.checked }))}
+                  />
+                  {' '}Active
+                </label>
+              </div>
+              {!editingUser && (
+                <div className="form-group">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={!!userForm.invite}
+                      onChange={(e) => setUserForm((prev) => ({ ...prev, invite: e.target.checked }))}
+                    />
+                    {' '}Require password change on first login (invite)
+                  </label>
+                </div>
+              )}
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={closeUserForm}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary">
+                  {editingUser ? 'Update User' : 'Create User'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
