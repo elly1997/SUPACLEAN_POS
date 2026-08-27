@@ -1896,6 +1896,13 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
     const lowerPath = String(filePath).toLowerCase();
     if (lowerPath.endsWith('.csv')) {
       await workbook.csv.readFile(filePath);
+    } else if (lowerPath.endsWith('.xlsx')) {
+      await workbook.xlsx.readFile(filePath);
+    } else if (lowerPath.endsWith('.xls')) {
+      fs.unlinkSync(filePath);
+      return res.status(400).json({
+        error: 'Legacy .xls format is not supported. Save the file as .xlsx or .csv and upload again.',
+      });
     } else {
       await workbook.xlsx.readFile(filePath);
     }

@@ -1454,7 +1454,7 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
             📦 Upload Stock Excel
             <input
               type="file"
-              accept=".xlsx,.xls,.csv"
+              accept=".xlsx,.csv"
               style={{ display: 'none' }}
               onChange={handleStockExcelUpload}
             />

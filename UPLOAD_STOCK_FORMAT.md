@@ -72,4 +72,4 @@ If the ID cannot be parsed, `order_date` falls back to **yesterday** (so todayâ€
 
 ## File type
 
-- `.xlsx` or `.xls` (Excel), or `.csv`
+- `.xlsx` (Excel) or `.csv` â€” legacy `.xls` is **not** supported by the uploader
