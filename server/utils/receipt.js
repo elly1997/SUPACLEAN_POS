@@ -157,11 +157,15 @@ async function nextBranchReceiptSequence(branchId, prefix, day, month, dateStr) 
 
 /**
  * For bulk import: attach branch prefix to spreadsheet ids like "1-17-6" → "UH 1-17-6".
+ * Pass `prefix` when already loaded to avoid a DB hit per row.
  */
-async function normalizeReceiptNumberForBranch(receiptId, branchId) {
+async function normalizeReceiptNumberForBranch(receiptId, branchId, prefixOverride) {
   const raw = String(receiptId || '').trim();
   if (!raw) return { ok: false, error: 'Receipt id is empty' };
-  const prefix = await getBranchReceiptPrefix(branchId);
+  const prefix =
+    prefixOverride !== undefined
+      ? prefixOverride
+      : await getBranchReceiptPrefix(branchId);
   const parsed = parseReceiptNumber(raw);
   if (!parsed.core || !/^\d+-\d{1,2}-\d{1,2}$/.test(parsed.core)) {
     return { ok: false, error: `Invalid receipt format: ${raw}` };

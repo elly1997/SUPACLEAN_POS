@@ -2022,6 +2022,42 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
       return res.status(400).json({ error: 'Select a branch to upload stock' });
     }
 
+    // Cache branch prefix + existing receipts once (avoids 1–2 DB hits per row → Render 502 timeouts).
+    const branchPrefix = await getBranchReceiptPrefix(branchId);
+    const existingReceiptRows = await db.all(
+      'SELECT receipt_number FROM orders WHERE branch_id = ?',
+      [branchId]
+    ).catch(() => []);
+    const existingReceipts = new Set(
+      (existingReceiptRows || []).map((r) => String(r.receipt_number || '').trim().toUpperCase()).filter(Boolean)
+    );
+
+    const customerByName = new Map(); // lower(name) → { id, phone }
+    const uniqueNames = [];
+    const seenNames = new Set();
+    for (const row of data) {
+      const n = String(
+        row.name || row.Name || row.NAME || row['Customer Name'] || row['Customer name'] || row.Customer || row['FULL NAME'] || row['Full Name'] || ''
+      ).trim();
+      if (!n) continue;
+      const key = n.toLowerCase();
+      if (seenNames.has(key)) continue;
+      seenNames.add(key);
+      uniqueNames.push(n);
+    }
+    // Chunk IN lookups to stay under parameter limits
+    for (let i = 0; i < uniqueNames.length; i += 80) {
+      const chunk = uniqueNames.slice(i, i + 80);
+      const placeholders = chunk.map(() => '?').join(',');
+      const found = await db.all(
+        `SELECT id, name, phone FROM customers WHERE LOWER(name) IN (${placeholders})`,
+        chunk.map((n) => n.toLowerCase())
+      ).catch(() => []);
+      for (const c of found || []) {
+        customerByName.set(String(c.name || '').toLowerCase(), { id: c.id, phone: c.phone });
+      }
+    }
+
     // Process each row sequentially. Key columns (any casing): id, name, phone, amount, paid/not paid.
     // All uploaded stock is created as uncollected (status 'ready').
     for (let index = 0; index < data.length; index++) {
@@ -2126,18 +2162,14 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
         missingRequiredRows++;
         skipped++;
         processed++;
-        if (processed === data.length) { sendResponse(); }
         continue;
       }
 
-      const normReceipt = await normalizeReceiptNumberForBranch(receiptId, branchId);
+      const normReceipt = await normalizeReceiptNumberForBranch(receiptId, branchId, branchPrefix);
       if (!normReceipt.ok) {
         errors.push(`Row ${index + 2}: ${normReceipt.error}`);
         skipped++;
         processed++;
-        if (processed === data.length) {
-          sendResponse();
-        }
         continue;
       }
       receiptId = normReceipt.receiptNumber;
@@ -2164,7 +2196,8 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
 
       // Find or create customer (phone optional — can be added later on Orders screen)
       try {
-        let customer = await db.get('SELECT id, phone FROM customers WHERE LOWER(name) = LOWER(?)', [customerName]);
+        const nameKey = customerName.toLowerCase();
+        let customer = customerByName.get(nameKey) || null;
         let customerId = customer ? customer.id : null;
         let customerPhoneAfter = phone || (customer ? customer.phone : '');
 
@@ -2180,15 +2213,20 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
             if (!customerId) {
               throw new Error('Could not read new customer id from database');
             }
+            customerByName.set(nameKey, { id: customerId, phone: phoneToStore });
           } catch (insertErr) {
-            errors.push(`Row ${index + 2}: Error creating customer - ${insertErr.message}`);
-            skipped++;
-            processed++;
-            if (processed === data.length) {
-              sendResponse();
-              return;
+            // Race / unique phone: try lookup again
+            const again = await db.get('SELECT id, phone FROM customers WHERE LOWER(name) = LOWER(?)', [customerName]).catch(() => null);
+            if (again?.id) {
+              customerId = again.id;
+              customerPhoneAfter = again.phone;
+              customerByName.set(nameKey, { id: again.id, phone: again.phone });
+            } else {
+              errors.push(`Row ${index + 2}: Error creating customer - ${insertErr.message}`);
+              skipped++;
+              processed++;
+              continue;
             }
-            continue;
           }
         } else if (phone && isPlaceholderPhone(customer.phone)) {
           try {
@@ -2210,9 +2248,9 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
                 [phone, customerId]
               );
               customerPhoneAfter = phone;
+              customerByName.set(nameKey, { id: customerId, phone });
             }
           } catch (updateErr) {
-            // Non-fatal: order can still import with placeholder phone
             console.warn(`Row ${index + 2}: Could not update placeholder phone - ${updateErr.message}`);
           }
         } else if (customer) {
@@ -2223,10 +2261,6 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
           errors.push(`Row ${index + 2}: Could not resolve customer for "${customerName}"`);
           skipped++;
           processed++;
-          if (processed === data.length) {
-            sendResponse();
-            return;
-          }
           continue;
         }
 
@@ -2247,24 +2281,14 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
           errors.push(`Row ${index + 2}: No service found and no default service available`);
           skipped++;
           processed++;
-          if (processed === data.length) {
-            sendResponse();
-            return;
-          }
           continue;
         }
 
-        // Check if order with this receipt number already exists
-        const existingOrder = await db.get('SELECT id FROM orders WHERE receipt_number = ?', [receiptId]);
-        
-        if (existingOrder) {
+        const receiptKey = String(receiptId).trim().toUpperCase();
+        if (existingReceipts.has(receiptKey)) {
           errors.push(`Row ${index + 2}: Order with receipt "${receiptId}" already exists`);
           skipped++;
           processed++;
-          if (processed === data.length) {
-            sendResponse();
-            return;
-          }
           continue;
         }
 
@@ -2272,39 +2296,44 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
         // order_date from receipt/CUST ID (printed day) so paid bulk rows do not inflate today's cash.
         // No transaction rows: "paid" reflects payment when receipt was issued, not cash taken at upload.
         try {
-          const result = await db.run(
+          await db.run(
             `INSERT INTO orders (receipt_number, customer_id, service_id, quantity, total_amount, paid_amount, payment_status, payment_method, status, order_date, estimated_collection_date, branch_id, created_at_branch_id)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?) RETURNING id`,
             [receiptId, customerId, serviceId, quantity, finalTotalAmount, paidAmount, paymentStatus, 'cash', orderDateIso, estimatedCollectionIso, branchId, branchId]
           );
-          
+
+          existingReceipts.add(receiptKey);
           processed++;
           imported++;
           if (isPlaceholderPhone(customerPhoneAfter)) importedWithoutPhone++;
-
         } catch (insertErr) {
           processed++;
-          errors.push(`Row ${index + 2}: Error creating order - ${insertErr.message}`);
+          // Unique violation → treat as already exists
+          if (/unique|duplicate/i.test(String(insertErr.message || ''))) {
+            existingReceipts.add(receiptKey);
+            errors.push(`Row ${index + 2}: Order with receipt "${receiptId}" already exists`);
+          } else {
+            errors.push(`Row ${index + 2}: Error creating order - ${insertErr.message}`);
+          }
           skipped++;
-        }
-
-        if (processed === data.length) {
-          sendResponse();
-          return;
         }
       } catch (rowErr) {
         errors.push(`Row ${index + 2}: Error processing row - ${rowErr.message}`);
         skipped++;
         processed++;
-        if (processed === data.length) {
-          sendResponse();
-          return;
-        }
       }
     }
+
+    if (!res.headersSent) {
+      sendResponse();
+    }
   } catch (err) {
-    fs.unlinkSync(filePath);
-    return res.status(500).json({ error: 'Error getting default service: ' + err.message });
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch (_) { /* ignore */ }
+    if (!res.headersSent) {
+      return res.status(500).json({ error: 'Error importing stock: ' + err.message });
+    }
   }
 });
 
