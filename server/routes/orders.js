@@ -2036,7 +2036,7 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
 
       // Primary format: id, name, phone, amount, paid (or payment_status)
       // Also accept common ledger headers: CUST ID, PHONE NO., AMOUNT (TZS), STATUS
-      const receiptId = String(
+      let receiptId = String(
         getVal(
           'id',
           'Id',
