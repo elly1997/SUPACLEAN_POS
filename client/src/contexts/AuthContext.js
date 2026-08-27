@@ -27,11 +27,33 @@ export const useAuth = () => {
   return context;
 };
 
+function readCachedSessionUser() {
+  try {
+    const cached = localStorage.getItem('sessionUser');
+    if (!cached) return null;
+    return JSON.parse(cached);
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeCachedSessionUser(userData) {
+  try {
+    if (userData) localStorage.setItem('sessionUser', JSON.stringify(userData));
+    else localStorage.removeItem('sessionUser');
+  } catch (e) {
+    console.warn('Could not cache session user', e);
+  }
+}
+
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [branch, setBranch] = useState(null);
+  const [sessionToken, setSessionToken] = useState(() => localStorage.getItem('sessionToken'));
+  const [user, setUser] = useState(() => (localStorage.getItem('sessionToken') ? readCachedSessionUser() : null));
+  const [branch, setBranch] = useState(() => {
+    const cached = localStorage.getItem('sessionToken') ? readCachedSessionUser() : null;
+    return cached?.branch ?? null;
+  });
   const [loading, setLoading] = useState(true);
-  const [sessionToken, setSessionToken] = useState(localStorage.getItem('sessionToken'));
   const [selectedBranchId, setSelectedBranchIdState] = useState(() => {
     try {
       const s = localStorage.getItem('selectedBranchId');
@@ -39,7 +61,7 @@ export const AuthProvider = ({ children }) => {
     } catch (_) { return null; }
   });
   const isLoggingInRef = useRef(false);
-  const userRef = useRef(null);
+  const userRef = useRef(user);
 
   const setSelectedBranch = useCallback((branchId) => {
     const id = branchId == null ? null : (typeof branchId === 'number' ? branchId : parseInt(branchId, 10));
@@ -67,16 +89,15 @@ export const AuthProvider = ({ children }) => {
     }
   }, [sessionToken]);
 
-  const verifySession = useCallback(async () => {
+  const verifySession = useCallback(async ({ allowCachedOnAuthFailure = true } = {}) => {
     // Skip verification if we're in the middle of logging in
     if (isLoggingInRef.current) {
       debugLog('⏸️ Skipping verifySession - login in progress');
       return;
     }
 
-    // Skip if user is already set
-    if (userRef.current) {
-      debugLog('⏸️ Skipping verifySession - user already set');
+    const token = localStorage.getItem('sessionToken');
+    if (!token) {
       setLoading(false);
       return;
     }
@@ -85,10 +106,12 @@ export const AuthProvider = ({ children }) => {
       debugLog('🔍 Verifying session...');
       const response = await api.get('/auth/verify');
       if (response.data.valid) {
-        debugLog('✅ Session valid:', response.data.user.username);
-        setUser(response.data.user);
-        setBranch(response.data.user.branch);
-        userRef.current = response.data.user;
+        const nextUser = response.data.user;
+        debugLog('✅ Session valid:', nextUser.username);
+        setUser(nextUser);
+        setBranch(nextUser.branch ?? null);
+        userRef.current = nextUser;
+        writeCachedSessionUser(nextUser);
         setLoading(false);
       } else {
         debugLog('❌ Session invalid');
@@ -96,37 +119,26 @@ export const AuthProvider = ({ children }) => {
       }
     } catch (error) {
       console.error('❌ Session verification failed:', error);
-      // Only logout on 401 when we have no cached user; otherwise keep using app with cached user
       if (!isLoggingInRef.current && error.response?.status === 401) {
-        try {
-          const cached = localStorage.getItem('sessionUser');
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            setUser(parsed);
-            setBranch(parsed.branch ?? null);
-            userRef.current = parsed;
-            setLoading(false);
-            debugLog('📴 Session re-check failed (401); using cached user so you can keep using the app.');
-            return;
-          }
-        } catch (e) {
-          console.warn('Could not restore cached user', e);
+        const parsed = allowCachedOnAuthFailure ? readCachedSessionUser() : null;
+        // Never keep a forced password-change gate from a dead/expired session
+        if (parsed && !parsed.mustChangePassword) {
+          setUser(parsed);
+          setBranch(parsed.branch ?? null);
+          userRef.current = parsed;
+          setLoading(false);
+          debugLog('📴 Session re-check failed (401); using cached user so you can keep using the app.');
+          return;
         }
-        debugLog('🔒 Logging out due to 401 (no cached user)');
+        debugLog('🔒 Logging out due to 401');
         logout();
       } else if (!isLoggingInRef.current) {
-        // Network/offline: restore user from cache so app works offline
-        try {
-          const cached = localStorage.getItem('sessionUser');
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            setUser(parsed);
-            setBranch(parsed.branch ?? null);
-            userRef.current = parsed;
-            debugLog('📴 Offline mode: using cached user', parsed.username);
-          }
-        } catch (e) {
-          console.warn('Could not restore cached user', e);
+        const parsed = readCachedSessionUser();
+        if (parsed) {
+          setUser(parsed);
+          setBranch(parsed.branch ?? null);
+          userRef.current = parsed;
+          debugLog('📴 Offline mode: using cached user', parsed.username);
         }
         setLoading(false);
       }
@@ -138,30 +150,25 @@ export const AuthProvider = ({ children }) => {
     userRef.current = user;
   }, [user]);
 
-  // Verify session when token is available (only on mount or when token changes)
+  // Always re-verify when a token exists so mustChangePassword stays accurate after refresh/deploy
   useEffect(() => {
-    // Don't verify during login
     if (isLoggingInRef.current) {
       debugLog('⏸️ useEffect: Skipping - login in progress');
       return;
     }
-    
-    // Use ref to check current user state (avoid stale closure)
-    if (sessionToken && !userRef.current) {
-      debugLog('🔍 useEffect: Verifying session (token exists, no user)');
-      verifySession();
-    } else if (!sessionToken) {
+
+    if (sessionToken) {
+      debugLog('🔍 useEffect: Verifying session for token');
+      verifySession({ allowCachedOnAuthFailure: true });
+    } else {
       debugLog('🚫 useEffect: No token, clearing state');
       setUser(null);
       setBranch(null);
       userRef.current = null;
       setLoading(false);
-    } else if (userRef.current) {
-      // User already set (e.g., from login), just ensure loading is false
-      debugLog('✅ useEffect: User already set, setting loading to false');
-      setLoading(false);
     }
-  }, [sessionToken]); // Remove verifySession from deps to prevent loops - use refs inside
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionToken]);
 
   const login = async (username, password) => {
     // Set flag to prevent verifySession from running during login
@@ -183,11 +190,7 @@ export const AuthProvider = ({ children }) => {
         // when route changes happen quickly after login.
         setSessionToken(token);
         localStorage.setItem('sessionToken', token);
-        try {
-          localStorage.setItem('sessionUser', JSON.stringify(userData));
-        } catch (e) {
-          console.warn('Could not cache user for offline', e);
-        }
+        writeCachedSessionUser(userData);
 
         // Set user and branch (this updates userRef via useEffect)
         setUser(userData);
@@ -316,9 +319,7 @@ export const AuthProvider = ({ children }) => {
     const next = { ...user, mustChangePassword: false };
     setUser(next);
     userRef.current = next;
-    try {
-      localStorage.setItem('sessionUser', JSON.stringify(next));
-    } catch (e) {}
+    writeCachedSessionUser(next);
   };
 
   const value = {
