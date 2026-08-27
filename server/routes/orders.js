@@ -11,6 +11,7 @@ const {
   parseReceiptNumber,
   getBranchReceiptPrefix,
   buildPrefixedReceiptNumber,
+  normalizeReceiptNumberForBranch,
   allocateBranchReceiptSequence,
   generateReceiptNumberAsync,
 } = require('../utils/receipt');
