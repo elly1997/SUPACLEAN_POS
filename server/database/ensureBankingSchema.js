@@ -42,6 +42,8 @@ async function ensure() {
          AND reconciled_closing_balance IS NULL`,
       []
     );
+    // Unpaid order balances (AR) for the order date — shown as Credit Sales on daily closing report
+    await db.run('ALTER TABLE daily_cash_summaries ADD COLUMN IF NOT EXISTS credit_sales NUMERIC(14,2) NOT NULL DEFAULT 0', []);
     console.log('✅ Banking schema (bank_accounts + expenses bank deposit) ready');
   } catch (err) {
     console.error('❌ Banking schema migration error:', err.message);

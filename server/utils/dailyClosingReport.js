@@ -22,7 +22,10 @@ function buildDailyClosingReportText(row, branchName, cashierName, ymd, brand = 
   const bookSales = num(row.book_sales);
   const cardSales = num(row.card_sales);
   const mobileSales = num(row.mobile_money_sales);
-  const totalSales = cashSales + bookSales + cardSales + mobileSales;
+  // Credit sales = unpaid AR on orders created today (not collections).
+  const creditSales = num(row.credit_sales);
+  // Total sales = how today's orders were settled (cash/digital/credit). Collections stay separate.
+  const totalSales = cashSales + mobileSales + cardSales + creditSales;
   const expensesCash = num(row.expenses_from_cash);
   const expensesBank = num(row.expenses_from_bank);
   const expensesMpesa = num(row.expenses_from_mpesa);
@@ -61,7 +64,7 @@ function buildDailyClosingReportText(row, branchName, cashierName, ymd, brand = 
     `• Cash Sales: TZS ${fmt(cashSales)}`,
     `• M-Pesa: TZS ${fmt(mobileSales)}`,
     `• Bank: TZS ${fmt(cardSales)}`,
-    `• Credit Sales: TZS ${fmt(0)}`,
+    `• Credit Sales: TZS ${fmt(creditSales)}`,
     `*Total Sales: TZS ${fmt(totalSales)}*`,
     '',
     '📥 *CREDIT COLLECTIONS*',
@@ -120,7 +123,19 @@ async function deliverDirectorDailyReport(row, branchName, cashierName, ymd) {
     };
   }
 
-  const report = buildDailyClosingReportText(row, branchName, cashierName, ymd, brand);
+  // Always resolve Credit Sales from unpaid order balances for this day
+  // (covers older reconciled rows that still store 0 / missing credit_sales).
+  let reportRow = row;
+  try {
+    const { calculateCreditSales } = require('./cashValidation');
+    const creditSales = await calculateCreditSales(ymd, row?.branch_id);
+    reportRow = { ...row, credit_sales: creditSales };
+  } catch (err) {
+    console.error('Error calculating credit sales for daily closing report:', err.message);
+    reportRow = { ...row, credit_sales: num(row?.credit_sales) };
+  }
+
+  const report = buildDailyClosingReportText(reportRow, branchName, cashierName, ymd, brand);
   const { sendWhatsApp, formatPhoneNumber } = require('./whatsapp');
 
   try {

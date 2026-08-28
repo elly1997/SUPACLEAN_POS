@@ -72,6 +72,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
     book_sales: num(computed.book_sales),
     card_sales: num(computed.card_sales),
     mobile_money_sales: num(computed.mobile_money_sales),
+    credit_sales: num(computed.credit_sales),
     bank_deposits: num(computed.bank_deposits),
     bank_payments: num(computed.bank_payments),
     mpesa_received: num(computed.mpesa_received),
@@ -96,6 +97,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
         book_sales = ?,
         card_sales = ?,
         mobile_money_sales = ?,
+        credit_sales = ?,
         bank_deposits = ?,
         bank_payments = ?,
         mpesa_received = ?,
@@ -117,6 +119,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
         payload.book_sales,
         payload.card_sales,
         payload.mobile_money_sales,
+        payload.credit_sales,
         payload.bank_deposits,
         payload.bank_payments,
         payload.mpesa_received,
@@ -137,10 +140,10 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
   await db.run(
     `INSERT INTO daily_cash_summaries (
       date, branch_id, opening_balance, opening_cash_declared, opening_variance, cash_sales, book_sales, card_sales, mobile_money_sales,
-      bank_deposits, bank_payments, mpesa_received, mpesa_paid,
+      credit_sales, bank_deposits, bank_payments, mpesa_received, mpesa_paid,
       expenses_from_cash, expenses_from_bank, expenses_from_mpesa,
       cash_in_hand, closing_balance, notes, is_reconciled
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
     [
       day,
       branchId,
@@ -151,6 +154,7 @@ async function upsertDailySummaryFromComputed(date, branchId, computed, notes = 
       payload.book_sales,
       payload.card_sales,
       payload.mobile_money_sales,
+      payload.credit_sales,
       payload.bank_deposits,
       payload.bank_payments,
       payload.mpesa_received,
@@ -194,12 +198,18 @@ async function computeAndPersistDailySummary(date, branchId, force = false) {
   `, [day, branchId]);
   const cashSales = num(cashSalesRow[0]?.cash_sales);
 
-  const { calculateBookSales } = require('../utils/cashValidation');
+  const { calculateBookSales, calculateCreditSales } = require('../utils/cashValidation');
   let bookSales = 0;
+  let creditSales = 0;
   try {
     bookSales = await calculateBookSales(day, branchId);
   } catch (err) {
     console.error('Error calculating book sales for daily summary:', err);
+  }
+  try {
+    creditSales = await calculateCreditSales(day, branchId);
+  } catch (err) {
+    console.error('Error calculating credit sales for daily summary:', err);
   }
 
   const calculated = await calculateRemaining(
@@ -208,7 +218,8 @@ async function computeAndPersistDailySummary(date, branchId, force = false) {
     cashSales,
     bookSales,
     branchId,
-    existingRow?.opening_cash_declared
+    existingRow?.opening_cash_declared,
+    creditSales
   );
   return upsertDailySummaryFromComputed(day, branchId, calculated, null, force);
 }
@@ -571,6 +582,7 @@ function emptyDailySummary(date, allBranches = false) {
     book_sales: 0,
     card_sales: 0,
     mobile_money_sales: 0,
+    credit_sales: 0,
     bank_deposits: 0,
     bank_payments: 0,
     mpesa_received: 0,
@@ -594,6 +606,7 @@ function consolidateSummaries(results, date) {
     book_sales: sum('book_sales'),
     card_sales: sum('card_sales'),
     mobile_money_sales: sum('mobile_money_sales'),
+    credit_sales: sum('credit_sales'),
     bank_deposits: sum('bank_deposits'),
     bank_payments: sum('bank_payments'),
     mpesa_received: sum('mpesa_received'),
@@ -607,7 +620,7 @@ function consolidateSummaries(results, date) {
   };
 }
 
-async function calculateRemaining(date, openingBalance, cashSales, bookSales, branchId, declaredOpeningCash = null) {
+async function calculateRemaining(date, openingBalance, cashSales, bookSales, branchId, declaredOpeningCash = null, creditSales = 0) {
   const { calculateMobileMoneyReceived, calculateCardReceived, calculateBankReceived } = require('../utils/cashValidation');
 
   // Card, M-Pesa, and bank from transactions (advance + full payments on this date)
@@ -672,6 +685,7 @@ async function calculateRemaining(date, openingBalance, cashSales, bookSales, br
     book_sales: bookSales,
     card_sales: cardSales,
     mobile_money_sales: mobileMoneySales,
+    credit_sales: num(creditSales),
     bank_deposits: bankDeposits,
     bank_payments: bankPaymentsFromTx,
     mpesa_received: mobileMoneySales,
@@ -730,13 +744,20 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
     const cashSales = num(cashSalesRow[0]?.cash_sales);
     
     // Book sales = cash received from receive-payment / collection (daily sales report)
-    const { calculateBookSales } = require('../utils/cashValidation');
+    const { calculateBookSales, calculateCreditSales } = require('../utils/cashValidation');
     let bookSales = 0;
+    let creditSales = 0;
     try {
       bookSales = await calculateBookSales(today, branchId);
     } catch (err) {
       console.error('Error calculating book sales:', err);
       bookSales = 0;
+    }
+    try {
+      creditSales = await calculateCreditSales(today, branchId);
+    } catch (err) {
+      console.error('Error calculating credit sales:', err);
+      creditSales = 0;
     }
     
     // Card and M-Pesa from transactions only (includes advance + full payments on this date)
@@ -797,6 +818,7 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
           book_sales = ?,
           card_sales = ?,
           mobile_money_sales = ?,
+          credit_sales = ?,
           bank_deposits = ?,
           bank_payments = ?,
           mpesa_received = ?,
@@ -810,7 +832,7 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
           updated_at = CURRENT_TIMESTAMP
         WHERE date = ? AND branch_id = ?`,
         [openingBalance, declaredOpening, openingVariance, cashSales, bookSales, cardSales, mobileMoneySales,
-         bankDepositsAmount, bankPayments, mpesaReceived, mpesaPaid,
+         creditSales, bankDepositsAmount, bankPayments, mpesaReceived, mpesaPaid,
          expensesFromCash, expensesFromBank, expensesFromMpesa,
          cashInHand, closingBalance, notes || null, today, branchId]
       );
@@ -822,13 +844,13 @@ router.post('/daily', requireBranchAccess(), requirePermission('canManageCash'),
       await db.run(
         `INSERT INTO daily_cash_summaries (
           date, branch_id, opening_balance, opening_cash_declared, opening_variance, cash_sales, book_sales, card_sales, mobile_money_sales,
-          bank_deposits, bank_payments, mpesa_received, mpesa_paid,
+          credit_sales, bank_deposits, bank_payments, mpesa_received, mpesa_paid,
           expenses_from_cash, expenses_from_bank, expenses_from_mpesa,
           cash_in_hand, closing_balance, notes
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
         [today, branchId, openingBalance, declaredOpening, openingVariance, cashSales, bookSales, cardSales, mobileMoneySales,
-         bankDepositsAmount, bankPayments, mpesaReceived, mpesaPaid,
+         creditSales, bankDepositsAmount, bankPayments, mpesaReceived, mpesaPaid,
          expensesFromCash, expensesFromBank, expensesFromMpesa,
          cashInHand, closingBalance, notes || null]
       );
@@ -1120,6 +1142,7 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
           SUM(COALESCE(book_sales, 0)) as book_sales,
           SUM(COALESCE(card_sales, 0)) as card_sales,
           SUM(COALESCE(mobile_money_sales, 0)) as mobile_money_sales,
+          SUM(COALESCE(credit_sales, 0)) as credit_sales,
           SUM(COALESCE(bank_deposits, 0)) as bank_deposits,
           SUM(COALESCE(expenses_from_cash, 0)) as expenses_from_cash,
           SUM(COALESCE(closing_balance, 0)) as closing_balance,
@@ -1138,6 +1161,7 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
         book_sales: r.book_sales,
         card_sales: r.card_sales,
         mobile_money_sales: r.mobile_money_sales,
+        credit_sales: r.credit_sales,
         bank_deposits: r.bank_deposits,
         expenses_from_cash: r.expenses_from_cash,
         closing_balance: r.closing_balance,

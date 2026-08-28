@@ -120,6 +120,7 @@ function initializeTables() {
     book_sales REAL DEFAULT 0,
     card_sales REAL DEFAULT 0,
     mobile_money_sales REAL DEFAULT 0,
+    credit_sales REAL DEFAULT 0,
     bank_deposits REAL DEFAULT 0,
     bank_payments REAL DEFAULT 0,
     mpesa_received REAL DEFAULT 0,
@@ -683,6 +684,13 @@ function migrateDatabase() {
                    WHERE COALESCE(is_reconciled, 0) = 1 AND reconciled_closing_balance IS NULL`,
                   () => {}
                 );
+              }
+            });
+          }
+          if (!dcsColumnNames.includes('credit_sales')) {
+            db.run("ALTER TABLE daily_cash_summaries ADD COLUMN credit_sales REAL DEFAULT 0", (alterErr) => {
+              if (!alterErr) {
+                console.log('✅ Added credit_sales column to daily_cash_summaries');
               }
             });
           }

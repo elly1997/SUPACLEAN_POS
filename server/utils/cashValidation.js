@@ -428,12 +428,56 @@ async function listBookSalesCashTransactionsForDate(date, branchId) {
   return rows || [];
 }
 
+/**
+ * Credit sales (accounts receivable) created on this order date:
+ * unpaid balance on active orders (not_paid / advance / any remaining balance).
+ * Includes POS unpaid orders and stock-sheet rows uploaded as "Not paid".
+ */
+async function calculateCreditSales(date, branchId = null) {
+  try {
+    if (branchId == null) {
+      const row = await db.get(
+        `SELECT COALESCE(SUM(
+           CASE
+             WHEN COALESCE(o.total_amount, 0) > COALESCE(o.paid_amount, 0)
+             THEN COALESCE(o.total_amount, 0) - COALESCE(o.paid_amount, 0)
+             ELSE 0
+           END
+         ), 0) AS credit_sales
+         FROM orders o
+         WHERE DATE(o.order_date) = ?
+           ${sqlActiveOrdersOnly('o')}`,
+        [date]
+      );
+      return Number(row?.credit_sales) || 0;
+    }
+    const row = await db.get(
+      `SELECT COALESCE(SUM(
+         CASE
+           WHEN COALESCE(o.total_amount, 0) > COALESCE(o.paid_amount, 0)
+           THEN COALESCE(o.total_amount, 0) - COALESCE(o.paid_amount, 0)
+           ELSE 0
+         END
+       ), 0) AS credit_sales
+       FROM orders o
+       WHERE DATE(o.order_date) = ?
+         AND o.branch_id = ?
+         ${sqlActiveOrdersOnly('o')}`,
+      [date, branchId]
+    );
+    return Number(row?.credit_sales) || 0;
+  } catch (err) {
+    throw err;
+  }
+}
+
 module.exports = {
   validateCashBalance,
   calculateBookSales,
   calculateMobileMoneyReceived,
   calculateCardReceived,
   calculateBankReceived,
+  calculateCreditSales,
   getPaymentHistory,
   listCashSalesOrdersForDate,
   listBookSalesCashTransactionsForDate
