@@ -173,7 +173,10 @@ async function sendNotification(options) {
 
   await Promise.all(sendPromises);
 
-  const success = (results.sms?.success || results.whatsapp?.success) || false;
+  const smsWasSuppressed = results.sms?.smsSuppressed;
+  const smsSuccess = (results.sms?.success && !smsWasSuppressed) || false;
+  const whatsappSuccess = results.whatsapp?.success || false;
+  const success = smsSuccess || whatsappSuccess;
   
   return {
     success,
@@ -421,6 +424,10 @@ function smsWasSentByCarrier(smsResult) {
 async function sendSmsWithWhatsAppFallback(phone, message, options = {}) {
   const smsResult = await sendSMS(phone, message, options);
   if (smsResult && smsResult.skippedDuplicate) {
+    return { ...smsResult, channel: null };
+  }
+  if (smsResult && smsResult.smsSuppressed) {
+    // Admin globally disabled SMS. Don't send the fallback WhatsApp message either.
     return { ...smsResult, channel: null };
   }
   if (smsWasSentByCarrier(smsResult)) {

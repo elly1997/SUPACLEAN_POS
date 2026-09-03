@@ -24,6 +24,7 @@ const MonthlyBilling = lazy(() => import(/* webpackChunkName: "page-billing" */ 
 const CleaningServices = lazy(() => import(/* webpackChunkName: "page-cleaning" */ './pages/CleaningServices'));
 const Payroll = lazy(() => import(/* webpackChunkName: "page-payroll" */ './pages/Payroll'));
 const Terms = lazy(() => import(/* webpackChunkName: "page-terms" */ './pages/Terms'));
+const AdminSmsMarketing = lazy(() => import(/* webpackChunkName: "page-admin-sms-marketing" */ './pages/AdminSmsMarketing'));
 
 class AppErrorBoundary extends React.Component {
   state = { hasError: false, error: null };
@@ -137,6 +138,7 @@ function App() {
                         <Route path="/cleaning-services" element={<CleaningServices />} />
                         <Route path="/admin/branches" element={<AdminBranches />} />
                         <Route path="/admin/banking" element={<AdminBanking />} />
+                        <Route path="/admin/sms-marketing" element={<AdminSmsMarketing />} />
                         <Route path="*" element={<Navigate to="/dashboard" replace />} />
                       </Routes>
                     </AppLayout>

@@ -34,6 +34,9 @@ function computeDedupeKey(options = {}) {
   if (t === 'balance_reminder' && customerId != null) {
     return `bal:${customerId}`;
   }
+  if (t === 'google_review' && customerId != null) {
+    return `review:${customerId}`;
+  }
   return null;
 }
 

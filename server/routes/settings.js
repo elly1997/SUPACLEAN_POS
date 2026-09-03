@@ -42,6 +42,15 @@ router.get('/:key', async (req, res) => {
 router.put('/:key', requireRole('admin'), async (req, res) => {
   const { key } = req.params;
   const { value, description } = req.body;
+
+  // SMS sending control is managed via /api/admin/sms-marketing (admin-only feature).
+  // Prevent generic settings writes from bypassing that workflow.
+  if (typeof key === 'string' && /^sms_/i.test(key)) {
+    return res.status(403).json({
+      error: 'SMS settings are managed under /api/admin/sms-marketing',
+    });
+  }
+
   const allowedUpsertKeys = [
     'manager_whatsapp_number',
     'business_name',

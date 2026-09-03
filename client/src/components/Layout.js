@@ -165,6 +165,7 @@ const Layout = ({ children }) => {
       items: [
         { path: '/admin/branches', label: 'Branches', icon: '🏢', feature: 'admin' },
         { path: '/admin/banking', label: 'Banking', icon: '🏦', feature: 'admin' },
+        { path: '/admin/sms-marketing', label: 'SMS Marketing', icon: '📱', feature: 'admin' },
       ]
     });
   }

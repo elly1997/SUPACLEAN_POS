@@ -320,6 +320,12 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageCustomers'
   const { id } = req.params;
   const { name, phone, email, address, tags, sms_notifications_enabled } = req.body;
 
+  // SMS deactivation is an admin-only capability.
+  // This prevents branch managers from disabling customer SMS notifications.
+  if (sms_notifications_enabled !== undefined && req.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admins can change SMS notification settings for customers.' });
+  }
+
   // Convert tags array to comma-separated string if it's an array
   const tagsString = Array.isArray(tags) ? tags.join(',') : (tags || '');
 
@@ -567,6 +573,18 @@ router.post('/:id/send-balance-reminder', async (req, res) => {
         result
       });
     }
+
+    // Global SMS suppression (don’t treat as a generic failure).
+    if (result?.channels?.sms?.smsSuppressed && !result?.channels?.whatsapp?.success) {
+      return res.json({
+        message: 'SMS sending is globally disabled by admin',
+        channel: null,
+        sent: false,
+        sms_suppressed: true,
+        result
+      });
+    }
+
     if (result.success) {
       res.json({
         message: 'Balance reminder sent successfully',

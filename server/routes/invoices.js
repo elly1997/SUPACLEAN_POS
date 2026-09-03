@@ -148,6 +148,16 @@ router.post('/:id/send-notice', authenticate, requireBranchAccess(), async (req,
     };
 
     const result = await sendInvoiceReminder(invoice, customer, channels, { useShort: useShort === true });
+    if (result?.channels?.sms?.smsSuppressed && !result?.channels?.whatsapp?.success) {
+      return res.json({
+        success: true,
+        message: 'SMS sending is globally disabled by admin',
+        channels: result.channels,
+        preview: result.message,
+        sent: false,
+        sms_suppressed: true,
+      });
+    }
     if (!result.success && result.error) {
       return res.status(400).json({ error: result.error, channels: result.channels });
     }

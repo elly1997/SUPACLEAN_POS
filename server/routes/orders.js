@@ -661,6 +661,16 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), a
       receiptNumber: String(receiptNumber).trim()
     });
 
+    if (result?.smsSuppressed) {
+      return res.json({
+        success: true,
+        sent: false,
+        channel: null,
+        preview: message,
+        message: 'SMS sending is globally disabled by admin'
+      });
+    }
+
     if (!result.success) {
       return res.status(500).json({ error: result.error || 'Failed to send', sent: false });
     }
@@ -1504,6 +1514,10 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
               }).then(result => {
                 if (result.skippedDuplicate) {
                   console.log(`📱 Ready SMS skipped (duplicate window) for receipt ${orderWithCustomer.receipt_number}`);
+                } else if (result?.smsSuppressed) {
+                  console.log(
+                    `📱 Ready SMS suppressed (globally disabled) for receipt ${orderWithCustomer.receipt_number}`
+                  );
                 } else if (result.success) {
                   console.log(`✅ Ready notification sent via ${result.channel || 'sms'} to ${orderWithCustomer.customer_phone} for receipt ${orderWithCustomer.receipt_number}`);
                 } else {
@@ -2456,6 +2470,16 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
       });
     }
 
+    if (result?.smsSuppressed) {
+      return res.json({
+        message: 'SMS sending is globally disabled by admin',
+        channel: null,
+        notification_id: result.notificationId,
+        sent: false,
+        sms_suppressed: true
+      });
+    }
+
     if (result.success) {
       res.json({ 
         message: 'Notification sent successfully',
@@ -2485,6 +2509,15 @@ router.post('/:id/send-reminder', requireBranchAccess(), requirePermission('canM
     if (result.success) {
       res.json({
         message: 'Reminder sent successfully',
+        result
+      });
+    } else if (result?.channels?.sms?.smsSuppressed && !result?.channels?.whatsapp?.success) {
+      // Controlled outcome: admin globally suppressed SMS.
+      res.json({
+        message: 'SMS sending is globally disabled by admin',
+        channel: null,
+        sent: false,
+        sms_suppressed: true,
         result
       });
     } else {

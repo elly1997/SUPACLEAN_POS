@@ -6,6 +6,43 @@ const { computeDedupeKey, hasRecentDuplicate } = require('./smsDedupe');
 // This is a template - you'll need to integrate with a Tanzanian SMS provider
 // Common providers: Africa's Talking, Twilio (Tanzania), SMS Gateway API
 
+let smsSendingEnabledCache = { value: true, fetchedAtMs: 0 };
+
+async function dbGetAsync(sql, params = []) {
+  // PostgreSQL adapter: returns a Promise.
+  const ret = db.get(sql, params);
+  if (ret && typeof ret.then === 'function') return ret;
+
+  // SQLite adapter: callback style.
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
+
+async function isGlobalSmsSendingEnabled() {
+  const now = Date.now();
+  // Reduce DB reads during loops (e.g. sending reminders).
+  if (now - smsSendingEnabledCache.fetchedAtMs < 5000) return smsSendingEnabledCache.value;
+
+  try {
+    const row = await dbGetAsync('SELECT setting_value FROM settings WHERE setting_key = ?', ['sms_sending_enabled']);
+    const raw = row?.setting_value;
+    const enabled =
+      raw == null
+        ? true
+        : !['false', '0', 'disabled', 'disable', 'off'].includes(String(raw).toLowerCase().trim());
+    smsSendingEnabledCache = { value: enabled, fetchedAtMs: now };
+    return enabled;
+  } catch (err) {
+    // Fail open: if the settings table lookup fails, don't accidentally stop SMS.
+    console.error('SMS global switch lookup failed:', err?.message || err);
+    return true;
+  }
+}
+
 async function sendSMS(phone, message, options = {}) {
   const { customerId, orderId, notificationType = 'ready' } = options;
 
@@ -37,6 +74,32 @@ async function sendSMS(phone, message, options = {}) {
   const formattedPhone = cleanPhone.startsWith('255') 
     ? `+${cleanPhone}` 
     : `+255${cleanPhone.slice(-9)}`;
+
+  const globallyEnabled = await isGlobalSmsSendingEnabled();
+  if (!globallyEnabled) {
+    // Track the deliberate suppression (helps admin debugging).
+    let suppressedNotificationId = null;
+    if (customerId) {
+      try {
+        const insertResult = await db.run(
+          `INSERT INTO notifications (customer_id, order_id, notification_type, channel, recipient, message, status, dedupe_key)
+           VALUES (?, ?, ?, 'sms', ?, ?, 'disabled', ?)`,
+          [customerId, orderId || null, notificationType, formattedPhone, message, dedupeKey || null]
+        );
+        suppressedNotificationId = insertResult?.row?.id ?? insertResult?.lastID ?? null;
+      } catch (insertErr) {
+        console.error('SMS (suppressed): failed to create notification record:', insertErr.message);
+      }
+    }
+
+    return {
+      success: true,
+      smsSuppressed: true,
+      skippedDisabled: true,
+      message: 'SMS suppressed (globally disabled)',
+      notificationId: suppressedNotificationId,
+    };
+  }
 
   // Create notification record (await so we have notificationId for status updates, especially on PostgreSQL)
   let notificationId = null;

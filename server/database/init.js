@@ -190,6 +190,36 @@ function initializeTables() {
     FOREIGN KEY (order_id) REFERENCES orders(id)
   )`);
 
+  // SMS marketing templates (admin-managed message templates)
+  db.run(`CREATE TABLE IF NOT EXISTS sms_marketing_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    message TEXT NOT NULL,
+    is_active INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // SMS marketing campaign runs (one row per send action)
+  db.run(`CREATE TABLE IF NOT EXISTS sms_marketing_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    template_id INTEGER NOT NULL,
+    audience_tags TEXT,
+    audience_all INTEGER DEFAULT 0,
+    recipient_count INTEGER DEFAULT 0,
+    sent_count INTEGER DEFAULT 0,
+    suppressed_count INTEGER DEFAULT 0,
+    skipped_duplicate_count INTEGER DEFAULT 0,
+    failed_count INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'draft',
+    dry_run INTEGER DEFAULT 0,
+    created_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (template_id) REFERENCES sms_marketing_templates(id)
+  )`);
+
   // Loyalty Points table
   db.run(`CREATE TABLE IF NOT EXISTS loyalty_points (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -896,7 +926,8 @@ function insertDefaultSettings() {
     { key: 'express_next_day_multiplier', value: '3', description: 'Express next-day delivery multiplier (3x = 200% surcharge)' },
     { key: 'express_same_day_hours', value: '8', description: 'Same-day delivery time in hours (< 8HRS)' },
     { key: 'express_next_day_hours', value: '3', description: 'Next-day delivery time in hours (< 3HRS)' },
-    { key: 'high_season_mode', value: 'false', description: 'High season mode - adjusts delivery to 24hrs working hours' }
+    { key: 'high_season_mode', value: 'false', description: 'High season mode - adjusts delivery to 24hrs working hours' },
+    { key: 'sms_sending_enabled', value: 'true', description: 'Globally allow SMS sending to customers' }
   ];
 
   const stmt = db.prepare(`INSERT OR IGNORE INTO settings (setting_key, setting_value, description) 
