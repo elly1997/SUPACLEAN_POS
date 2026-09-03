@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api/api';
-import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/useToast';
 import Loader from '../components/Loader';
 
@@ -9,7 +8,6 @@ function formatBool(b) {
 }
 
 const AdminSmsMarketing = () => {
-  const { user } = useAuth();
   const { showToast, ToastContainer } = useToast();
 
   const [loading, setLoading] = useState(true);
@@ -290,7 +288,7 @@ const AdminSmsMarketing = () => {
               </div>
 
               <div style={{ color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.5 }}>
-                Supported placeholders: `{{name}}`, `{{customer_name}}`
+                {`Supported placeholders: {{name}}, {{customer_name}}`}
               </div>
             </div>
           </div>
