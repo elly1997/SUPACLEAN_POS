@@ -429,41 +429,63 @@ async function listBookSalesCashTransactionsForDate(date, branchId) {
 }
 
 /**
- * Credit sales (accounts receivable) created on this order date:
- * unpaid balance on active orders (not_paid / advance / any remaining balance).
- * Includes POS unpaid orders and stock-sheet rows uploaded as "Not paid".
+ * Credit sales (accounts receivable) for a closing date.
+ *
+ * Rules:
+ * - payment_status = not_paid → full total_amount (customer owes everything)
+ * - payment_status = advance  → remaining balance (total - paid)
+ * - any other open balance    → remaining balance (defensive)
+ *
+ * Attribution day (so stock uploads count on the day they are received into POS):
+ * - order_date = closing day (normal POS / receipt day), OR
+ * - created_at = closing day when receipt order_date is a different day
+ *   (stock sheet uploaded today with older CUST ID / receipt dates)
  */
+function creditSalesAmountSql(alias = 'o') {
+  return `CASE
+    WHEN LOWER(TRIM(COALESCE(${alias}.payment_status, ''))) = 'not_paid'
+      THEN COALESCE(${alias}.total_amount, 0)
+    WHEN LOWER(TRIM(COALESCE(${alias}.payment_status, ''))) = 'advance'
+      THEN GREATEST(COALESCE(${alias}.total_amount, 0) - COALESCE(${alias}.paid_amount, 0), 0)
+    WHEN COALESCE(${alias}.total_amount, 0) > COALESCE(${alias}.paid_amount, 0)
+      AND LOWER(TRIM(COALESCE(${alias}.payment_status, ''))) NOT IN ('paid_full', 'voided')
+      THEN COALESCE(${alias}.total_amount, 0) - COALESCE(${alias}.paid_amount, 0)
+    ELSE 0
+  END`;
+}
+
+function creditSalesDayFilterSql(alias = 'o') {
+  // Match calendar day the same way cash_sales does (DATE(...)=day), plus same-day intake.
+  return `(
+    DATE(${alias}.order_date) = ?::date
+    OR (
+      DATE(${alias}.created_at) = ?::date
+      AND DATE(${alias}.order_date) IS DISTINCT FROM ?::date
+    )
+  )`;
+}
+
 async function calculateCreditSales(date, branchId = null) {
   try {
+    const amountSql = creditSalesAmountSql('o');
+    const daySql = creditSalesDayFilterSql('o');
     if (branchId == null) {
       const row = await db.get(
-        `SELECT COALESCE(SUM(
-           CASE
-             WHEN COALESCE(o.total_amount, 0) > COALESCE(o.paid_amount, 0)
-             THEN COALESCE(o.total_amount, 0) - COALESCE(o.paid_amount, 0)
-             ELSE 0
-           END
-         ), 0) AS credit_sales
+        `SELECT COALESCE(SUM(${amountSql}), 0) AS credit_sales
          FROM orders o
-         WHERE DATE(o.order_date) = ?
+         WHERE ${daySql}
            ${sqlActiveOrdersOnly('o')}`,
-        [date]
+        [date, date, date]
       );
       return Number(row?.credit_sales) || 0;
     }
     const row = await db.get(
-      `SELECT COALESCE(SUM(
-         CASE
-           WHEN COALESCE(o.total_amount, 0) > COALESCE(o.paid_amount, 0)
-           THEN COALESCE(o.total_amount, 0) - COALESCE(o.paid_amount, 0)
-           ELSE 0
-         END
-       ), 0) AS credit_sales
+      `SELECT COALESCE(SUM(${amountSql}), 0) AS credit_sales
        FROM orders o
-       WHERE DATE(o.order_date) = ?
+       WHERE ${daySql}
          AND o.branch_id = ?
          ${sqlActiveOrdersOnly('o')}`,
-      [date, branchId]
+      [date, date, date, branchId]
     );
     return Number(row?.credit_sales) || 0;
   } catch (err) {

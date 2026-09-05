@@ -929,12 +929,19 @@ router.post('/reconcile/:date', requireBranchAccess(), requirePermission('canRec
       console.error('Failed to notify reconcile to admin inbox:', inboxErr.message);
     }
 
-    const delivery = await deliverDirectorDailyReport(row, branchName, reconciled_by || 'Cashier', ymd);
+    const delivery = await deliverDirectorDailyReport(
+      row,
+      branchName,
+      reconciled_by || 'Cashier',
+      ymd,
+      branchId
+    );
 
     res.json({
       ...row,
       branch_id: branchId,
       branch_name: branchName,
+      credit_sales: delivery.credit_sales != null ? delivery.credit_sales : row.credit_sales,
       report_sent: delivery.report_sent,
       report_text: delivery.report_text || undefined,
       director_phone_wa: delivery.director_phone_wa || undefined,
@@ -977,12 +984,13 @@ router.post('/send-report/:date', requireBranchAccess(), requirePermission('canR
     const cashierName =
       req.body?.sent_by || req.body?.reconciled_by || req.user?.fullName || req.user?.username || 'Cashier';
 
-    const delivery = await deliverDirectorDailyReport(row, branchName, cashierName, ymd);
+    const delivery = await deliverDirectorDailyReport(row, branchName, cashierName, ymd, branchId);
 
     res.json({
       ...row,
       branch_id: branchId,
       branch_name: branchName,
+      credit_sales: delivery.credit_sales != null ? delivery.credit_sales : row.credit_sales,
       report_sent: delivery.report_sent,
       report_text: delivery.report_text || undefined,
       director_phone_wa: delivery.director_phone_wa || undefined,

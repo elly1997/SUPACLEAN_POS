@@ -22,7 +22,7 @@ function buildDailyClosingReportText(row, branchName, cashierName, ymd, brand = 
   const bookSales = num(row.book_sales);
   const cardSales = num(row.card_sales);
   const mobileSales = num(row.mobile_money_sales);
-  // Credit sales = unpaid AR on orders created today (not collections).
+  // Credit sales = NOT PAID (full amount) + advance remaining AR for this day.
   const creditSales = num(row.credit_sales);
   // Total sales = how today's orders were settled (cash/digital/credit). Collections stay separate.
   const totalSales = cashSales + mobileSales + cardSales + creditSales;
@@ -110,7 +110,7 @@ async function getDirectorWhatsAppNumber() {
   return phone || null;
 }
 
-async function deliverDirectorDailyReport(row, branchName, cashierName, ymd) {
+async function deliverDirectorDailyReport(row, branchName, cashierName, ymd, branchId = null) {
   const { getBrandSettings } = require('./brandSettings');
   const brand = await getBrandSettings();
   const directorPhone = await getDirectorWhatsAppNumber();
@@ -123,31 +123,54 @@ async function deliverDirectorDailyReport(row, branchName, cashierName, ymd) {
     };
   }
 
-  // Always resolve Credit Sales from unpaid order balances for this day
+  const effectiveBranchId = branchId != null ? branchId : row?.branch_id;
+
+  // Always resolve Credit Sales from NOT PAID / advance AR for this day
   // (covers older reconciled rows that still store 0 / missing credit_sales).
   let reportRow = row;
   try {
     const { calculateCreditSales } = require('./cashValidation');
-    const creditSales = await calculateCreditSales(ymd, row?.branch_id);
-    reportRow = { ...row, credit_sales: creditSales };
+    const creditSales = await calculateCreditSales(ymd, effectiveBranchId);
+    reportRow = { ...row, branch_id: effectiveBranchId, credit_sales: creditSales };
+
+    // Persist onto the daily summary even after reconcile so UI + resends stay correct.
+    if (effectiveBranchId != null && ymd) {
+      try {
+        await db.run(
+          `UPDATE daily_cash_summaries
+           SET credit_sales = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE date = ? AND branch_id = ?`,
+          [creditSales, ymd, effectiveBranchId]
+        );
+      } catch (persistErr) {
+        console.error('Error persisting credit_sales for daily closing report:', persistErr.message);
+      }
+    }
   } catch (err) {
     console.error('Error calculating credit sales for daily closing report:', err.message);
     reportRow = { ...row, credit_sales: num(row?.credit_sales) };
   }
 
   const report = buildDailyClosingReportText(reportRow, branchName, cashierName, ymd, brand);
+  const creditSalesOut = num(reportRow?.credit_sales);
   const { sendWhatsApp, formatPhoneNumber } = require('./whatsapp');
 
   try {
     const waResult = await sendWhatsApp(directorPhone, report, {});
     const reportSent = !!(waResult && waResult.success);
     if (reportSent) {
-      return { report_sent: true, report_text: report, director_phone_wa: null };
+      return {
+        report_sent: true,
+        report_text: report,
+        director_phone_wa: null,
+        credit_sales: creditSalesOut,
+      };
     }
     return {
       report_sent: false,
       report_text: report,
       director_phone_wa: formatPhoneNumber(directorPhone).replace(/\D/g, ''),
+      credit_sales: creditSalesOut,
     };
   } catch (err) {
     return {
@@ -155,6 +178,7 @@ async function deliverDirectorDailyReport(row, branchName, cashierName, ymd) {
       report_text: report,
       director_phone_wa: formatPhoneNumber(directorPhone).replace(/\D/g, ''),
       error: err.message,
+      credit_sales: creditSalesOut,
     };
   }
 }
