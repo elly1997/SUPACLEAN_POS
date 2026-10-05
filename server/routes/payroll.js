@@ -22,6 +22,21 @@ function omitBranchId(row) {
   return rest;
 }
 
+function cleanText(v) {
+  if (v == null) return null;
+  return String(v).trim();
+}
+
+function cleanAccountNumber(v) {
+  if (v == null) return null;
+  return String(v).replace(/\s+/g, '');
+}
+
+function cleanSwift(v) {
+  if (v == null) return null;
+  return String(v).replace(/\s+/g, '').toUpperCase();
+}
+
 function estimateMonthlyPAYE(taxableIncome) {
   const x = Math.max(0, parseMoney(taxableIncome));
   // Tanzania monthly resident employment PAYE bands
@@ -87,7 +102,10 @@ router.post('/employees', requirePermission('canManagePayroll'), async (req, res
     nssf_enabled = true,
     nssf_employee_rate = 10,
     nssf_employer_rate = 10,
-    paye_enabled = true
+    paye_enabled = true,
+    account_number,
+    bank_name,
+    bank_swift
   } = req.body;
   if (!full_name || gross_salary == null) {
     return res.status(400).json({ error: 'full_name and gross_salary are required' });
@@ -95,8 +113,8 @@ router.post('/employees', requirePermission('canManagePayroll'), async (req, res
   try {
     const result = await db.run(
       `INSERT INTO employees
-      (full_name, employee_code, tin_number, phone, branch_id, gross_salary, default_allowances, default_bonuses, default_other_deductions, nssf_enabled, nssf_employee_rate, nssf_employer_rate, paye_enabled)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+      (full_name, employee_code, tin_number, phone, branch_id, gross_salary, default_allowances, default_bonuses, default_other_deductions, nssf_enabled, nssf_employee_rate, nssf_employer_rate, paye_enabled, account_number, bank_name, bank_swift)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
       [
         String(full_name).trim(),
         employee_code ? String(employee_code).trim() : null,
@@ -110,7 +128,10 @@ router.post('/employees', requirePermission('canManagePayroll'), async (req, res
         !!nssf_enabled,
         parseMoney(nssf_employee_rate, 10),
         parseMoney(nssf_employer_rate, 10),
-        !!paye_enabled
+        !!paye_enabled,
+        cleanAccountNumber(account_number) || null,
+        cleanText(bank_name) || null,
+        cleanSwift(bank_swift) || null
       ]
     );
     const row = await db.get('SELECT * FROM employees WHERE id = ?', [result.lastID]);
@@ -136,7 +157,10 @@ router.put('/employees/:id', requirePermission('canManagePayroll'), async (req, 
     nssf_employee_rate,
     nssf_employer_rate,
     paye_enabled,
-    is_active
+    is_active,
+    account_number,
+    bank_name,
+    bank_swift
   } = req.body || {};
   try {
     const existing = await db.get('SELECT id FROM employees WHERE id = $1', [id]);
@@ -157,8 +181,11 @@ router.put('/employees/:id', requirePermission('canManagePayroll'), async (req, 
          nssf_employer_rate = COALESCE($11, nssf_employer_rate),
          paye_enabled = COALESCE($12, paye_enabled),
          is_active = COALESCE($13, is_active),
+         account_number = COALESCE($14, account_number),
+         bank_name = COALESCE($15, bank_name),
+         bank_swift = COALESCE($16, bank_swift),
          updated_at = CURRENT_TIMESTAMP
-       WHERE id = $14`,
+       WHERE id = $17`,
       [
         full_name != null ? String(full_name).trim() : null,
         employee_code != null ? String(employee_code).trim() : null,
@@ -173,6 +200,9 @@ router.put('/employees/:id', requirePermission('canManagePayroll'), async (req, 
         nssf_employer_rate != null ? parseMoney(nssf_employer_rate, 10) : null,
         paye_enabled != null ? !!paye_enabled : null,
         is_active != null ? !!is_active : null,
+        account_number != null ? cleanAccountNumber(account_number) : null,
+        bank_name != null ? cleanText(bank_name) : null,
+        bank_swift != null ? cleanSwift(bank_swift) : null,
         id
       ]
     );
@@ -237,6 +267,9 @@ function mapSavedPayrollRowToLine(r) {
     employee_id: r.employee_id,
     full_name: r.full_name,
     employee_code: r.employee_code,
+    account_number: r.account_number || '',
+    bank_name: r.bank_name || '',
+    bank_swift: r.bank_swift || '',
     gross_salary: gross,
     allowances,
     bonuses,
@@ -275,6 +308,9 @@ function buildLineFromEmployee(e, advMap) {
     employee_id: e.id,
     full_name: e.full_name,
     employee_code: e.employee_code,
+    account_number: e.account_number || '',
+    bank_name: e.bank_name || '',
+    bank_swift: e.bank_swift || '',
     gross_salary: gross,
     allowances,
     bonuses,
@@ -317,7 +353,7 @@ router.get('/monthly', requirePermission('canManagePayroll'), async (req, res) =
     const isClosed = periodRow && String(periodRow.status).toLowerCase() === 'closed';
 
     const savedRows = await db.all(
-      `SELECT pm.*, e.full_name, e.employee_code
+      `SELECT pm.*, e.full_name, e.employee_code, e.account_number, e.bank_name, e.bank_swift
        FROM payroll_monthly pm
        JOIN employees e ON e.id = pm.employee_id
        WHERE pm.month_key = ?
@@ -384,7 +420,7 @@ router.get('/monthly/saved', requirePermission('canManagePayroll'), async (req, 
   const month = monthKeyOrNow(req.query.month);
   try {
     const rows = await db.all(
-      `SELECT pm.*, e.full_name, e.employee_code
+      `SELECT pm.*, e.full_name, e.employee_code, e.account_number, e.bank_name, e.bank_swift
        FROM payroll_monthly pm
        JOIN employees e ON e.id = pm.employee_id
        WHERE pm.month_key = ?

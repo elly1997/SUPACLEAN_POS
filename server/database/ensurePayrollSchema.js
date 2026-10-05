@@ -25,6 +25,9 @@ async function ensure() {
         nssf_employee_rate NUMERIC(5,2) NOT NULL DEFAULT 10,
         nssf_employer_rate NUMERIC(5,2) NOT NULL DEFAULT 10,
         paye_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        account_number TEXT,
+        bank_name TEXT,
+        bank_swift TEXT,
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -97,6 +100,9 @@ async function ensure() {
     await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS nssf_employee_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
     await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS nssf_employer_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
     await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS tin_number TEXT', []);
+    await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS account_number TEXT', []);
+    await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_name TEXT', []);
+    await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_swift TEXT', []);
     await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS nssf_employee_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
     await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS nssf_employer_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
     await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS employer_nssf_amount NUMERIC(14,2) NOT NULL DEFAULT 0', []);

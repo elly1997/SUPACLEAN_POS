@@ -623,6 +623,18 @@
   align-items: center;
 }
 
+.staff-bank-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 160px;
+}
+
+.payroll-table--staff td.account-cell {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .payroll-count-chip {
   display: inline-flex;
   align-items: center;
