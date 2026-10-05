@@ -157,6 +157,44 @@ const csvCell = (value) => {
 
 const isSwiftCode = (value) => /^[A-Z0-9]{8}([A-Z0-9]{3})?$/.test(String(value || '').trim().toUpperCase());
 
+function BankFields({ record, onRecord }) {
+  const choice = bankChoiceValue(record);
+  return (
+    <>
+      <label className="payroll-field">
+        <span>Bank name</span>
+        <select value={choice} onChange={(e) => onRecord(applyBankChoice(record, e.target.value))}>
+          <option value="">Select bank</option>
+          {TZ_BANKS.map((bank) => (
+            <option key={bank.swift} value={bank.swift}>{bank.name}</option>
+          ))}
+          <option value="other">Other bank</option>
+        </select>
+      </label>
+      {choice === 'other' && (
+        <>
+          <label className="payroll-field">
+            <span>Other bank name</span>
+            <input
+              type="text"
+              value={record.bank_name || ''}
+              onChange={(e) => onRecord({ ...record, bank_name: e.target.value, bank_other: true })}
+            />
+          </label>
+          <label className="payroll-field">
+            <span>SWIFT / BIC</span>
+            <input
+              type="text"
+              value={record.bank_swift || ''}
+              onChange={(e) => onRecord({ ...record, bank_swift: e.target.value.toUpperCase(), bank_other: true })}
+            />
+          </label>
+        </>
+      )}
+    </>
+  );
+}
+
 const isFeatureEnabled = (value) => value === true || value === 1 || value === '1' || value === 't';
 
 const Payroll = () => {
@@ -184,6 +222,14 @@ const Payroll = () => {
   const [completedOn, setCompletedOn] = useState('');
   const [markCompleted, setMarkCompleted] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
+  const payrollPanHandlers = {
+    onPointerDown: tableScrollHandlers.onPointerDown,
+    onPointerMove: tableScrollHandlers.onPointerMove,
+    onPointerUp: tableScrollHandlers.onPointerUp,
+    onPointerCancel: tableScrollHandlers.onPointerCancel,
+    onPointerLeave: tableScrollHandlers.onPointerLeave,
+    onKeyDown: tableScrollHandlers.onKeyDown
+  };
   const verificationWrapRef = useRef(null);
 
   const [employeeForm, setEmployeeForm] = useState(emptyEmployeeForm);
@@ -347,6 +393,9 @@ const Payroll = () => {
       bank_other: false,
       gross_salary: Number(emp.gross_salary || 0),
       is_active: !!emp.is_active
+    });
+    window.requestAnimationFrame(() => {
+      document.getElementById(`staff-card-${emp.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   };
 
@@ -772,38 +821,48 @@ const Payroll = () => {
         <div className="payroll-card">
           <h3>Add Employee</h3>
           <form onSubmit={submitEmployee} className="payroll-form-grid">
-            <input required placeholder="Full name" value={employeeForm.full_name} onChange={(e) => setEmployeeForm({ ...employeeForm, full_name: e.target.value })} />
-            <input placeholder="Employee code" value={employeeForm.employee_code} onChange={(e) => setEmployeeForm({ ...employeeForm, employee_code: e.target.value })} />
-            <input placeholder="Phone" value={employeeForm.phone} onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })} />
-            <input placeholder="Account number" inputMode="numeric" value={employeeForm.account_number} onChange={(e) => setEmployeeForm({ ...employeeForm, account_number: e.target.value })} />
-            <select
-              aria-label="Bank name"
-              value={bankChoiceValue(employeeForm)}
-              onChange={(e) => setEmployeeForm(applyBankChoice(employeeForm, e.target.value))}
-            >
-              <option value="">Bank name</option>
-              {TZ_BANKS.map((bank) => (
-                <option key={bank.swift} value={bank.swift}>{bank.name}</option>
-              ))}
-              <option value="other">Other bank</option>
-            </select>
-            {bankChoiceValue(employeeForm) === 'other' && (
-              <>
-                <input placeholder="Bank name" value={employeeForm.bank_name} onChange={(e) => setEmployeeForm({ ...employeeForm, bank_name: e.target.value, bank_other: true })} />
-                <input placeholder="SWIFT / BIC" value={employeeForm.bank_swift} onChange={(e) => setEmployeeForm({ ...employeeForm, bank_swift: e.target.value.toUpperCase(), bank_other: true })} />
-              </>
-            )}
-            <input type="number" required placeholder="Gross salary" value={employeeForm.gross_salary} onChange={(e) => setEmployeeForm({ ...employeeForm, gross_salary: e.target.value })} />
-            <input type="number" placeholder="Allowances" value={employeeForm.default_allowances} onChange={(e) => setEmployeeForm({ ...employeeForm, default_allowances: e.target.value })} />
-            <input type="number" placeholder="Bonuses" value={employeeForm.default_bonuses} onChange={(e) => setEmployeeForm({ ...employeeForm, default_bonuses: e.target.value })} />
-            <input type="number" placeholder="Other deductions" value={employeeForm.default_other_deductions} onChange={(e) => setEmployeeForm({ ...employeeForm, default_other_deductions: e.target.value })} />
-            <div className="payroll-toggle-wrap">
-              <label><input type="checkbox" checked={employeeForm.nssf_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_enabled: e.target.checked })} /> NSSF</label>
-              <input type="number" min="0" max="100" step="0.01" placeholder="NSSF employee %" value={employeeForm.nssf_employee_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employee_rate: e.target.value })} />
-              <input type="number" min="0" max="100" step="0.01" placeholder="NSSF employer %" value={employeeForm.nssf_employer_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employer_rate: e.target.value })} />
-              <label><input type="checkbox" checked={employeeForm.paye_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, paye_enabled: e.target.checked })} /> PAYE</label>
+            <label className="payroll-field">
+              <span>Full name</span>
+              <input required value={employeeForm.full_name} onChange={(e) => setEmployeeForm({ ...employeeForm, full_name: e.target.value })} />
+            </label>
+            <label className="payroll-field">
+              <span>Employee code</span>
+              <input value={employeeForm.employee_code} onChange={(e) => setEmployeeForm({ ...employeeForm, employee_code: e.target.value })} />
+            </label>
+            <label className="payroll-field">
+              <span>Phone</span>
+              <input value={employeeForm.phone} onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })} />
+            </label>
+            <label className="payroll-field">
+              <span>Account number</span>
+              <input inputMode="numeric" value={employeeForm.account_number} onChange={(e) => setEmployeeForm({ ...employeeForm, account_number: e.target.value })} />
+            </label>
+            <BankFields record={employeeForm} onRecord={setEmployeeForm} />
+            <label className="payroll-field">
+              <span>Gross salary</span>
+              <input type="number" required min="0" value={employeeForm.gross_salary} onChange={(e) => setEmployeeForm({ ...employeeForm, gross_salary: e.target.value })} />
+            </label>
+            <label className="payroll-field">
+              <span>Allowances</span>
+              <input type="number" min="0" value={employeeForm.default_allowances} onChange={(e) => setEmployeeForm({ ...employeeForm, default_allowances: e.target.value })} />
+            </label>
+            <label className="payroll-field">
+              <span>Bonuses</span>
+              <input type="number" min="0" value={employeeForm.default_bonuses} onChange={(e) => setEmployeeForm({ ...employeeForm, default_bonuses: e.target.value })} />
+            </label>
+            <label className="payroll-field">
+              <span>Other deductions</span>
+              <input type="number" min="0" value={employeeForm.default_other_deductions} onChange={(e) => setEmployeeForm({ ...employeeForm, default_other_deductions: e.target.value })} />
+            </label>
+            <div className="payroll-form-footer">
+              <div className="payroll-toggle-wrap">
+                <label><input type="checkbox" checked={employeeForm.nssf_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_enabled: e.target.checked })} /> NSSF</label>
+                <input type="number" min="0" max="100" step="0.01" aria-label="NSSF employee percent" placeholder="Employee %" value={employeeForm.nssf_employee_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employee_rate: e.target.value })} />
+                <input type="number" min="0" max="100" step="0.01" aria-label="NSSF employer percent" placeholder="Employer %" value={employeeForm.nssf_employer_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employer_rate: e.target.value })} />
+                <label><input type="checkbox" checked={employeeForm.paye_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, paye_enabled: e.target.checked })} /> PAYE</label>
+              </div>
+              <button className="btn-primary payroll-submit-btn" type="submit">Add employee</button>
             </div>
-            <button className="btn-primary payroll-submit-btn" type="submit">Add employee</button>
           </form>
         </div>
       )}
@@ -827,146 +886,148 @@ const Payroll = () => {
               <span className="payroll-count-chip">{filteredEmployees.length} staff</span>
             </div>
           </div>
-          <div
-            className="payroll-table-wrap staff-wrap interactive-scroll-region"
-            tabIndex={0}
-            role="region"
-            aria-label="All staff details table"
-            {...tableScrollHandlers}
-          >
-            <table className="payroll-table payroll-table--staff">
-              <thead>
-                <tr>
-                  <th>Full Name</th>
-                  <th>Employee Code</th>
-                  <th>Phone</th>
-                  <th className="num">Gross Salary</th>
-                  <th>Acc Number</th>
-                  <th>Bank Name</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredEmployees.map((emp) => (
-                  <tr key={emp.id}>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="text"
-                          value={staffDraft.full_name || ''}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, full_name: e.target.value }))}
-                        />
-                      ) : emp.full_name}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="text"
-                          value={staffDraft.employee_code || ''}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, employee_code: e.target.value }))}
-                        />
-                      ) : (emp.employee_code || '-')}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="text"
-                          value={staffDraft.phone || ''}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, phone: e.target.value }))}
-                        />
-                      ) : (emp.phone || '-')}
-                    </td>
-                    <td className="num">
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="number"
-                          value={staffDraft.gross_salary ?? 0}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, gross_salary: Number(e.target.value || 0) }))}
-                        />
-                      ) : Number(emp.gross_salary || 0).toLocaleString()}
-                    </td>
-                    <td className="account-cell">
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={staffDraft.account_number || ''}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, account_number: e.target.value }))}
-                        />
-                      ) : (emp.account_number || '-')}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <div className="staff-bank-edit">
-                          <select
-                            aria-label="Bank name"
-                            value={bankChoiceValue(staffDraft)}
-                            onChange={(e) => setStaffDraft((p) => applyBankChoice(p, e.target.value))}
-                          >
-                            <option value="">Select bank</option>
-                            {TZ_BANKS.map((bank) => (
-                              <option key={bank.swift} value={bank.swift}>{bank.name}</option>
-                            ))}
-                            <option value="other">Other bank</option>
-                          </select>
-                          {bankChoiceValue(staffDraft) === 'other' && (
-                            <>
-                              <input
-                                type="text"
-                                placeholder="Bank name"
-                                value={staffDraft.bank_name || ''}
-                                onChange={(e) => setStaffDraft((p) => ({ ...p, bank_name: e.target.value, bank_other: true }))}
-                              />
-                              <input
-                                type="text"
-                                placeholder="SWIFT"
-                                value={staffDraft.bank_swift || ''}
-                                onChange={(e) => setStaffDraft((p) => ({ ...p, bank_swift: e.target.value.toUpperCase(), bank_other: true }))}
-                              />
-                            </>
-                          )}
+          {employees.length === 0 && (
+            <p className="payroll-history-empty">{loading ? 'Loading staff...' : 'No staff recorded yet'}</p>
+          )}
+          {employees.length > 0 && filteredEmployees.length === 0 && (
+            <p className="payroll-history-empty">No staff matched your search.</p>
+          )}
+          <div className="staff-directory">
+            {filteredEmployees.map((emp) => {
+              const editing = editingStaffId === emp.id;
+              return (
+                <article
+                  key={emp.id}
+                  id={`staff-card-${emp.id}`}
+                  className={`staff-card${editing ? ' is-editing' : ''}${emp.is_active ? '' : ' is-inactive'}`}
+                >
+                  {editing ? (
+                    <form
+                      className="staff-edit-form"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        saveEditStaff();
+                      }}
+                    >
+                      <div className="staff-card-top">
+                        <div>
+                          <p className="staff-card-kicker">Editing staff</p>
+                          <h4 className="staff-card-name">{staffDraft.full_name || emp.full_name}</h4>
                         </div>
-                      ) : (emp.bank_name || '-')}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <select
-                          value={staffDraft.is_active ? 'active' : 'inactive'}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, is_active: e.target.value === 'active' }))}
-                        >
-                          <option value="active">Active</option>
-                          <option value="inactive">Inactive</option>
-                        </select>
-                      ) : (emp.is_active ? 'Active' : 'Inactive')}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <div className="staff-row-actions">
-                          <button type="button" className="btn-primary" disabled={savingStaff} onClick={saveEditStaff}>
+                        <div className="staff-card-actions">
+                          <button type="submit" className="btn-primary" disabled={savingStaff}>
                             {savingStaff ? 'Saving...' : 'Save'}
                           </button>
                           <button type="button" className="btn-secondary" onClick={cancelEditStaff}>Cancel</button>
                         </div>
-                      ) : (
+                      </div>
+                      <div className="staff-edit-grid">
+                        <label className="payroll-field">
+                          <span>Full name</span>
+                          <input
+                            type="text"
+                            required
+                            value={staffDraft.full_name || ''}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, full_name: e.target.value }))}
+                          />
+                        </label>
+                        <label className="payroll-field">
+                          <span>Employee code</span>
+                          <input
+                            type="text"
+                            value={staffDraft.employee_code || ''}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, employee_code: e.target.value }))}
+                          />
+                        </label>
+                        <label className="payroll-field">
+                          <span>Phone</span>
+                          <input
+                            type="text"
+                            value={staffDraft.phone || ''}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, phone: e.target.value }))}
+                          />
+                        </label>
+                        <label className="payroll-field">
+                          <span>Gross salary</span>
+                          <input
+                            type="number"
+                            min="0"
+                            required
+                            value={staffDraft.gross_salary ?? 0}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, gross_salary: Number(e.target.value || 0) }))}
+                          />
+                        </label>
+                        <label className="payroll-field">
+                          <span>Account number</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={staffDraft.account_number || ''}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, account_number: e.target.value }))}
+                          />
+                        </label>
+                        <BankFields record={staffDraft} onRecord={setStaffDraft} />
+                        <label className="payroll-field">
+                          <span>Status</span>
+                          <select
+                            value={staffDraft.is_active ? 'active' : 'inactive'}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, is_active: e.target.value === 'active' }))}
+                          >
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                          </select>
+                        </label>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div className="staff-card-top">
+                        <div>
+                          <h4 className="staff-card-name">{emp.full_name}</h4>
+                          <p className="staff-card-sub">{emp.employee_code || 'No employee code'}</p>
+                        </div>
+                        <span className={`payroll-badge ${emp.is_active ? 'open' : 'closed'}`}>
+                          {emp.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                      <dl className="staff-meta">
+                        <div>
+                          <dt>Phone</dt>
+                          <dd>{emp.phone || '—'}</dd>
+                        </div>
+                        <div>
+                          <dt>Gross salary</dt>
+                          <dd>{Number(emp.gross_salary || 0).toLocaleString()}</dd>
+                        </div>
+                        <div>
+                          <dt>Account number</dt>
+                          <dd>{emp.account_number || '—'}</dd>
+                        </div>
+                        <div>
+                          <dt>Bank</dt>
+                          <dd>{emp.bank_name || '—'}</dd>
+                        </div>
+                      </dl>
+                      <div className="staff-card-actions">
                         <button type="button" className="btn-secondary" onClick={() => startEditStaff(emp)}>Edit</button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {employees.length === 0 && (
-                  <tr>
-                    <td colSpan={8}>{loading ? 'Loading staff...' : 'No staff recorded yet'}</td>
-                  </tr>
-                )}
-                {employees.length > 0 && filteredEmployees.length === 0 && (
-                  <tr>
-                    <td colSpan={8}>No staff matched your search.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                      </div>
+                    </>
+                  )}
+                </article>
+              );
+            })}
           </div>
+          {editingStaffId && (
+            <div className="staff-edit-dock">
+              <span>Save changes for {staffDraft.full_name || 'this employee'}</span>
+              <div className="staff-card-actions">
+                <button type="button" className="btn-primary" disabled={savingStaff} onClick={saveEditStaff}>
+                  {savingStaff ? 'Saving...' : 'Save'}
+                </button>
+                <button type="button" className="btn-secondary" onClick={cancelEditStaff}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1047,7 +1108,7 @@ const Payroll = () => {
             tabIndex={0}
             role="region"
             aria-label="Monthly payroll table"
-            {...tableScrollHandlers}
+            {...payrollPanHandlers}
           >
             <table className="payroll-table payroll-table--verification payroll-table--compact">
               <thead>
@@ -1180,7 +1241,7 @@ const Payroll = () => {
             tabIndex={0}
             role="region"
             aria-label="Salary advances table"
-            {...tableScrollHandlers}
+            {...payrollPanHandlers}
           >
             <table className="payroll-table payroll-table--advances">
               <thead><tr><th>Date</th><th>Employee</th><th className="num">Amount</th><th>Notes</th></tr></thead>
