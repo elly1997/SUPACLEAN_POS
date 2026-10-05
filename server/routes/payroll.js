@@ -37,6 +37,15 @@ function cleanSwift(v) {
   return String(v).replace(/\s+/g, '').toUpperCase();
 }
 
+function blankCode(v) {
+  const s = String(v ?? '').trim();
+  return s || null;
+}
+
+function employeeCodeConflict(err) {
+  return err && err.code === '23505' && String(err.constraint || err.message || '').includes('employee_code');
+}
+
 function estimateMonthlyPAYE(taxableIncome) {
   const x = Math.max(0, parseMoney(taxableIncome));
   // Tanzania monthly resident employment PAYE bands
@@ -137,6 +146,9 @@ router.post('/employees', requirePermission('canManagePayroll'), async (req, res
     const row = await db.get('SELECT * FROM employees WHERE id = ?', [result.lastID]);
     res.status(201).json(omitBranchId(row));
   } catch (err) {
+    if (employeeCodeConflict(err)) {
+      return res.status(409).json({ error: 'That employee code is already used by another staff member.' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -165,10 +177,23 @@ router.put('/employees/:id', requirePermission('canManagePayroll'), async (req, 
   try {
     const existing = await db.get('SELECT id FROM employees WHERE id = $1', [id]);
     if (!existing) return res.status(404).json({ error: 'Employee not found' });
+    const codeProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'employee_code');
+    const nextCode = codeProvided ? blankCode(employee_code) : null;
+    if (nextCode) {
+      const duplicate = await db.get(
+        'SELECT id, full_name FROM employees WHERE lower(employee_code) = lower($1) AND id <> $2',
+        [nextCode, id]
+      );
+      if (duplicate) {
+        return res.status(409).json({
+          error: `Employee code ${nextCode} is already used by ${duplicate.full_name}. Leave it blank if this person has no code.`
+        });
+      }
+    }
     await db.run(
       `UPDATE employees SET
          full_name = COALESCE($1, full_name),
-         employee_code = COALESCE($2, employee_code),
+         employee_code = CASE WHEN $18::boolean THEN NULLIF(BTRIM(COALESCE($2::text, '')), '') ELSE employee_code END,
          tin_number = COALESCE($3, tin_number),
          phone = COALESCE($4, phone),
          branch_id = NULL,
@@ -188,7 +213,7 @@ router.put('/employees/:id', requirePermission('canManagePayroll'), async (req, 
        WHERE id = $17`,
       [
         full_name != null ? String(full_name).trim() : null,
-        employee_code != null ? String(employee_code).trim() : null,
+        nextCode,
         tin_number != null ? String(tin_number).trim() : null,
         phone != null ? String(phone).trim() : null,
         gross_salary != null ? parseMoney(gross_salary) : null,
@@ -203,7 +228,8 @@ router.put('/employees/:id', requirePermission('canManagePayroll'), async (req, 
         account_number != null ? cleanAccountNumber(account_number) : null,
         bank_name != null ? cleanText(bank_name) : null,
         bank_swift != null ? cleanSwift(bank_swift) : null,
-        id
+        id,
+        codeProvided
       ]
     );
     const row = await db.get(
@@ -212,6 +238,9 @@ router.put('/employees/:id', requirePermission('canManagePayroll'), async (req, 
     );
     res.json(omitBranchId(row));
   } catch (err) {
+    if (employeeCodeConflict(err)) {
+      return res.status(409).json({ error: 'That employee code is already used by another staff member. Leave it blank if this person has no code.' });
+    }
     res.status(500).json({ error: err.message });
   }
 });

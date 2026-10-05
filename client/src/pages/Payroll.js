@@ -29,6 +29,20 @@ const formatPayrollMonthLabel = (monthKey) => {
 
 const moneyTzs = (n) => `TSh ${Number(n || 0).toLocaleString()}`;
 
+const formatSlipDate = (value) => {
+  if (!value) return '—';
+  const raw = String(value);
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw.slice(0, 10);
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
 /** Net still on the books while the period is open (matches API when present). */
 const outstandingNetForHistoryRow = (h) => {
   if (h == null) return 0;
@@ -211,6 +225,7 @@ const Payroll = () => {
   const [payrollHistory, setPayrollHistory] = useState([]);
   const [hasSavedSnapshot, setHasSavedSnapshot] = useState(false);
   const [selectedEmployeeStatement, setSelectedEmployeeStatement] = useState('');
+  const [slipEmployeeId, setSlipEmployeeId] = useState('');
   const [staffSearch, setStaffSearch] = useState('');
   const [editingStaffId, setEditingStaffId] = useState(null);
   const [staffDraft, setStaffDraft] = useState({});
@@ -349,6 +364,21 @@ const Payroll = () => {
       && Number(savedHistoryEntry.processed_employees || 0) === payrollTotals.employee_count
     : !hasSavedSnapshot;
   const advancesTotal = advances.reduce((sum, a) => sum + Number(a.amount || 0), 0);
+  const slipLine = useMemo(
+    () => payroll.find((row) => String(row.employee_id) === String(slipEmployeeId)) || null,
+    [payroll, slipEmployeeId]
+  );
+  const slipAdvances = useMemo(
+    () => advances.filter((row) => String(row.employee_id) === String(slipEmployeeId)),
+    [advances, slipEmployeeId]
+  );
+
+  useEffect(() => {
+    if (!slipEmployeeId) return;
+    if (!payroll.some((row) => String(row.employee_id) === String(slipEmployeeId))) {
+      setSlipEmployeeId('');
+    }
+  }, [payroll, slipEmployeeId]);
 
   const submitEmployee = async (e) => {
     e.preventDefault();
@@ -418,7 +448,8 @@ const Payroll = () => {
       delete draft.bank_other;
       await updatePayrollEmployee(editingStaffId, {
         ...draft,
-        tin_number: staffDraft.employee_code || null,
+        employee_code: String(staffDraft.employee_code || '').trim() || null,
+        tin_number: String(staffDraft.employee_code || '').trim() || null,
         account_number: String(staffDraft.account_number || '').replace(/\s+/g, ''),
         bank_name: String(staffDraft.bank_name || '').trim(),
         bank_swift: swift
@@ -672,6 +703,69 @@ const Payroll = () => {
     } catch (err) {
       showToast(`Error generating employee statement: ${err.response?.data?.error || err.message}`, 'error');
     }
+  };
+
+  const printSalarySlip = () => {
+    if (!slipLine) {
+      showToast('Select an employee first', 'error');
+      return;
+    }
+    const monthLabel = formatPayrollMonthLabel(monthKey);
+    const branchName = branch?.name || 'SUPACLEAN';
+    const rows = [
+      ['Gross salary', Number(slipLine.gross_salary || 0)],
+      ['Allowances', Number(slipLine.allowances || 0)],
+      ['Bonuses', Number(slipLine.bonuses || 0)],
+      ['Employee NSSF', Number(slipLine.nssf_amount || 0)],
+      ['PAYE', Number(slipLine.paye_amount || slipLine.paye_estimate || 0)],
+      ['Other deductions', Number(slipLine.other_deductions || 0)],
+      ['Salary advances', Number(slipLine.salary_advances || 0)]
+    ];
+    const advanceRows = slipAdvances.map((item) => (
+      `<tr><td>${escapeHtml(formatSlipDate(item.advance_date))}</td><td>${escapeHtml(item.notes || 'Advance')}</td><td style="text-align:right">${escapeHtml(moneyTzs(item.amount))}</td></tr>`
+    )).join('');
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Salary slip — ${escapeHtml(slipLine.full_name)} — ${escapeHtml(monthLabel)}</title>
+  <style>
+    body { font-family: Calibri, Arial, sans-serif; color: #111; margin: 24px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .muted { color: #444; margin: 0 0 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 8px 0; border-bottom: 1px solid #ddd; }
+    .net td { font-size: 18px; font-weight: 700; border-bottom: none; padding-top: 14px; }
+    h2 { font-size: 14px; margin: 18px 0 6px; }
+    @media print { body { margin: 12mm; } }
+  </style>
+</head>
+<body>
+  <h1>SUPACLEAN</h1>
+  <p class="muted">${escapeHtml(branchName)} · Salary slip · ${escapeHtml(monthLabel)}</p>
+  <p><strong>${escapeHtml(slipLine.full_name)}</strong><br/>${escapeHtml(slipLine.employee_code || '')}</p>
+  <table>
+    ${rows.map(([label, amount]) => `<tr><td>${escapeHtml(label)}</td><td style="text-align:right">${escapeHtml(moneyTzs(amount))}</td></tr>`).join('')}
+    <tr class="net"><td>Net salary</td><td style="text-align:right">${escapeHtml(moneyTzs(slipLine.net_salary))}</td></tr>
+  </table>
+  <h2>Advances this month</h2>
+  ${advanceRows
+    ? `<table>${advanceRows}</table>`
+    : '<p class="muted">No advances recorded for this employee.</p>'}
+</body>
+</html>`;
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      showToast('Allow pop-ups to print the salary slip', 'error');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    window.setTimeout(() => {
+      printWindow.print();
+    }, 200);
   };
 
   const exportStaffDirectory = () => {
@@ -1233,31 +1327,68 @@ const Payroll = () => {
         </div>
       )}
 
-      {canRecordAdvances && (
+      {canManagePayroll && (activeStep === 'payrun' || activeStep === 'statements') && (
         <div className="payroll-card">
-          <h3>Salary Advances ({monthKey})</h3>
-          <div
-            className="payroll-table-wrap advances-wrap interactive-scroll-region"
-            tabIndex={0}
-            role="region"
-            aria-label="Salary advances table"
-            {...payrollPanHandlers}
-          >
-            <table className="payroll-table payroll-table--advances">
-              <thead><tr><th>Date</th><th>Employee</th><th className="num">Amount</th><th>Notes</th></tr></thead>
-              <tbody>
-                {advances.map((a) => (
-                  <tr key={a.id}>
-                    <td>{a.advance_date}</td>
-                    <td>{a.full_name}</td>
-                    <td className="num">{Number(a.amount || 0).toLocaleString()}</td>
-                    <td>{a.notes || '-'}</td>
-                  </tr>
-                ))}
-                {advances.length === 0 && <tr><td colSpan={4}>{loading ? 'Loading salary advances...' : 'No advances recorded'}</td></tr>}
-              </tbody>
-            </table>
+          <div className="payroll-card-head">
+            <h3>Salary slip — {formatPayrollMonthLabel(monthKey)}</h3>
           </div>
+          <p className="payroll-note">Select one employee to preview and print their slip for this month.</p>
+          <div className="slip-controls">
+            <label className="payroll-field slip-employee-field">
+              <span>Employee</span>
+              <select value={slipEmployeeId} onChange={(e) => setSlipEmployeeId(e.target.value)}>
+                <option value="">Select employee</option>
+                {payroll.map((row) => (
+                  <option key={row.employee_id} value={row.employee_id}>{row.full_name}</option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="btn-primary" disabled={!slipLine} onClick={printSalarySlip}>
+              Print slip
+            </button>
+          </div>
+          {!payroll.length && (
+            <p className="payroll-history-empty">No payroll figures for this month yet.</p>
+          )}
+          {slipLine && (
+            <article className="salary-slip-sheet" aria-label={`Salary slip for ${slipLine.full_name}`}>
+              <header className="salary-slip-head">
+                <div>
+                  <p className="salary-slip-brand">SUPACLEAN</p>
+                  <p className="salary-slip-meta">{branch?.name || 'Branch'} · {formatPayrollMonthLabel(monthKey)}</p>
+                </div>
+                <div className="salary-slip-person">
+                  <strong>{slipLine.full_name}</strong>
+                  <span>{slipLine.employee_code || 'No employee code'}</span>
+                </div>
+              </header>
+              <dl className="salary-slip-lines">
+                <div><dt>Gross salary</dt><dd>{moneyTzs(slipLine.gross_salary)}</dd></div>
+                <div><dt>Allowances</dt><dd>{moneyTzs(slipLine.allowances)}</dd></div>
+                <div><dt>Bonuses</dt><dd>{moneyTzs(slipLine.bonuses)}</dd></div>
+                <div><dt>Employee NSSF</dt><dd>{moneyTzs(slipLine.nssf_amount)}</dd></div>
+                <div><dt>PAYE</dt><dd>{moneyTzs(slipLine.paye_amount || slipLine.paye_estimate)}</dd></div>
+                <div><dt>Other deductions</dt><dd>{moneyTzs(slipLine.other_deductions)}</dd></div>
+                <div><dt>Salary advances</dt><dd>{moneyTzs(slipLine.salary_advances)}</dd></div>
+                <div className="salary-slip-net"><dt>Net salary</dt><dd>{moneyTzs(slipLine.net_salary)}</dd></div>
+              </dl>
+              <div className="salary-slip-advances">
+                <h4>Advances this month</h4>
+                {slipAdvances.length === 0 && <p>No advances recorded for this employee.</p>}
+                {slipAdvances.length > 0 && (
+                  <ul>
+                    {slipAdvances.map((item) => (
+                      <li key={item.id}>
+                        <span>{formatSlipDate(item.advance_date)}</span>
+                        <span>{item.notes || 'Advance'}</span>
+                        <strong>{moneyTzs(item.amount)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </article>
+          )}
         </div>
       )}
     </div>

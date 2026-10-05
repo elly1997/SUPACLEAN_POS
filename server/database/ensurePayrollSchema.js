@@ -103,6 +103,10 @@ async function ensure() {
     await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS account_number TEXT', []);
     await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_name TEXT', []);
     await db.run('ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_swift TEXT', []);
+    await db.run(
+      `UPDATE employees SET employee_code = NULL WHERE employee_code IS NOT NULL AND BTRIM(employee_code) = ''`,
+      []
+    );
     await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS nssf_employee_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
     await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS nssf_employer_rate NUMERIC(5,2) NOT NULL DEFAULT 10', []);
     await db.run('ALTER TABLE payroll_monthly ADD COLUMN IF NOT EXISTS employer_nssf_amount NUMERIC(14,2) NOT NULL DEFAULT 0', []);
