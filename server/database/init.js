@@ -16,6 +16,8 @@ const db = new sqlite3.Database(dbPath, (err) => {
     console.log('✅ Connected to SQLite database');
     // Enable WAL mode for better performance and concurrency
     db.run('PRAGMA journal_mode = WAL;');
+    db.run('PRAGMA busy_timeout = 8000;');
+    db.configure('busyTimeout', 8000);
     db.run('PRAGMA synchronous = NORMAL;');
     db.run('PRAGMA cache_size = -64000;'); // 64MB cache
     db.run('PRAGMA temp_store = MEMORY;');
@@ -403,6 +405,15 @@ function createIndexes() {
       db.run('CREATE INDEX IF NOT EXISTS idx_orders_archived_at ON orders(archived_at)');
       if (columns.some(col => col.name === 'status') && columns.some(col => col.name === 'branch_id')) {
         db.run('CREATE INDEX IF NOT EXISTS idx_orders_branch_archived_status ON orders(branch_id, archived_at, status)');
+      }
+      if (
+        columns.some(col => col.name === 'branch_id')
+        && columns.some(col => col.name === 'status')
+        && columns.some(col => col.name === 'is_voided')
+      ) {
+        db.run(`CREATE INDEX IF NOT EXISTS idx_orders_active_branch_status
+          ON orders (branch_id, status, order_date)
+          WHERE COALESCE(is_voided, 0) = 0 AND archived_at IS NULL`);
       }
     }
   });

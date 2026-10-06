@@ -25,6 +25,16 @@ const db = require('./query');
       'CREATE INDEX IF NOT EXISTS idx_transactions_branch_date ON transactions(branch_id, transaction_date DESC)',
       []
     );
+    await db.run(
+      'CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token)',
+      []
+    );
+    await db.run(
+      `CREATE INDEX IF NOT EXISTS idx_orders_active_branch_status
+       ON orders (branch_id, status, order_date DESC)
+       WHERE COALESCE(is_voided, FALSE) = FALSE AND archived_at IS NULL`,
+      []
+    );
   } catch (err) {
     console.error('ensurePerformanceIndexes failed:', err.message);
   }

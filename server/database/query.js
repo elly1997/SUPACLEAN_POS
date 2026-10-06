@@ -28,7 +28,9 @@ const dbPool = new Pool({
 
 // Log first pool connection only (each schema module triggers its own query on startup).
 let loggedPoolConnect = false;
-dbPool.on('connect', () => {
+dbPool.on('connect', (client) => {
+  // Release a stuck query so one slow screen cannot hold a pool slot forever.
+  client.query('SET statement_timeout = 25000').catch(() => {});
   if (loggedPoolConnect) return;
   loggedPoolConnect = true;
   console.log('✅ Connected to PostgreSQL database');

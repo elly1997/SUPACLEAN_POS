@@ -7,7 +7,7 @@ const { normalizePhoneDigits } = require('../utils/customerPhone');
 
 async function backfillPhoneNormalizedBatch(limit = 5000) {
   const rows = await db.all(
-    `SELECT id, phone FROM customers
+    `SELECT id, phone, primary_branch_id FROM customers
      WHERE (phone_normalized IS NULL OR phone_normalized = '')
        AND phone IS NOT NULL
        AND TRIM(phone) <> ''
@@ -25,8 +25,11 @@ async function backfillPhoneNormalizedBatch(limit = 5000) {
     if (!normalized) continue;
 
     const existing = await db.get(
-      'SELECT id FROM customers WHERE phone_normalized = ? LIMIT 1',
-      [normalized]
+      `SELECT id FROM customers
+       WHERE phone_normalized = ?
+         AND primary_branch_id IS NOT DISTINCT FROM ?
+       LIMIT 1`,
+      [normalized, row.primary_branch_id ?? null]
     );
     if (existing && Number(existing.id) !== Number(row.id)) {
       skipped += 1;
@@ -59,18 +62,30 @@ async function countDuplicateNormalizedPhones() {
 }
 
 async function ensurePhoneNormalizedIndexes() {
-  // Remove strict unique index if a prior deploy created it before duplicates were handled.
+  // Phone numbers are unique inside a branch, not across the company.
+  // The same number can exist at WP and at another branch as separate customers.
   await db.run('DROP INDEX IF EXISTS idx_customers_phone_normalized', []);
+  await db.run('ALTER TABLE customers DROP CONSTRAINT IF EXISTS customers_phone_key', []).catch(() => {});
 
-  const dupes = await countDuplicateNormalizedPhones();
-  if (dupes.groups === 0) {
+  const dupes = await db.get(
+    `SELECT COUNT(*) AS groups
+     FROM (
+       SELECT primary_branch_id, phone_normalized
+       FROM customers
+       WHERE phone_normalized IS NOT NULL AND phone_normalized <> '' AND primary_branch_id IS NOT NULL
+       GROUP BY primary_branch_id, phone_normalized
+       HAVING COUNT(*) > 1
+     ) dupes`,
+    []
+  );
+  if (Number(dupes?.groups || 0) === 0) {
     await db.run(
-      `CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_phone_normalized
-       ON customers(phone_normalized)
-       WHERE phone_normalized IS NOT NULL AND phone_normalized <> ''`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_phone_per_branch
+       ON customers(primary_branch_id, phone_normalized)
+       WHERE phone_normalized IS NOT NULL AND phone_normalized <> '' AND primary_branch_id IS NOT NULL`,
       []
     );
-    console.log('✅ customers.phone_normalized unique index ready');
+    console.log('✅ customers phone unique per branch');
   } else {
     await db.run(
       `CREATE INDEX IF NOT EXISTS idx_customers_phone_normalized_lookup
@@ -79,7 +94,7 @@ async function ensurePhoneNormalizedIndexes() {
       []
     );
     console.warn(
-      `⚠️ Skipping unique phone index: ${dupes.groups} duplicate normalized phone group(s) (${dupes.extra_rows} extra customer row(s)). Merge duplicates via admin tools before enforcing uniqueness.`
+      `⚠️ Skipping per-branch unique phone index: ${dupes.groups} duplicate phone group(s) inside a branch.`
     );
   }
 }
@@ -119,7 +134,7 @@ async function ensurePhoneNormalizedIndexes() {
 
     // Re-normalize legacy values (e.g. 0762665356 stored before TZ fix).
     const legacyRows = await db.all(
-      `SELECT id, phone, phone_normalized FROM customers
+      `SELECT id, phone, phone_normalized, primary_branch_id FROM customers
        WHERE phone_normalized IS NOT NULL AND phone_normalized <> ''
        LIMIT 5000`,
       []
@@ -127,7 +142,13 @@ async function ensurePhoneNormalizedIndexes() {
     for (const row of legacyRows || []) {
       const expected = normalizePhoneDigits(String(row.phone || '').trim());
       if (!expected || expected === row.phone_normalized) continue;
-      const owner = await db.get('SELECT id FROM customers WHERE phone_normalized = ? LIMIT 1', [expected]);
+      const owner = await db.get(
+        `SELECT id FROM customers
+         WHERE phone_normalized = ?
+           AND primary_branch_id IS NOT DISTINCT FROM ?
+         LIMIT 1`,
+        [expected, row.primary_branch_id ?? null]
+      );
       if (owner && Number(owner.id) !== Number(row.id)) {
         await db.run('UPDATE customers SET phone_normalized = NULL WHERE id = ?', [row.id]);
         continue;

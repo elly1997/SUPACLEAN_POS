@@ -5,6 +5,7 @@ const db = require('../database/query');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { authenticate } = require('../middleware/auth');
+const sessionCache = require('../utils/sessionCache');
 
 const WEAK_DEFAULT_PASSWORDS = new Set(['admin123', 'password', '12345678', 'changeme']);
 
@@ -149,8 +150,9 @@ router.post('/change-password', authenticate, async (req, res) => {
       [passwordHash, req.user.id]
     );
 
-    // Keep current session; drop others
+    // Keep current session; drop others so a password change on one till does not leave old logins alive.
     const token = req.headers.authorization?.replace('Bearer ', '');
+    sessionCache.invalidateUser(req.user.id);
     if (token) {
       await db.run('DELETE FROM user_sessions WHERE user_id = $1 AND session_token <> $2', [
         req.user.id,
@@ -180,6 +182,7 @@ router.post('/logout', async (req, res) => {
   }
 
   try {
+    sessionCache.invalidate(sessionToken);
     await db.run('DELETE FROM user_sessions WHERE session_token = $1', [sessionToken]);
     res.json({ success: true, message: 'Logged out successfully' });
   } catch (err) {

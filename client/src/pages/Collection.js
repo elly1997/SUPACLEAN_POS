@@ -34,7 +34,8 @@ const formatReceiptMoney = (n) => (n != null && !Number.isNaN(n) ? `TSh ${Number
 const Collection = () => {
   const [searchParams] = useSearchParams();
   const { showToast, ToastContainer } = useToast();
-  const { branch } = useAuth();
+  const { branch, user, selectedBranchId } = useAuth();
+  const effectiveBranchId = user?.role === 'admin' ? selectedBranchId : (branch?.id ?? selectedBranchId);
   const [listView, setListView] = useListViewPreference();
   const [receiptNumber, setReceiptNumber] = useState(searchParams.get('receipt') || '');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -104,31 +105,37 @@ const Collection = () => {
     return () => clearTimeout(t);
   }, [queueSearch]);
 
-  const loadQueue = useCallback(async () => {
+  const queueLoadGen = useRef(0);
+
+  const loadQueue = useCallback(async ({ background = false } = {}) => {
+    const gen = ++queueLoadGen.current;
     try {
-      setQueueLoading(true);
+      if (!background) setQueueLoading(true);
       const params = { limit: 80 };
       if (queueSearchDebounced && queueSearchDebounced.trim()) {
         params.customer = queueSearchDebounced.trim();
       }
       const res = await getCollectionQueue(params);
+      if (gen !== queueLoadGen.current) return;
       setQueueOrders(res.data || []);
       if (res.fromCache && res.syncedAt) setLastSyncedAt(res.syncedAt); else setLastSyncedAt(null);
     } catch (error) {
+      if (gen !== queueLoadGen.current) return;
       console.error('Error loading queue:', error);
-      setQueueOrders([]);
+      if (!background) setQueueOrders([]);
     } finally {
-      setQueueLoading(false);
+      if (gen === queueLoadGen.current && !background) setQueueLoading(false);
     }
   }, [queueSearchDebounced]);
 
   useEffect(() => {
     loadQueue();
+    const intervalMs = 45000 + Math.floor(Math.random() * 20000);
     const queueInterval = setInterval(() => {
-      if (!document.hidden && showQueue) loadQueue();
-    }, 30000);
+      if (!document.hidden && showQueue) loadQueue({ background: true });
+    }, intervalMs);
     const onVis = () => {
-      if (!document.hidden && showQueue) loadQueue();
+      if (!document.hidden && showQueue) loadQueue({ background: true });
     };
     document.addEventListener('visibilitychange', onVis);
     return () => {
@@ -220,7 +227,7 @@ const Collection = () => {
     // Debounce the search
     const timer = setTimeout(async () => {
       try {
-        const customersRes = await searchCustomers(searchTerm);
+        const customersRes = await searchCustomers(searchTerm, { branchId: effectiveBranchId });
         const matchingCustomers = customersRes.data || [];
         setAutocompleteSuggestions(matchingCustomers); // Show all matches; dropdown scrolls
         setShowAutocomplete(matchingCustomers.length > 0);
@@ -232,7 +239,7 @@ const Collection = () => {
     }, 400); // 400ms debounce
 
     return () => clearTimeout(timer);
-  }, [phoneNumber, searchByPhone]);
+  }, [phoneNumber, searchByPhone, effectiveBranchId]);
 
   // Close autocomplete when clicking outside
   useEffect(() => {
@@ -315,7 +322,7 @@ const Collection = () => {
 
     try {
       const searchTerm = phoneNumber.trim();
-      const customersRes = await searchCustomers(searchTerm);
+      const customersRes = await searchCustomers(searchTerm, { branchId: effectiveBranchId });
       const matchingCustomers = customersRes.data || [];
 
       if (matchingCustomers.length > 1) {

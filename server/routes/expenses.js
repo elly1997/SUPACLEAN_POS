@@ -7,6 +7,13 @@ const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter
 const cashManagement = require('./cashManagement');
 const { sqlOperatingExpensesOnly } = require('../utils/operatingExpenses');
 const { assertNotFutureBusinessDate } = require('../utils/businessDate');
+const {
+  readIdempotencyKey,
+  getStoredIdempotencyResponse,
+  storeIdempotencyResponse,
+} = require('../utils/idempotency');
+
+const IDEMPOTENCY_ROUTE_EXPENSE_CREATE = 'POST /expenses';
 
 /** Normalize expense date to YYYY-MM-DD for consistent daily closing buckets */
 function normalizeExpenseDate(d) {
@@ -376,6 +383,63 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
   }
   
   try {
+    const idempotencyKey = readIdempotencyKey(req);
+    if (idempotencyKey) {
+      const stored = await getStoredIdempotencyResponse(IDEMPOTENCY_ROUTE_EXPENSE_CREATE, idempotencyKey);
+      if (stored) {
+        return res.status(stored.status).json(stored.body);
+      }
+    }
+
+    const duplicate = await db.get(
+      `SELECT e.id
+       FROM expenses e
+       LEFT JOIN salary_advances sa ON sa.source_expense_id = e.id
+       WHERE e.branch_id = $1
+         AND e.date = $2::date
+         AND lower(e.category) = lower($3)
+         AND e.amount = $4
+         AND e.payment_source = $5
+         AND COALESCE(e.description, '') = COALESCE($6, '')
+         AND COALESCE(e.receipt_number, '') = COALESCE($7, '')
+         AND COALESCE(e.is_voided, FALSE) = FALSE
+         AND e.created_at >= CURRENT_TIMESTAMP - INTERVAL '20 minutes'
+         AND (
+           $8::int IS NULL
+           OR sa.employee_id = $8::int
+         )
+       ORDER BY e.id DESC
+       LIMIT 1`,
+      [
+        branchId,
+        expenseDate,
+        category,
+        amount,
+        payment_source,
+        description || null,
+        receipt_number || null,
+        isSalaryAdvanceCategory(category) ? Number(employee_id) : null
+      ]
+    );
+    if (duplicate?.id) {
+      const existing = await db.get(
+        `SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name,
+            sa.employee_id as salary_advance_employee_id, emp.full_name as salary_advance_employee_name
+         FROM expenses e
+         LEFT JOIN bank_accounts b ON e.bank_account_id = b.id
+         LEFT JOIN bank_deposits d ON e.bank_deposit_id = d.id
+         LEFT JOIN salary_advances sa ON sa.source_expense_id = e.id
+         LEFT JOIN employees emp ON emp.id = sa.employee_id
+         WHERE e.id = $1`,
+        [duplicate.id]
+      );
+      const payload = { ...existing, duplicate_suppressed: true };
+      if (idempotencyKey) {
+        await storeIdempotencyResponse(IDEMPOTENCY_ROUTE_EXPENSE_CREATE, idempotencyKey, 200, payload);
+      }
+      return res.status(200).json(payload);
+    }
+
     const bankDepositId = null;
 
     if (await isReconciledDay(expenseDate, branchId) && !wantsReconciledDayAcknowledgement(req)) {
@@ -427,15 +491,29 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
     );
 
     await writeExpenseAudit('create', result.lastID, null, expense, req.body?.update_reason || null, req);
-    const closingRefresh = await refreshDailyClosingForExpenseDates(branchId, expenseDate);
-    const refresh = closingRefresh.expenseDayRefresh || {};
-    const forced = closingRefresh.reconciledDaysForced || [];
-    const reconciledRefreshed = forced.includes(expenseDate);
-    res.status(201).json({
+
+    const payload = {
       ...expense,
-      daily_closing_updated: reconciledRefreshed || !refresh.skipped,
-      daily_closing_locked: !reconciledRefreshed && !!refresh.skipped && refresh.reason === 'reconciled',
-      reconciled_day_refreshed: reconciledRefreshed
+      daily_closing_updated: true,
+      daily_closing_locked: false,
+      reconciled_day_refreshed: false,
+      daily_closing_refresh: 'background'
+    };
+    if (idempotencyKey) {
+      await storeIdempotencyResponse(IDEMPOTENCY_ROUTE_EXPENSE_CREATE, idempotencyKey, 201, payload);
+    }
+    res.status(201).json(payload);
+
+    // Cash-chain refresh can take longer than the browser timeout. Run it after the
+    // response so a slow recalc cannot be mistaken for a failed save and retried.
+    const refreshBranchId = branchId;
+    const refreshDate = expenseDate;
+    setImmediate(async () => {
+      try {
+        await refreshDailyClosingForExpenseDates(refreshBranchId, refreshDate);
+      } catch (err) {
+        console.error('[expenses] background daily closing refresh failed:', err.message);
+      }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

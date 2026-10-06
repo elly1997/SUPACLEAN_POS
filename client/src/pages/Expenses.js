@@ -58,6 +58,7 @@ const Expenses = () => {
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [savingCategory, setSavingCategory] = useState(false);
+  const [savingExpense, setSavingExpense] = useState(false);
   const [acknowledgeReconciledDay, setAcknowledgeReconciledDay] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
 
@@ -174,6 +175,8 @@ const Expenses = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (savingExpense) return;
+    setSavingExpense(true);
     try {
       if (editingId) {
         const res = await updateExpense(editingId, {
@@ -201,18 +204,22 @@ const Expenses = () => {
           })
         });
         const data = res?.data;
-        if (data?.reconciled_day_refreshed) {
+        if (data?.duplicate_suppressed) {
+          showToast('This expense was already saved. A duplicate was not added.', 'info');
+        } else if (data?.reconciled_day_refreshed) {
           showToast('Expense recorded and reconciled daily summary was recalculated for that date.', 'success');
         } else if (data?.daily_closing_locked) {
           showToast('Expense recorded. That day is already reconciled — daily closing was not changed automatically.', 'warning');
         } else {
-          showToast('Expense added and daily closing updated for that date.', 'success');
+          showToast('Expense added. Daily closing for that date is updating in the background.', 'success');
         }
       }
       resetForm();
       loadExpenses();
     } catch (error) {
       showToast('Error saving expense: ' + (error.response?.data?.error || error.message), 'error');
+    } finally {
+      setSavingExpense(false);
     }
   };
 
@@ -599,8 +606,8 @@ const Expenses = () => {
               </div>
             </div>
             <div className="form-actions">
-              <button type="submit" className="btn-primary">
-                {editingId ? 'Update Expense' : 'Add Expense'}
+              <button type="submit" className="btn-primary" disabled={savingExpense}>
+                {savingExpense ? 'Saving…' : (editingId ? 'Update Expense' : 'Add Expense')}
               </button>
               <button type="button" onClick={resetForm} className="btn-secondary">
                 Cancel

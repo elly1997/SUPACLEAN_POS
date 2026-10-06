@@ -238,7 +238,7 @@ process.on('uncaughtException', (err) => {
   gracefulShutdown('uncaughtException');
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  gracefulShutdown('unhandledRejection');
+// A failed request must not take the POS down for every signed-in user.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled Rejection (process kept alive):', reason);
 });

@@ -232,35 +232,30 @@ const NewOrder = () => {
       return;
     }
     
+    if (!effectiveBranchId) {
+      setCustomers([]);
+      setShowCustomerDropdown(true);
+      return;
+    }
+
     try {
-      const res = await searchCustomers(term.trim());
+      const res = await searchCustomers(term.trim(), { branchId: effectiveBranchId });
       const customerList = res.data || [];
-      console.log('Customer search results:', customerList.length, 'customers found for term:', term);
       setCustomers(customerList);
-      // Show dropdown if we have results
-      if (customerList.length > 0) {
-        setShowCustomerDropdown(true);
-      } else {
-        // Keep dropdown open even with no results to show "no results" state
-        setShowCustomerDropdown(true);
-      }
+      setShowCustomerDropdown(true);
     } catch (error) {
       console.error('Error loading customers:', error);
-      console.error('Error details:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status
-      });
-      // Show error toast for debugging
       if (error.response?.status === 401) {
         showToast('Session expired. Please log in again.', 'error');
+      } else if (error.response?.status === 400) {
+        showToast(error.response?.data?.error || 'Select a branch before searching customers.', 'error');
       } else if (error.message?.includes('Network Error') || error.message?.includes('ECONNREFUSED')) {
         showToast('Cannot connect to server on port 5000. Please ensure the server is running.', 'error');
       }
       setCustomers([]);
       setShowCustomerDropdown(false);
     }
-  }, [showToast]);
+  }, [showToast, effectiveBranchId]);
 
   const loadCustomerHistory = useCallback(async () => {
     if (!selectedCustomer) return;
@@ -1290,7 +1285,7 @@ Phone: ${customer.phone}
                       ) : (
                         <div className="customer-dropdown-item" style={{ cursor: 'default', opacity: 0.6 }}>
                           <div className="customer-dropdown-details">
-                            <span>No customers found matching "{searchTerm}"</span>
+                            <span>No customers at this branch match "{searchTerm}"</span>
                           </div>
                         </div>
                       )}

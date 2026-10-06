@@ -149,7 +149,10 @@ export default function AdminNotificationCenter() {
   useEffect(() => {
     if (!isAdmin) return undefined;
     load();
-    const id = setInterval(load, 45000);
+    const id = setInterval(() => {
+      if (document.hidden) return;
+      load();
+    }, 90000);
     return () => clearInterval(id);
   }, [isAdmin, load]);
 

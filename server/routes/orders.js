@@ -24,6 +24,7 @@ const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
+const { coalesceRead } = require('../utils/readCoalesce');
 const { validatePayment } = require('../utils/paymentValidation');
 const { recordPaymentTransaction, recordPaymentTransactionClient, logPaymentChange, logPaymentChangeClient } = require('../utils/paymentTransactions');
 const { applyReceiptPaymentAtomic } = require('../utils/receiptPayment');
@@ -258,15 +259,20 @@ router.get('/dashboard-stats', requireBranchAccess(), async (req, res) => {
     ${branchFilter.clause}
   `;
 
+  const cacheKey = `dashboard-stats:${branchFilter.clause}:${JSON.stringify(branchFilter.params)}`;
+
   try {
-    const row = await db.get(query, [...branchFilter.params]);
-    res.json({
-      total_receipts: Number(row?.total_receipts || 0),
-      pending_receipts: Number(row?.pending_receipts || 0),
-      ready_receipts: Number(row?.ready_receipts || 0),
-      collected_receipts: Number(row?.collected_receipts || 0),
-      total_items: Number(row?.total_items || 0)
+    const payload = await coalesceRead(cacheKey, 15000, async () => {
+      const row = await db.get(query, [...branchFilter.params]);
+      return {
+        total_receipts: Number(row?.total_receipts || 0),
+        pending_receipts: Number(row?.pending_receipts || 0),
+        ready_receipts: Number(row?.ready_receipts || 0),
+        collected_receipts: Number(row?.collected_receipts || 0),
+        total_items: Number(row?.total_items || 0)
+      };
     });
+    res.json(payload);
   } catch (err) {
     console.error('Error fetching order dashboard stats:', err);
     res.status(500).json({ error: err.message });
@@ -345,49 +351,52 @@ router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
   query += ' LIMIT ?';
   params.push(maxRows);
 
+  const queueCacheKey = `collection-queue:${branchFilter.clause}:${JSON.stringify(branchFilter.params)}:${customer || ''}:${overdue_only || ''}:${limit}`;
+
   try {
-    const allOrders = await db.all(query, params);
-    
-    // Group orders by receipt_number
-    const receiptGroups = {};
-    allOrders.forEach(order => {
-      const receiptNum = order.receipt_number;
-      if (!receiptGroups[receiptNum]) {
-        receiptGroups[receiptNum] = [];
-      }
-      receiptGroups[receiptNum].push(order);
+    const limited = await coalesceRead(queueCacheKey, 0, async () => {
+      const allOrders = await db.all(query, params);
+
+      // Group orders by receipt_number
+      const receiptGroups = {};
+      allOrders.forEach(order => {
+        const receiptNum = order.receipt_number;
+        if (!receiptGroups[receiptNum]) {
+          receiptGroups[receiptNum] = [];
+        }
+        receiptGroups[receiptNum].push(order);
+      });
+
+      // Create grouped receipt entries with totals
+      const groupedReceipts = Object.keys(receiptGroups).map(receiptNum => {
+        const items = receiptGroups[receiptNum];
+        const firstItem = items[0];
+
+        // Calculate totals across all items
+        const receiptTotal = items.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0);
+        const receiptPaid = items.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0);
+
+        return {
+          ...firstItem,
+          receipt_number: receiptNum,
+          total_amount: receiptTotal,
+          paid_amount: receiptPaid,
+          receipt_item_count: items.length,
+          is_overdue: firstItem.is_overdue,
+          hours_overdue: firstItem.hours_overdue,
+          all_items: items // Include all items for reference
+        };
+      });
+
+      groupedReceipts.sort((a, b) => {
+        if (a.is_overdue !== b.is_overdue) return b.is_overdue - a.is_overdue;
+        const aDate = a.estimated_collection_date || a.ready_date;
+        const bDate = b.estimated_collection_date || b.ready_date;
+        return new Date(aDate) - new Date(bDate);
+      });
+
+      return groupedReceipts.slice(0, parseInt(limit, 10));
     });
-    
-    // Create grouped receipt entries with totals
-    const groupedReceipts = Object.keys(receiptGroups).map(receiptNum => {
-      const items = receiptGroups[receiptNum];
-      const firstItem = items[0];
-      
-      // Calculate totals across all items
-      const receiptTotal = items.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0);
-      const receiptPaid = items.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0);
-      
-      return {
-        ...firstItem,
-        receipt_number: receiptNum,
-        total_amount: receiptTotal,
-        paid_amount: receiptPaid,
-        receipt_item_count: items.length,
-        is_overdue: firstItem.is_overdue,
-        hours_overdue: firstItem.hours_overdue,
-        all_items: items // Include all items for reference
-      };
-    });
-    
-    // Sort grouped receipts and limit
-    groupedReceipts.sort((a, b) => {
-      if (a.is_overdue !== b.is_overdue) return b.is_overdue - a.is_overdue;
-      const aDate = a.estimated_collection_date || a.ready_date;
-      const bDate = b.estimated_collection_date || b.ready_date;
-      return new Date(aDate) - new Date(bDate);
-    });
-    
-    const limited = groupedReceipts.slice(0, parseInt(limit));
     res.json(limited);
   } catch (err) {
     console.error('Error fetching collection queue:', err);
@@ -868,12 +877,18 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
 
     const orderBranchId =
       req.user.role === 'admin'
-        ? branch_id || req.user?.branchId || null
+        ? branch_id || getEffectiveBranchId(req) || req.user?.branchId || null
         : req.user?.branchId || null;
 
+    if (orderBranchId == null) {
+      return res.status(400).json({ error: 'Select a branch before creating an order.' });
+    }
+
     const customer = await db.get('SELECT * FROM customers WHERE id = ?', [customer_id]);
-    if (!customer) {
-      return res.status(404).json({ error: 'Customer not found' });
+    if (!customer || Number(customer.primary_branch_id) !== Number(orderBranchId)) {
+      return res.status(400).json({
+        error: 'This customer belongs to another branch. Choose a customer from the branch you have open.',
+      });
     }
 
     let branchName = null;
@@ -1853,6 +1868,7 @@ router.patch('/customer/:customerId/phone', requireBranchAccess(), requirePermis
     const existing = await db.get(
       `SELECT id FROM customers
        WHERE id != ?
+         AND primary_branch_id IS NOT DISTINCT FROM (SELECT primary_branch_id FROM customers WHERE id = ?)
          AND (
            phone = ?
            OR phone = ?
@@ -1860,7 +1876,7 @@ router.patch('/customer/:customerId/phone', requireBranchAccess(), requirePermis
            OR REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') = ?
          )
        LIMIT 1`,
-      [customerId, trimmedPhone, normalized, trimmedPhone, normalized.replace(/\D/g, '')]
+      [customerId, customerId, trimmedPhone, normalized, trimmedPhone, normalized.replace(/\D/g, '')]
     );
     if (existing) {
       return res.status(400).json({ error: 'Phone number already in use by another customer' });
