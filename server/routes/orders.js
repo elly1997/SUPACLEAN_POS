@@ -24,6 +24,7 @@ const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
+const { customerBelongsToBranch } = require('../utils/customerBranch');
 const { coalesceRead } = require('../utils/readCoalesce');
 const { validatePayment } = require('../utils/paymentValidation');
 const { recordPaymentTransaction, recordPaymentTransactionClient, logPaymentChange, logPaymentChangeClient } = require('../utils/paymentTransactions');
@@ -885,9 +886,9 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
     }
 
     const customer = await db.get('SELECT * FROM customers WHERE id = ?', [customer_id]);
-    if (!customer || Number(customer.primary_branch_id) !== Number(orderBranchId)) {
+    if (!customer || !(await customerBelongsToBranch(db, customer, orderBranchId))) {
       return res.status(400).json({
-        error: 'This customer belongs to another branch. Choose a customer from the branch you have open.',
+        error: 'This customer is saved under another branch. Add them again on this branch — the name or phone can be the same.',
       });
     }
 
@@ -900,6 +901,22 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
     }
 
     await client.query('BEGIN');
+
+    if (customer.primary_branch_id == null) {
+      const otherBranch = await client.query(
+        `SELECT 1 FROM orders
+         WHERE customer_id = $1 AND branch_id IS NOT NULL AND branch_id <> $2
+           AND COALESCE(is_voided, FALSE) = FALSE
+         LIMIT 1`,
+        [customer.id, orderBranchId]
+      );
+      if (!otherBranch.rows.length) {
+        await client.query(
+          'UPDATE customers SET primary_branch_id = $1 WHERE id = $2 AND primary_branch_id IS NULL',
+          [orderBranchId, customer.id]
+        );
+      }
+    }
 
     const trimmedManual = String(manualReceipt || '').trim();
     let sharedReceiptNumber = trimmedManual || null;

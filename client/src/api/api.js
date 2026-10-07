@@ -200,10 +200,14 @@ export async function searchCustomers(q, options = {}) {
     return { data: [] };
   }
   const limit = options.limit || 15;
+  const openBranchId = options.branchId == null || options.branchId === '' ? null : Number(options.branchId);
   const keepBranch = (list) => {
-    if (options.branchId == null || options.branchId === '') return list;
-    const branchId = Number(options.branchId);
-    return (list || []).filter((c) => Number(c.branch_id ?? c.primary_branch_id) === branchId);
+    if (openBranchId == null) return list || [];
+    return (list || []).filter((c) => {
+      const home = c.branch_id ?? c.primary_branch_id;
+      if (home == null || home === '') return true;
+      return Number(home) === openBranchId;
+    });
   };
 
   if (isOffline()) {

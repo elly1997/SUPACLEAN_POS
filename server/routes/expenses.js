@@ -391,36 +391,44 @@ router.post('/', requireBranchAccess(), requirePermission('canManageExpenses'), 
       }
     }
 
-    const duplicate = await db.get(
-      `SELECT e.id
-       FROM expenses e
-       LEFT JOIN salary_advances sa ON sa.source_expense_id = e.id
-       WHERE e.branch_id = $1
-         AND e.date = $2::date
-         AND lower(e.category) = lower($3)
-         AND e.amount = $4
-         AND e.payment_source = $5
-         AND COALESCE(e.description, '') = COALESCE($6, '')
-         AND COALESCE(e.receipt_number, '') = COALESCE($7, '')
-         AND COALESCE(e.is_voided, FALSE) = FALSE
-         AND e.created_at >= CURRENT_TIMESTAMP - INTERVAL '20 minutes'
-         AND (
-           $8::int IS NULL
-           OR sa.employee_id = $8::int
-         )
-       ORDER BY e.id DESC
-       LIMIT 1`,
-      [
-        branchId,
-        expenseDate,
-        category,
-        amount,
-        payment_source,
-        description || null,
-        receipt_number || null,
-        isSalaryAdvanceCategory(category) ? Number(employee_id) : null
-      ]
-    );
+    const salaryAdvance = isSalaryAdvanceCategory(category);
+    const duplicateParams = [
+      branchId,
+      expenseDate,
+      category,
+      amount,
+      payment_source,
+      description || null,
+      receipt_number || null,
+    ];
+    let employeeSql = '';
+    if (salaryAdvance) {
+      employeeSql = 'AND sa.employee_id = $8::int';
+      duplicateParams.push(Number(employee_id));
+    }
+    let duplicate = null;
+    try {
+      duplicate = await db.get(
+        `SELECT e.id
+         FROM expenses e
+         LEFT JOIN salary_advances sa ON sa.source_expense_id = e.id
+         WHERE e.branch_id = $1
+           AND left(e.date::text, 10) = left($2::text, 10)
+           AND lower(e.category) = lower($3::text)
+           AND e.amount = $4::numeric
+           AND e.payment_source = $5
+           AND COALESCE(e.description, '') = COALESCE($6, '')
+           AND COALESCE(e.receipt_number, '') = COALESCE($7, '')
+           AND COALESCE(e.is_voided, FALSE) = FALSE
+           AND e.created_at >= CURRENT_TIMESTAMP - INTERVAL '20 minutes'
+           ${employeeSql}
+         ORDER BY e.id DESC
+         LIMIT 1`,
+        duplicateParams
+      );
+    } catch (dupErr) {
+      console.error('[expenses] duplicate check skipped:', dupErr.message);
+    }
     if (duplicate?.id) {
       const existing = await db.get(
         `SELECT e.*, b.name as bank_account_name, d.bank_name as deposit_bank_name,

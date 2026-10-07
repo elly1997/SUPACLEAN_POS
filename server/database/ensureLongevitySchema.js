@@ -63,9 +63,57 @@ async function countDuplicateNormalizedPhones() {
 
 async function ensurePhoneNormalizedIndexes() {
   // Phone numbers are unique inside a branch, not across the company.
-  // The same number can exist at WP and at another branch as separate customers.
+  // The same person can be added again at another branch, even with the same phone.
   await db.run('DROP INDEX IF EXISTS idx_customers_phone_normalized', []);
-  await db.run('ALTER TABLE customers DROP CONSTRAINT IF EXISTS customers_phone_key', []).catch(() => {});
+  await db.run(
+    `DO $$
+     DECLARE r record;
+     BEGIN
+       FOR r IN
+         SELECT c.conname
+         FROM pg_constraint c
+         JOIN pg_class t ON t.oid = c.conrelid
+         WHERE t.relname = 'customers'
+           AND c.contype = 'u'
+           AND pg_get_constraintdef(c.oid) ILIKE '%phone%'
+           AND pg_get_constraintdef(c.oid) NOT ILIKE '%primary_branch_id%'
+       LOOP
+         EXECUTE format('ALTER TABLE customers DROP CONSTRAINT IF EXISTS %I', r.conname);
+       END LOOP;
+
+       FOR r IN
+         SELECT indexname
+         FROM pg_indexes
+         WHERE tablename = 'customers'
+           AND indexdef ILIKE 'CREATE UNIQUE%'
+           AND indexdef ILIKE '%phone%'
+           AND indexdef NOT ILIKE '%primary_branch_id%'
+       LOOP
+         EXECUTE format('DROP INDEX IF EXISTS %I', r.indexname);
+       END LOOP;
+     END $$`,
+    []
+  ).catch((err) => {
+    console.error('Could not drop company-wide customer phone lock:', err.message);
+  });
+
+  await db.run(
+    `UPDATE customers c
+     SET primary_branch_id = src.branch_id
+     FROM (
+       SELECT customer_id, MIN(branch_id) AS branch_id
+       FROM orders
+       WHERE branch_id IS NOT NULL
+         AND COALESCE(is_voided, FALSE) = FALSE
+       GROUP BY customer_id
+       HAVING COUNT(DISTINCT branch_id) = 1
+     ) src
+     WHERE c.id = src.customer_id
+       AND c.primary_branch_id IS NULL`,
+    []
+  ).catch((err) => {
+    console.error('Could not attach older customers to their branch:', err.message);
+  });
 
   const dupes = await db.get(
     `SELECT COUNT(*) AS groups

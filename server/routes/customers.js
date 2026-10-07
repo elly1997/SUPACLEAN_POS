@@ -4,6 +4,7 @@ const db = require('../database/query');
 const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
+const { branchCustomerMatchSql, customerBelongsToBranch } = require('../utils/customerBranch');
 const { normalizePhoneDigits, isPlaceholderPhone } = require('../utils/customerPhone');
 
 async function phoneNormalizedForCustomer(phone, excludeId = null, branchId = null) {
@@ -65,10 +66,6 @@ async function findCustomerByPhone(phone, branchId = null) {
   return rows && rows[0] ? rows[0] : null;
 }
 
-function customerInCurrentBranch(customer, branchId) {
-  if (branchId == null) return true;
-  return customer && Number(customer.primary_branch_id) === Number(branchId);
-}
 
 async function formatExistingCustomerResponse(existing, extras = {}) {
   let home_branch_name = null;
@@ -128,8 +125,8 @@ router.get('/search', async (req, res) => {
     params.push(`${normalizedPhone}%`);
   }
 
-  const whereClause = ` WHERE c.primary_branch_id = ? AND (${searchConditions.join(' OR ')})`;
-  params.unshift(branchId);
+  const whereClause = ` WHERE ${branchCustomerMatchSql('c')} AND (${searchConditions.join(' OR ')})`;
+  params.unshift(branchId, branchId);
 
   try {
     const rows = await db.all(
@@ -161,8 +158,8 @@ router.get('/', async (req, res) => {
     const whereConditions = [];
     const params = [];
     if (effectiveBranchId != null) {
-      whereConditions.push('c.primary_branch_id = ?');
-      params.push(effectiveBranchId);
+      whereConditions.push(branchCustomerMatchSql('c'));
+      params.push(effectiveBranchId, effectiveBranchId);
     }
     if (search) {
       whereConditions.push('(c.name ILIKE ? OR c.phone ILIKE ?)');
@@ -224,8 +221,8 @@ router.get('/', async (req, res) => {
 
   const whereConditions = [];
   if (effectiveBranchId != null) {
-    whereConditions.push('c.primary_branch_id = ?');
-    params.push(effectiveBranchId);
+    whereConditions.push(branchCustomerMatchSql('c'));
+    params.push(effectiveBranchId, effectiveBranchId);
   }
   if (search) {
     whereConditions.push('(c.name ILIKE ? OR c.phone ILIKE ?)');
@@ -260,7 +257,8 @@ router.get('/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const row = await db.get('SELECT * FROM customers WHERE id = ?', [id]);
-    if (!row || !customerInCurrentBranch(row, getEffectiveBranchId(req))) {
+    const branchId = getEffectiveBranchId(req);
+    if (!row || (branchId != null && !(await customerBelongsToBranch(db, row, branchId)))) {
       return res.status(404).json({ error: 'Customer not found in this branch' });
     }
     res.json(row);
@@ -302,7 +300,9 @@ router.post('/quick-add', requirePermission('canCreateOrders'), async (req, res)
         const payload = await formatExistingCustomerResponse(existing, { tin: c?.tin, vrn: c?.vrn });
         return res.status(200).json({ ...c, ...payload, existing: true });
       }
-      return res.status(400).json({ error: 'Phone number already exists' });
+      return res.status(400).json({
+        error: 'This phone is already saved at another branch. Add the customer again after the server restarts so this branch can keep its own copy.',
+      });
     }
     res.status(500).json({ error: err.message });
   }
@@ -342,7 +342,9 @@ router.post('/', requireBranchAccess(), requireAnyPermission('canManageCustomers
       if (existing) {
         return res.status(200).json(await formatExistingCustomerResponse(existing, { email, address }));
       }
-      return res.status(400).json({ error: 'Phone number already exists' });
+      return res.status(400).json({
+        error: 'This phone is already saved at another branch. Add the customer again after the server restarts so this branch can keep its own copy.',
+      });
     }
     res.status(500).json({ error: err.message });
   }
@@ -364,10 +366,11 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageCustomers'
 
   try {
     const current = await db.get('SELECT * FROM customers WHERE id = ?', [id]);
-    if (!current || !customerInCurrentBranch(current, getEffectiveBranchId(req))) {
+    const openBranchId = getEffectiveBranchId(req);
+    if (!current || (openBranchId != null && !(await customerBelongsToBranch(db, current, openBranchId)))) {
       return res.status(404).json({ error: 'Customer not found in this branch' });
     }
-    const branchId = current.primary_branch_id ?? getEffectiveBranchId(req);
+    const branchId = current.primary_branch_id ?? openBranchId;
     if (phone != null && phone.trim()) {
       const existing = await findCustomerByPhone(phone, branchId);
       if (existing && String(existing.id) !== String(id)) {
@@ -583,7 +586,7 @@ router.get('/:id/orders', async (req, res) => {
   try {
     const branchId = getEffectiveBranchId(req);
     const customer = await db.get('SELECT id, primary_branch_id FROM customers WHERE id = ?', [id]);
-    if (!customer || !customerInCurrentBranch(customer, branchId)) {
+    if (!customer || (branchId != null && !(await customerBelongsToBranch(db, customer, branchId)))) {
       return res.status(404).json({ error: 'Customer not found in this branch' });
     }
     const branchFilter = getBranchFilter(req, 'o');
