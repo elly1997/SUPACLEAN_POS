@@ -24,7 +24,8 @@ const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
-const { customerBelongsToBranch } = require('../utils/customerBranch');
+const { customerBelongsToBranch, branchCustomerMatchSql } = require('../utils/customerBranch');
+const { releaseCompanyWidePhoneLock } = require('../database/ensureLongevitySchema');
 const { coalesceRead } = require('../utils/readCoalesce');
 const { validatePayment } = require('../utils/paymentValidation');
 const { recordPaymentTransaction, recordPaymentTransactionClient, logPaymentChange, logPaymentChangeClient } = require('../utils/paymentTransactions');
@@ -2097,8 +2098,10 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
       const chunk = uniqueNames.slice(i, i + 80);
       const placeholders = chunk.map(() => '?').join(',');
       const found = await db.all(
-        `SELECT id, name, phone FROM customers WHERE LOWER(name) IN (${placeholders})`,
-        chunk.map((n) => n.toLowerCase())
+        `SELECT c.id, c.name, c.phone FROM customers c
+         WHERE LOWER(c.name) IN (${placeholders})
+           AND ${branchCustomerMatchSql('c')}`,
+        [...chunk.map((n) => n.toLowerCase()), branchId, branchId]
       ).catch(() => []);
       for (const c of found || []) {
         customerByName.set(String(c.name || '').toLowerCase(), { id: c.id, phone: c.phone });
@@ -2269,17 +2272,38 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
             }
             customerByName.set(nameKey, { id: customerId, phone: phoneToStore });
           } catch (insertErr) {
-            // Race / unique phone: try lookup again
-            const again = await db.get('SELECT id, phone FROM customers WHERE LOWER(name) = LOWER(?)', [customerName]).catch(() => null);
-            if (again?.id) {
-              customerId = again.id;
-              customerPhoneAfter = again.phone;
-              customerByName.set(nameKey, { id: again.id, phone: again.phone });
+            const uniquePhone = /unique/i.test(String(insertErr.message || '')) && /phone/i.test(String(insertErr.message || ''));
+            if (uniquePhone) {
+              await releaseCompanyWidePhoneLock().catch(() => {});
+              try {
+                const result = await db.run(
+                  'INSERT INTO customers (name, phone, primary_branch_id) VALUES (?, ?, ?) RETURNING id',
+                  [customerName, phoneToStore, branchId]
+                );
+                customerId = resolveInsertId(result);
+              } catch (retryErr) {
+                insertErr = retryErr;
+              }
+            }
+            if (!customerId) {
+              const again = await db.get(
+                `SELECT c.id, c.phone FROM customers c
+                 WHERE LOWER(c.name) = LOWER(?)
+                   AND ${branchCustomerMatchSql('c')}`,
+                [customerName, branchId, branchId]
+              ).catch(() => null);
+              if (again?.id) {
+                customerId = again.id;
+                customerPhoneAfter = again.phone;
+                customerByName.set(nameKey, { id: again.id, phone: again.phone });
+              } else {
+                errors.push(`Row ${index + 2}: Error creating customer - ${insertErr.message}`);
+                skipped++;
+                processed++;
+                continue;
+              }
             } else {
-              errors.push(`Row ${index + 2}: Error creating customer - ${insertErr.message}`);
-              skipped++;
-              processed++;
-              continue;
+              customerByName.set(nameKey, { id: customerId, phone: phoneToStore });
             }
           }
         } else if (phone && isPlaceholderPhone(customer.phone)) {
@@ -2288,13 +2312,14 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
             const phoneTaken = await db.get(
               `SELECT id FROM customers
                WHERE id != ?
+                 AND primary_branch_id IS NOT DISTINCT FROM ?
                  AND (
                    phone = ?
                    OR phone = ?
                    OR TRIM(phone) = ?
                  )
                LIMIT 1`,
-              [customerId, phone, normalized, phone]
+              [customerId, branchId, phone, normalized, phone]
             );
             if (!phoneTaken) {
               await db.run(

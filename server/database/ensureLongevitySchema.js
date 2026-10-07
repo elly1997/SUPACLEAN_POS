@@ -61,10 +61,12 @@ async function countDuplicateNormalizedPhones() {
   };
 }
 
-async function ensurePhoneNormalizedIndexes() {
-  // Phone numbers are unique inside a branch, not across the company.
-  // The same person can be added again at another branch, even with the same phone.
-  await db.run('DROP INDEX IF EXISTS idx_customers_phone_normalized', []);
+async function releaseCompanyWidePhoneLock() {
+  // The same phone may be saved again at another branch. Only one copy per branch.
+  await db.run('ALTER TABLE customers DROP CONSTRAINT IF EXISTS customers_phone_key', []).catch(() => {});
+  await db.run('ALTER TABLE customers DROP CONSTRAINT IF EXISTS customers_phone_normalized_key', []).catch(() => {});
+  await db.run('DROP INDEX IF EXISTS customers_phone_key', []).catch(() => {});
+  await db.run('DROP INDEX IF EXISTS idx_customers_phone_normalized', []).catch(() => {});
   await db.run(
     `DO $$
      DECLARE r record;
@@ -96,6 +98,10 @@ async function ensurePhoneNormalizedIndexes() {
   ).catch((err) => {
     console.error('Could not drop company-wide customer phone lock:', err.message);
   });
+}
+
+async function ensurePhoneNormalizedIndexes() {
+  await releaseCompanyWidePhoneLock();
 
   await db.run(
     `UPDATE customers c
@@ -230,4 +236,5 @@ async function ensurePhoneNormalizedIndexes() {
 module.exports = {
   backfillPhoneNormalizedBatch,
   countDuplicateNormalizedPhones,
+  releaseCompanyWidePhoneLock,
 };
