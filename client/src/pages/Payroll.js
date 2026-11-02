@@ -951,108 +951,22 @@ const Payroll = () => {
               <span className="payroll-count-chip">{filteredEmployees.length} staff</span>
             </div>
           </div>
-          <div
-            className="payroll-table-wrap staff-wrap interactive-scroll-region"
-            tabIndex={0}
-            role="region"
-            aria-label="All staff details table"
-            {...tableScrollHandlers}
-          >
-            <table className="payroll-table payroll-table--staff">
-              <thead>
-                <tr>
-                  <th>Full Name</th>
-                  <th>Employee Code</th>
-                  <th>Phone</th>
-                  <th className="num">Gross Salary</th>
-                  <th>NSSF</th>
-                  <th>PAYE</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredEmployees.map((emp) => (
-                  <tr key={emp.id}>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="text"
-                          value={staffDraft.full_name || ''}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, full_name: e.target.value }))}
-                        />
-                      ) : emp.full_name}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="text"
-                          value={staffDraft.employee_code || ''}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, employee_code: e.target.value }))}
-                        />
-                      ) : (emp.employee_code || '-')}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="text"
-                          value={staffDraft.phone || ''}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, phone: e.target.value }))}
-                        />
-                      ) : (emp.phone || '-')}
-                    </td>
-                    <td className="num">
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          value={staffDraft.gross_salary ?? 0}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, gross_salary: Number(e.target.value || 0) }))}
-                        />
-                      ) : Number(emp.gross_salary || 0).toLocaleString()}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="checkbox"
-                          checked={!!staffDraft.nssf_enabled}
-                          onMouseDown={stopDragBubbling}
-                          onClick={stopDragBubbling}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, nssf_enabled: e.target.checked }))}
-                        />
-                      ) : (emp.nssf_enabled ? 'Enabled' : 'Disabled')}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <input
-                          type="checkbox"
-                          checked={!!staffDraft.paye_enabled}
-                          onMouseDown={stopDragBubbling}
-                          onClick={stopDragBubbling}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, paye_enabled: e.target.checked }))}
-                        />
-                      ) : (emp.paye_enabled ? 'Enabled' : 'Disabled')}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <select
-                          value={staffDraft.is_active ? 'active' : 'inactive'}
-                          onChange={(e) => setStaffDraft((p) => ({ ...p, is_active: e.target.value === 'active' }))}
-                        >
-                          <option value="active">Active</option>
-                          <option value="inactive">Inactive</option>
-                        </select>
-                      ) : (emp.is_active ? 'Active' : 'Inactive')}
-                    </td>
-                    <td>
-                      {editingStaffId === emp.id ? (
-                        <div className="staff-row-actions">
-                          <button type="button" className="btn-primary" disabled={savingStaff} onClick={saveEditStaff}>
-                            {savingStaff ? 'Saving...' : 'Save'}
-                          </button>
-                          <button type="button" className="btn-secondary" onClick={cancelEditStaff}>Cancel</button>
-                        </div>
-                      </div>
+          <div className="staff-directory">
+            {filteredEmployees.map((emp) => {
+              const isEditing = editingStaffId === emp.id;
+              return (
+                <article
+                  id={`staff-card-${emp.id}`}
+                  key={emp.id}
+                  className={`staff-card${isEditing ? ' is-editing' : ''}${emp.is_active ? '' : ' is-inactive'}`}
+                >
+                  {isEditing ? (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        saveEditStaff();
+                      }}
+                    >
                       <div className="staff-edit-grid">
                         <label className="payroll-field">
                           <span>Full name</span>
