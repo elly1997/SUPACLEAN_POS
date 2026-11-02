@@ -29,6 +29,20 @@ const formatPayrollMonthLabel = (monthKey) => {
 
 const moneyTzs = (n) => `TSh ${Number(n || 0).toLocaleString()}`;
 
+const formatSlipDate = (value) => {
+  if (!value) return '—';
+  const raw = String(value);
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw.slice(0, 10);
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
 /** Net still on the books while the period is open (matches API when present). */
 const outstandingNetForHistoryRow = (h) => {
   if (h == null) return 0;
@@ -70,6 +84,131 @@ const clampRate = (v, fallback = 10) => {
   return Math.max(0, Math.min(100, n));
 };
 
+/** Head-office SWIFT codes used on the TCB internet-banking salary file. */
+const TZ_BANKS = [
+  { name: 'Absa', swift: 'BARCTZTZ' },
+  { name: 'Access Bank', swift: 'FMBZTZTX' },
+  { name: 'Akiba', swift: 'AKCOTZTZ' },
+  { name: 'Amana', swift: 'AMNNTZTZ' },
+  { name: 'Azania', swift: 'AZANTZTZ' },
+  { name: 'Bank of Africa', swift: 'EUAFTZTZ' },
+  { name: 'Bank of Baroda', swift: 'BARBTZTZ' },
+  { name: 'Bank of India', swift: 'BKIDTZTZ' },
+  { name: 'Canara', swift: 'CNRBTZTZ' },
+  { name: 'China Dasheng', swift: 'CDSHTZTZ' },
+  { name: 'Citibank', swift: 'CITITZTZ' },
+  { name: 'CRDB', swift: 'CORUTZTZ' },
+  { name: 'DCB', swift: 'DASUTZTZ' },
+  { name: 'DTB', swift: 'DTKETZTZ' },
+  { name: 'Ecobank', swift: 'ECOCTZTZ' },
+  { name: 'Equity', swift: 'EQBLTZTZ' },
+  { name: 'Exim', swift: 'EXTNTZTZ' },
+  { name: 'FINCA', swift: 'FNMITZTZ' },
+  { name: 'FNB', swift: 'FIRNTZTX' },
+  { name: 'GTBank', swift: 'GTBITZTZ' },
+  { name: 'Habib African', swift: 'HABLTZTZ' },
+  { name: 'I&M', swift: 'IMBLTZTZ' },
+  { name: 'KCB', swift: 'KCBLTZTZ' },
+  { name: 'Kilimanjaro Co-op', swift: 'KLMJTZTZ' },
+  { name: 'Letshego', swift: 'ADVBTZTZ' },
+  { name: 'Maendeleo', swift: 'MBTLTZTZ' },
+  { name: 'Mkombozi', swift: 'MKCBTZTZ' },
+  { name: 'Mucoba', swift: 'MUOBTZTZ' },
+  { name: 'Mwalimu', swift: 'MWCOTZTZ' },
+  { name: 'Mwanga Hakika', swift: 'MWCBTZTZ' },
+  { name: 'NBC', swift: 'NLCBTZTX' },
+  { name: 'NCBA', swift: 'CBAFTZTZ' },
+  { name: 'NMB', swift: 'NMIBTZTZ' },
+  { name: 'PBZ', swift: 'PBZATZTZ' },
+  { name: 'Stanbic', swift: 'SBICTZTX' },
+  { name: 'Standard Chartered', swift: 'SCBLTZTX' },
+  { name: 'TCB', swift: 'TAPBTZTZ' },
+  { name: 'TIB', swift: 'TAINTZTZ' },
+  { name: 'UBA', swift: 'UNAFTZTZ' }
+];
+
+const emptyEmployeeForm = () => ({
+  full_name: '',
+  employee_code: '',
+  phone: '',
+  account_number: '',
+  bank_name: '',
+  bank_swift: '',
+  bank_other: false,
+  gross_salary: '',
+  default_allowances: '',
+  default_bonuses: '',
+  default_other_deductions: '',
+  nssf_enabled: true,
+  nssf_employee_rate: '10',
+  nssf_employer_rate: '10',
+  paye_enabled: true
+});
+
+const bankChoiceValue = (record) => {
+  const swift = String(record?.bank_swift || '').trim().toUpperCase();
+  if (TZ_BANKS.some((b) => b.swift === swift)) return swift;
+  if (record?.bank_other) return 'other';
+  if (String(record?.bank_name || '').trim() || swift) return 'other';
+  return '';
+};
+
+const applyBankChoice = (current, value) => {
+  if (!value) return { ...current, bank_other: false, bank_name: '', bank_swift: '' };
+  if (value === 'other') {
+    if (bankChoiceValue(current) === 'other') return { ...current, bank_other: true };
+    return { ...current, bank_other: true, bank_name: '', bank_swift: '' };
+  }
+  const bank = TZ_BANKS.find((b) => b.swift === value);
+  return { ...current, bank_other: false, bank_name: bank?.name || '', bank_swift: value };
+};
+
+const csvCell = (value) => {
+  const s = String(value ?? '');
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+};
+
+const isSwiftCode = (value) => /^[A-Z0-9]{8}([A-Z0-9]{3})?$/.test(String(value || '').trim().toUpperCase());
+
+function BankFields({ record, onRecord }) {
+  const choice = bankChoiceValue(record);
+  return (
+    <>
+      <label className="payroll-field">
+        <span>Bank name</span>
+        <select value={choice} onChange={(e) => onRecord(applyBankChoice(record, e.target.value))}>
+          <option value="">Select bank</option>
+          {TZ_BANKS.map((bank) => (
+            <option key={bank.swift} value={bank.swift}>{bank.name}</option>
+          ))}
+          <option value="other">Other bank</option>
+        </select>
+      </label>
+      {choice === 'other' && (
+        <>
+          <label className="payroll-field">
+            <span>Other bank name</span>
+            <input
+              type="text"
+              value={record.bank_name || ''}
+              onChange={(e) => onRecord({ ...record, bank_name: e.target.value, bank_other: true })}
+            />
+          </label>
+          <label className="payroll-field">
+            <span>SWIFT / BIC</span>
+            <input
+              type="text"
+              value={record.bank_swift || ''}
+              onChange={(e) => onRecord({ ...record, bank_swift: e.target.value.toUpperCase(), bank_other: true })}
+            />
+          </label>
+        </>
+      )}
+    </>
+  );
+}
+
 const isFeatureEnabled = (value) => value === true || value === 1 || value === '1' || value === 't';
 
 const Payroll = () => {
@@ -86,6 +225,7 @@ const Payroll = () => {
   const [payrollHistory, setPayrollHistory] = useState([]);
   const [hasSavedSnapshot, setHasSavedSnapshot] = useState(false);
   const [selectedEmployeeStatement, setSelectedEmployeeStatement] = useState('');
+  const [slipEmployeeId, setSlipEmployeeId] = useState('');
   const [staffSearch, setStaffSearch] = useState('');
   const [editingStaffId, setEditingStaffId] = useState(null);
   const [staffDraft, setStaffDraft] = useState({});
@@ -97,21 +237,17 @@ const Payroll = () => {
   const [completedOn, setCompletedOn] = useState('');
   const [markCompleted, setMarkCompleted] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
+  const payrollPanHandlers = {
+    onPointerDown: tableScrollHandlers.onPointerDown,
+    onPointerMove: tableScrollHandlers.onPointerMove,
+    onPointerUp: tableScrollHandlers.onPointerUp,
+    onPointerCancel: tableScrollHandlers.onPointerCancel,
+    onPointerLeave: tableScrollHandlers.onPointerLeave,
+    onKeyDown: tableScrollHandlers.onKeyDown
+  };
   const verificationWrapRef = useRef(null);
 
-  const [employeeForm, setEmployeeForm] = useState({
-    full_name: '',
-    employee_code: '',
-    phone: '',
-    gross_salary: '',
-    default_allowances: '',
-    default_bonuses: '',
-    default_other_deductions: '',
-    nssf_enabled: true,
-    nssf_employee_rate: '10',
-    nssf_employer_rate: '10',
-    paye_enabled: true
-  });
+  const [employeeForm, setEmployeeForm] = useState(emptyEmployeeForm);
 
   const recomputeLine = (line) => {
     const gross = Number(line.gross_salary || 0);
@@ -211,7 +347,9 @@ const Payroll = () => {
       const fullName = String(e.full_name || '').toLowerCase();
       const code = String(e.employee_code || '').toLowerCase();
       const phone = String(e.phone || '').toLowerCase();
-      return fullName.includes(q) || code.includes(q) || phone.includes(q);
+      const account = String(e.account_number || '').toLowerCase();
+      const bank = String(e.bank_name || '').toLowerCase();
+      return fullName.includes(q) || code.includes(q) || phone.includes(q) || account.includes(q) || bank.includes(q);
     });
   }, [employees, staffSearch]);
   const totalEmployees = employees.filter((e) => e.is_active !== false).length;
@@ -226,13 +364,38 @@ const Payroll = () => {
       && Number(savedHistoryEntry.processed_employees || 0) === payrollTotals.employee_count
     : !hasSavedSnapshot;
   const advancesTotal = advances.reduce((sum, a) => sum + Number(a.amount || 0), 0);
+  const slipLine = useMemo(
+    () => payroll.find((row) => String(row.employee_id) === String(slipEmployeeId)) || null,
+    [payroll, slipEmployeeId]
+  );
+  const slipAdvances = useMemo(
+    () => advances.filter((row) => String(row.employee_id) === String(slipEmployeeId)),
+    [advances, slipEmployeeId]
+  );
+
+  useEffect(() => {
+    if (!slipEmployeeId) return;
+    if (!payroll.some((row) => String(row.employee_id) === String(slipEmployeeId))) {
+      setSlipEmployeeId('');
+    }
+  }, [payroll, slipEmployeeId]);
 
   const submitEmployee = async (e) => {
     e.preventDefault();
     try {
+      const swift = String(employeeForm.bank_swift || '').replace(/\s+/g, '').toUpperCase();
+      if (swift && !isSwiftCode(swift)) {
+        showToast('Bank SWIFT code should be 8 or 11 characters', 'error');
+        return;
+      }
+      const form = { ...employeeForm };
+      delete form.bank_other;
       await createPayrollEmployee({
-        ...employeeForm,
+        ...form,
         tin_number: employeeForm.employee_code || null,
+        account_number: String(employeeForm.account_number || '').replace(/\s+/g, ''),
+        bank_name: String(employeeForm.bank_name || '').trim(),
+        bank_swift: swift,
         gross_salary: Number(employeeForm.gross_salary || 0),
         default_allowances: Number(employeeForm.default_allowances || 0),
         default_bonuses: Number(employeeForm.default_bonuses || 0),
@@ -241,19 +404,7 @@ const Payroll = () => {
         nssf_employer_rate: clampRate(employeeForm.nssf_employer_rate, 10)
       });
       showToast('Employee added', 'success');
-      setEmployeeForm({
-        full_name: '',
-        employee_code: '',
-        phone: '',
-        gross_salary: '',
-        default_allowances: '',
-        default_bonuses: '',
-        default_other_deductions: '',
-        nssf_enabled: true,
-        nssf_employee_rate: '10',
-        nssf_employer_rate: '10',
-        paye_enabled: true
-      });
+      setEmployeeForm(emptyEmployeeForm());
       load();
     } catch (err) {
       showToast(`Error adding employee: ${err.response?.data?.error || err.message}`, 'error');
@@ -266,10 +417,15 @@ const Payroll = () => {
       full_name: emp.full_name || '',
       employee_code: emp.employee_code || '',
       phone: emp.phone || '',
+      account_number: emp.account_number || '',
+      bank_name: emp.bank_name || '',
+      bank_swift: emp.bank_swift || '',
+      bank_other: false,
       gross_salary: Number(emp.gross_salary || 0),
-      nssf_enabled: !!emp.nssf_enabled,
-      paye_enabled: !!emp.paye_enabled,
       is_active: !!emp.is_active
+    });
+    window.requestAnimationFrame(() => {
+      document.getElementById(`staff-card-${emp.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   };
 
@@ -282,9 +438,21 @@ const Payroll = () => {
     if (!editingStaffId) return;
     setSavingStaff(true);
     try {
+      const swift = String(staffDraft.bank_swift || '').replace(/\s+/g, '').toUpperCase();
+      if (swift && !isSwiftCode(swift)) {
+        showToast('Bank SWIFT code should be 8 or 11 characters', 'error');
+        setSavingStaff(false);
+        return;
+      }
+      const draft = { ...staffDraft };
+      delete draft.bank_other;
       await updatePayrollEmployee(editingStaffId, {
-        ...staffDraft,
-        tin_number: staffDraft.employee_code || null
+        ...draft,
+        employee_code: String(staffDraft.employee_code || '').trim() || null,
+        tin_number: String(staffDraft.employee_code || '').trim() || null,
+        account_number: String(staffDraft.account_number || '').replace(/\s+/g, ''),
+        bank_name: String(staffDraft.bank_name || '').trim(),
+        bank_swift: swift
       });
       showToast('Staff details updated', 'success');
       cancelEditStaff();
@@ -377,12 +545,39 @@ const Payroll = () => {
     try {
       const lines = await actionLoadLines();
       if (!lines.length) return showToast('No saved payroll lines for selected month', 'error');
-      const csv = [
-        'Employee,Employee Code,Net Salary',
-        ...lines.map((r) => `"${(r.full_name || '').replace(/"/g, '""')}","${r.employee_code || ''}","${Number(r.net_salary || 0).toFixed(2)}"`)
-      ].join('\n');
-      downloadFile(`bank-transfer-${monthKey}.csv`, csv, 'text/csv;charset=utf-8');
-      showToast('Bank transfer file generated', 'success');
+      const payable = lines.filter((r) => Number(r.net_salary || 0) > 0);
+      if (!payable.length) return showToast('No net pay to transfer for this month', 'error');
+      const header = [
+        'ACCOUNT_HOLDER_NAME',
+        'ACCOUNT_NUMBER',
+        'AMOUNT',
+        'CURRENCY',
+        'BENEFICIARY_REFERENCE',
+        'BENEFICIARY_BANK_SWIFT',
+        'PRIORITY'
+      ];
+      const missing = [];
+      const rows = payable.map((r, index) => {
+        const account = String(r.account_number || '').replace(/\s+/g, '');
+        const swift = String(r.bank_swift || '').trim().toUpperCase();
+        if (!account || !swift) missing.push(r.full_name || 'Unnamed');
+        return [
+          String(r.full_name || '').trim().toUpperCase(),
+          account,
+          String(Math.round(Number(r.net_salary || 0))),
+          'TZS',
+          'salary',
+          swift,
+          String(index + 1)
+        ].map(csvCell).join(',');
+      });
+      const csv = [header.join(','), ...rows].join('\r\n');
+      downloadFile(`TCB-payroll-${monthKey}.csv`, csv, 'text/csv;charset=utf-8');
+      if (missing.length) {
+        showToast(`File downloaded. Add account number and bank for: ${missing.join(', ')}`, 'error');
+      } else {
+        showToast('Bank transfer file generated', 'success');
+      }
     } catch (err) {
       showToast(`Error generating transfer: ${err.response?.data?.error || err.message}`, 'error');
     }
@@ -510,23 +705,87 @@ const Payroll = () => {
     }
   };
 
+  const printSalarySlip = () => {
+    if (!slipLine) {
+      showToast('Select an employee first', 'error');
+      return;
+    }
+    const monthLabel = formatPayrollMonthLabel(monthKey);
+    const branchName = branch?.name || 'SUPACLEAN';
+    const rows = [
+      ['Gross salary', Number(slipLine.gross_salary || 0)],
+      ['Allowances', Number(slipLine.allowances || 0)],
+      ['Bonuses', Number(slipLine.bonuses || 0)],
+      ['Employee NSSF', Number(slipLine.nssf_amount || 0)],
+      ['PAYE', Number(slipLine.paye_amount || slipLine.paye_estimate || 0)],
+      ['Other deductions', Number(slipLine.other_deductions || 0)],
+      ['Salary advances', Number(slipLine.salary_advances || 0)]
+    ];
+    const advanceRows = slipAdvances.map((item) => (
+      `<tr><td>${escapeHtml(formatSlipDate(item.advance_date))}</td><td>${escapeHtml(item.notes || 'Advance')}</td><td style="text-align:right">${escapeHtml(moneyTzs(item.amount))}</td></tr>`
+    )).join('');
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Salary slip — ${escapeHtml(slipLine.full_name)} — ${escapeHtml(monthLabel)}</title>
+  <style>
+    body { font-family: Calibri, Arial, sans-serif; color: #111; margin: 24px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .muted { color: #444; margin: 0 0 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 8px 0; border-bottom: 1px solid #ddd; }
+    .net td { font-size: 18px; font-weight: 700; border-bottom: none; padding-top: 14px; }
+    h2 { font-size: 14px; margin: 18px 0 6px; }
+    @media print { body { margin: 12mm; } }
+  </style>
+</head>
+<body>
+  <h1>SUPACLEAN</h1>
+  <p class="muted">${escapeHtml(branchName)} · Salary slip · ${escapeHtml(monthLabel)}</p>
+  <p><strong>${escapeHtml(slipLine.full_name)}</strong><br/>${escapeHtml(slipLine.employee_code || '')}</p>
+  <table>
+    ${rows.map(([label, amount]) => `<tr><td>${escapeHtml(label)}</td><td style="text-align:right">${escapeHtml(moneyTzs(amount))}</td></tr>`).join('')}
+    <tr class="net"><td>Net salary</td><td style="text-align:right">${escapeHtml(moneyTzs(slipLine.net_salary))}</td></tr>
+  </table>
+  <h2>Advances this month</h2>
+  ${advanceRows
+    ? `<table>${advanceRows}</table>`
+    : '<p class="muted">No advances recorded for this employee.</p>'}
+</body>
+</html>`;
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      showToast('Allow pop-ups to print the salary slip', 'error');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    window.setTimeout(() => {
+      printWindow.print();
+    }, 200);
+  };
+
   const exportStaffDirectory = () => {
     if (!employees.length) {
       showToast('No staff to export', 'error');
       return;
     }
     const csv = [
-      'Full Name,Employee Code,Phone,Gross Salary,NSSF,PAYE,Status',
+      'Full Name,Employee Code,Phone,Gross Salary,Account Number,Bank Name,Bank SWIFT,Status',
       ...employees.map((e) => [
-        `"${String(e.full_name || '').replace(/"/g, '""')}"`,
-        `"${String(e.employee_code || '').replace(/"/g, '""')}"`,
-        `"${String(e.phone || '').replace(/"/g, '""')}"`,
+        csvCell(e.full_name || ''),
+        csvCell(e.employee_code || ''),
+        csvCell(e.phone || ''),
         Number(e.gross_salary || 0).toFixed(2),
-        e.nssf_enabled ? 'Enabled' : 'Disabled',
-        e.paye_enabled ? 'Enabled' : 'Disabled',
+        csvCell(String(e.account_number || '').replace(/\s+/g, '')),
+        csvCell(e.bank_name || ''),
+        csvCell(e.bank_swift || ''),
         e.is_active ? 'Active' : 'Inactive'
       ].join(','))
-    ].join('\n');
+    ].join('\r\n');
     downloadFile(`staff-directory-${monthKey}.csv`, csv, 'text/csv;charset=utf-8');
     showToast('Staff directory exported', 'success');
   };
@@ -669,7 +928,6 @@ const Payroll = () => {
               <input type="number" min="0" max="100" step="0.01" placeholder="NSSF employer %" value={employeeForm.nssf_employer_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employer_rate: e.target.value })} inputMode="decimal" />
               <label><input type="checkbox" checked={employeeForm.paye_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, paye_enabled: e.target.checked })} /> PAYE</label>
             </div>
-            <button className="btn-primary payroll-submit-btn" type="submit">Add employee</button>
           </form>
         </div>
       )}
@@ -682,7 +940,7 @@ const Payroll = () => {
               <input
                 className="payroll-search-input"
                 type="search"
-                placeholder="Search name / code / TIN / phone"
+                placeholder="Search name / code / phone / account"
                 value={staffSearch}
                 onChange={(e) => setStaffSearch(e.target.value)}
                 aria-label="Search staff"
@@ -794,25 +1052,114 @@ const Payroll = () => {
                           </button>
                           <button type="button" className="btn-secondary" onClick={cancelEditStaff}>Cancel</button>
                         </div>
-                      ) : (
+                      </div>
+                      <div className="staff-edit-grid">
+                        <label className="payroll-field">
+                          <span>Full name</span>
+                          <input
+                            type="text"
+                            required
+                            value={staffDraft.full_name || ''}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, full_name: e.target.value }))}
+                          />
+                        </label>
+                        <label className="payroll-field">
+                          <span>Employee code</span>
+                          <input
+                            type="text"
+                            value={staffDraft.employee_code || ''}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, employee_code: e.target.value }))}
+                          />
+                        </label>
+                        <label className="payroll-field">
+                          <span>Phone</span>
+                          <input
+                            type="text"
+                            value={staffDraft.phone || ''}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, phone: e.target.value }))}
+                          />
+                        </label>
+                        <label className="payroll-field">
+                          <span>Gross salary</span>
+                          <input
+                            type="number"
+                            min="0"
+                            required
+                            value={staffDraft.gross_salary ?? 0}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, gross_salary: Number(e.target.value || 0) }))}
+                          />
+                        </label>
+                        <label className="payroll-field">
+                          <span>Account number</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={staffDraft.account_number || ''}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, account_number: e.target.value }))}
+                          />
+                        </label>
+                        <BankFields record={staffDraft} onRecord={setStaffDraft} />
+                        <label className="payroll-field">
+                          <span>Status</span>
+                          <select
+                            value={staffDraft.is_active ? 'active' : 'inactive'}
+                            onChange={(e) => setStaffDraft((prev) => ({ ...prev, is_active: e.target.value === 'active' }))}
+                          >
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                          </select>
+                        </label>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div className="staff-card-top">
+                        <div>
+                          <h4 className="staff-card-name">{emp.full_name}</h4>
+                          <p className="staff-card-sub">{emp.employee_code || 'No employee code'}</p>
+                        </div>
+                        <span className={`payroll-badge ${emp.is_active ? 'open' : 'closed'}`}>
+                          {emp.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                      <dl className="staff-meta">
+                        <div>
+                          <dt>Phone</dt>
+                          <dd>{emp.phone || '—'}</dd>
+                        </div>
+                        <div>
+                          <dt>Gross salary</dt>
+                          <dd>{Number(emp.gross_salary || 0).toLocaleString()}</dd>
+                        </div>
+                        <div>
+                          <dt>Account number</dt>
+                          <dd>{emp.account_number || '—'}</dd>
+                        </div>
+                        <div>
+                          <dt>Bank</dt>
+                          <dd>{emp.bank_name || '—'}</dd>
+                        </div>
+                      </dl>
+                      <div className="staff-card-actions">
                         <button type="button" className="btn-secondary" onClick={() => startEditStaff(emp)}>Edit</button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {employees.length === 0 && (
-                  <tr>
-                    <td colSpan={9}>{loading ? 'Loading staff...' : 'No staff recorded yet'}</td>
-                  </tr>
-                )}
-                {employees.length > 0 && filteredEmployees.length === 0 && (
-                  <tr>
-                    <td colSpan={9}>No staff matched your search.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                      </div>
+                    </>
+                  )}
+                </article>
+              );
+            })}
           </div>
+          {editingStaffId && (
+            <div className="staff-edit-dock">
+              <span>Save changes for {staffDraft.full_name || 'this employee'}</span>
+              <div className="staff-card-actions">
+                <button type="button" className="btn-primary" disabled={savingStaff} onClick={saveEditStaff}>
+                  {savingStaff ? 'Saving...' : 'Save'}
+                </button>
+                <button type="button" className="btn-secondary" onClick={cancelEditStaff}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -893,7 +1240,7 @@ const Payroll = () => {
             tabIndex={0}
             role="region"
             aria-label="Monthly payroll table"
-            {...tableScrollHandlers}
+            {...payrollPanHandlers}
           >
             <table className="payroll-table payroll-table--verification payroll-table--compact">
               <thead>
@@ -1018,31 +1365,68 @@ const Payroll = () => {
         </div>
       )}
 
-      {canRecordAdvances && (
+      {canManagePayroll && (activeStep === 'payrun' || activeStep === 'statements') && (
         <div className="payroll-card">
-          <h3>Salary Advances ({monthKey})</h3>
-          <div
-            className="payroll-table-wrap advances-wrap interactive-scroll-region"
-            tabIndex={0}
-            role="region"
-            aria-label="Salary advances table"
-            {...tableScrollHandlers}
-          >
-            <table className="payroll-table payroll-table--advances">
-              <thead><tr><th>Date</th><th>Employee</th><th className="num">Amount</th><th>Notes</th></tr></thead>
-              <tbody>
-                {advances.map((a) => (
-                  <tr key={a.id}>
-                    <td>{a.advance_date}</td>
-                    <td>{a.full_name}</td>
-                    <td className="num">{Number(a.amount || 0).toLocaleString()}</td>
-                    <td>{a.notes || '-'}</td>
-                  </tr>
-                ))}
-                {advances.length === 0 && <tr><td colSpan={4}>{loading ? 'Loading salary advances...' : 'No advances recorded'}</td></tr>}
-              </tbody>
-            </table>
+          <div className="payroll-card-head">
+            <h3>Salary slip — {formatPayrollMonthLabel(monthKey)}</h3>
           </div>
+          <p className="payroll-note">Select one employee to preview and print their slip for this month.</p>
+          <div className="slip-controls">
+            <label className="payroll-field slip-employee-field">
+              <span>Employee</span>
+              <select value={slipEmployeeId} onChange={(e) => setSlipEmployeeId(e.target.value)}>
+                <option value="">Select employee</option>
+                {payroll.map((row) => (
+                  <option key={row.employee_id} value={row.employee_id}>{row.full_name}</option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="btn-primary" disabled={!slipLine} onClick={printSalarySlip}>
+              Print slip
+            </button>
+          </div>
+          {!payroll.length && (
+            <p className="payroll-history-empty">No payroll figures for this month yet.</p>
+          )}
+          {slipLine && (
+            <article className="salary-slip-sheet" aria-label={`Salary slip for ${slipLine.full_name}`}>
+              <header className="salary-slip-head">
+                <div>
+                  <p className="salary-slip-brand">SUPACLEAN</p>
+                  <p className="salary-slip-meta">{branch?.name || 'Branch'} · {formatPayrollMonthLabel(monthKey)}</p>
+                </div>
+                <div className="salary-slip-person">
+                  <strong>{slipLine.full_name}</strong>
+                  <span>{slipLine.employee_code || 'No employee code'}</span>
+                </div>
+              </header>
+              <dl className="salary-slip-lines">
+                <div><dt>Gross salary</dt><dd>{moneyTzs(slipLine.gross_salary)}</dd></div>
+                <div><dt>Allowances</dt><dd>{moneyTzs(slipLine.allowances)}</dd></div>
+                <div><dt>Bonuses</dt><dd>{moneyTzs(slipLine.bonuses)}</dd></div>
+                <div><dt>Employee NSSF</dt><dd>{moneyTzs(slipLine.nssf_amount)}</dd></div>
+                <div><dt>PAYE</dt><dd>{moneyTzs(slipLine.paye_amount || slipLine.paye_estimate)}</dd></div>
+                <div><dt>Other deductions</dt><dd>{moneyTzs(slipLine.other_deductions)}</dd></div>
+                <div><dt>Salary advances</dt><dd>{moneyTzs(slipLine.salary_advances)}</dd></div>
+                <div className="salary-slip-net"><dt>Net salary</dt><dd>{moneyTzs(slipLine.net_salary)}</dd></div>
+              </dl>
+              <div className="salary-slip-advances">
+                <h4>Advances this month</h4>
+                {slipAdvances.length === 0 && <p>No advances recorded for this employee.</p>}
+                {slipAdvances.length > 0 && (
+                  <ul>
+                    {slipAdvances.map((item) => (
+                      <li key={item.id}>
+                        <span>{formatSlipDate(item.advance_date)}</span>
+                        <span>{item.notes || 'Advance'}</span>
+                        <strong>{moneyTzs(item.amount)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </article>
+          )}
         </div>
       )}
     </div>

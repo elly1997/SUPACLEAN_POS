@@ -1,6 +1,43 @@
 const db = require('../database/query');
+const sessionCache = require('../utils/sessionCache');
 
 const isDev = process.env.NODE_ENV !== 'production';
+
+function applySession(req, sessionUser, sessionBranch) {
+  req.user = { ...sessionUser };
+  if (sessionBranch) req.branch = { ...sessionBranch };
+
+  // Effective branch is per request: an admin filter must not leak into another user's session.
+  if (req.user.role === 'admin') {
+    const headerBranch = req.headers['x-branch-id'];
+    const queryBranch = req.query.branch_id;
+    const bid = headerBranch ? parseInt(headerBranch, 10) : (queryBranch ? parseInt(queryBranch, 10) : null);
+    req.effectiveBranchId = (bid != null && !Number.isNaN(bid)) ? bid : null;
+  } else {
+    req.effectiveBranchId = req.user.branchId || null;
+  }
+}
+
+function sessionFromRow(session) {
+  const resolvedBranchId =
+    session.user_branch_id != null ? session.user_branch_id : session.branch_id;
+  const user = {
+    id: session.user_id,
+    username: session.username,
+    fullName: session.full_name,
+    role: session.role,
+    branchId: resolvedBranchId != null ? resolvedBranchId : null
+  };
+  const branch = resolvedBranchId != null
+    ? {
+        id: session.branch_table_id ?? resolvedBranchId,
+        name: session.branch_name,
+        code: session.branch_code,
+        branchType: session.branch_branch_type
+      }
+    : null;
+  return { user, branch };
+}
 
 // Authentication middleware
 function authenticate(req, res, next) {
@@ -8,6 +45,12 @@ function authenticate(req, res, next) {
 
   if (!sessionToken) {
     return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  const cached = sessionCache.get(sessionToken);
+  if (cached) {
+    applySession(req, cached.user, cached.branch);
+    return next();
   }
 
   if (isDev) console.log('Auth middleware: Checking session token');
@@ -25,44 +68,16 @@ function authenticate(req, res, next) {
       );
 
       if (!session) {
+        sessionCache.invalidate(sessionToken);
         if (isDev) console.log('Auth middleware: Invalid or expired session');
         return res.status(401).json({ error: 'Invalid or expired session' });
       }
 
       if (isDev) console.log('Auth middleware: Session valid for user:', session.username);
 
-      // Prefer users.branch_id so branch managers keep their branch even if session.branch_id is unset
-      const resolvedBranchId =
-        session.user_branch_id != null ? session.user_branch_id : session.branch_id;
-
-      // Attach user and branch info to request
-      req.user = {
-        id: session.user_id,
-        username: session.username,
-        fullName: session.full_name,
-        role: session.role,
-        branchId: resolvedBranchId != null ? resolvedBranchId : null
-      };
-
-      if (resolvedBranchId != null) {
-        req.branch = {
-          id: session.branch_table_id ?? resolvedBranchId,
-          name: session.branch_name,
-          code: session.branch_code,
-          branchType: session.branch_branch_type
-        };
-      }
-
-      // Effective branch for data isolation: admin can send X-Branch-Id or ?branch_id to view one branch; else all branches (admin) or user's branch
-      if (req.user.role === 'admin') {
-        const headerBranch = req.headers['x-branch-id'];
-        const queryBranch = req.query.branch_id;
-        const bid = headerBranch ? parseInt(headerBranch, 10) : (queryBranch ? parseInt(queryBranch, 10) : null);
-        req.effectiveBranchId = (bid != null && !Number.isNaN(bid)) ? bid : null;
-      } else {
-        req.effectiveBranchId = req.user.branchId || null;
-      }
-
+      const packed = sessionFromRow(session);
+      sessionCache.set(sessionToken, packed);
+      applySession(req, packed.user, packed.branch);
       next();
     } catch (err) {
       console.error('Auth middleware: Database error:', err);

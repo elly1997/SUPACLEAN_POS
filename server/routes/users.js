@@ -3,6 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const db = require('../database/query');
 const { authenticate, requireRole } = require('../middleware/auth');
+const sessionCache = require('../utils/sessionCache');
 
 // Get all users (admin only)
 router.get('/', authenticate, requireRole('admin'), async (req, res) => {
@@ -266,6 +267,13 @@ router.put('/:id', authenticate, requireRole('admin'), async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    const deactivated =
+      is_active === false || is_active === 0 || is_active === '0' || is_active === 'false';
+    if (deactivated) {
+      await db.run('DELETE FROM user_sessions WHERE user_id = $1', [id]);
+    }
+    sessionCache.invalidateUser(id);
+
     // Get updated user
     const user = await db.get(
       `SELECT u.id, u.username, u.full_name, u.role, u.branch_id, u.is_active, 
@@ -316,6 +324,7 @@ router.post('/:id/reset-password', authenticate, requireRole('admin'), async (re
       [passwordHash, id]
     );
     await db.run('DELETE FROM user_sessions WHERE user_id = $1', [id]);
+    sessionCache.invalidateUser(id);
 
     res.json({
       success: true,
@@ -358,6 +367,7 @@ router.delete('/:id', authenticate, requireRole('admin'), async (req, res) => {
         });
       }
       await db.run('DELETE FROM user_sessions WHERE user_id = $1', [id]);
+      sessionCache.invalidateUser(id);
       const result = await db.run('DELETE FROM users WHERE id = $1', [id]);
       if (result.changes === 0) {
         return res.status(404).json({ error: 'User not found' });
@@ -365,11 +375,13 @@ router.delete('/:id', authenticate, requireRole('admin'), async (req, res) => {
       return res.json({ message: 'User permanently deleted' });
     }
 
-    // Soft delete: deactivate
+    // Soft delete: deactivate and drop that user's sessions so they stop loading the shared database.
     const result = await db.run('UPDATE users SET is_active = FALSE WHERE id = $1', [id]);
     if (result.changes === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
+    await db.run('DELETE FROM user_sessions WHERE user_id = $1', [id]);
+    sessionCache.invalidateUser(id);
     res.json({ message: 'User deactivated successfully' });
   } catch (err) {
     console.error('Error in user delete:', err);

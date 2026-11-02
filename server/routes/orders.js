@@ -24,6 +24,9 @@ const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny, requireReceiptAccess } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
+const { customerBelongsToBranch, branchCustomerMatchSql } = require('../utils/customerBranch');
+const { releaseCompanyWidePhoneLock } = require('../database/ensureLongevitySchema');
+const { coalesceRead } = require('../utils/readCoalesce');
 const { validatePayment } = require('../utils/paymentValidation');
 const { roundMoney } = require('../utils/money');
 const { recordPaymentTransaction, recordPaymentTransactionClient, logPaymentChange, logPaymentChangeClient } = require('../utils/paymentTransactions');
@@ -264,15 +267,20 @@ router.get('/dashboard-stats', authenticate, requireBranchAccess(), async (req, 
     ${branchFilter.clause}
   `;
 
+  const cacheKey = `dashboard-stats:${branchFilter.clause}:${JSON.stringify(branchFilter.params)}`;
+
   try {
-    const row = await db.get(query, [...branchFilter.params]);
-    res.json({
-      total_receipts: Number(row?.total_receipts || 0),
-      pending_receipts: Number(row?.pending_receipts || 0),
-      ready_receipts: Number(row?.ready_receipts || 0),
-      collected_receipts: Number(row?.collected_receipts || 0),
-      total_items: Number(row?.total_items || 0)
+    const payload = await coalesceRead(cacheKey, 15000, async () => {
+      const row = await db.get(query, [...branchFilter.params]);
+      return {
+        total_receipts: Number(row?.total_receipts || 0),
+        pending_receipts: Number(row?.pending_receipts || 0),
+        ready_receipts: Number(row?.ready_receipts || 0),
+        collected_receipts: Number(row?.collected_receipts || 0),
+        total_items: Number(row?.total_items || 0)
+      };
     });
+    res.json(payload);
   } catch (err) {
     console.error('Error fetching order dashboard stats:', err);
     res.status(500).json({ error: err.message });
@@ -351,49 +359,52 @@ router.get('/collection-queue', authenticate, requireBranchAccess(), async (req,
   query += ' LIMIT ?';
   params.push(maxRows);
 
+  const queueCacheKey = `collection-queue:${branchFilter.clause}:${JSON.stringify(branchFilter.params)}:${customer || ''}:${overdue_only || ''}:${limit}`;
+
   try {
-    const allOrders = await db.all(query, params);
-    
-    // Group orders by receipt_number
-    const receiptGroups = {};
-    allOrders.forEach(order => {
-      const receiptNum = order.receipt_number;
-      if (!receiptGroups[receiptNum]) {
-        receiptGroups[receiptNum] = [];
-      }
-      receiptGroups[receiptNum].push(order);
+    const limited = await coalesceRead(queueCacheKey, 0, async () => {
+      const allOrders = await db.all(query, params);
+
+      // Group orders by receipt_number
+      const receiptGroups = {};
+      allOrders.forEach(order => {
+        const receiptNum = order.receipt_number;
+        if (!receiptGroups[receiptNum]) {
+          receiptGroups[receiptNum] = [];
+        }
+        receiptGroups[receiptNum].push(order);
+      });
+
+      // Create grouped receipt entries with totals
+      const groupedReceipts = Object.keys(receiptGroups).map(receiptNum => {
+        const items = receiptGroups[receiptNum];
+        const firstItem = items[0];
+
+        // Calculate totals across all items
+        const receiptTotal = items.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0);
+        const receiptPaid = items.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0);
+
+        return {
+          ...firstItem,
+          receipt_number: receiptNum,
+          total_amount: receiptTotal,
+          paid_amount: receiptPaid,
+          receipt_item_count: items.length,
+          is_overdue: firstItem.is_overdue,
+          hours_overdue: firstItem.hours_overdue,
+          all_items: items // Include all items for reference
+        };
+      });
+
+      groupedReceipts.sort((a, b) => {
+        if (a.is_overdue !== b.is_overdue) return b.is_overdue - a.is_overdue;
+        const aDate = a.estimated_collection_date || a.ready_date;
+        const bDate = b.estimated_collection_date || b.ready_date;
+        return new Date(aDate) - new Date(bDate);
+      });
+
+      return groupedReceipts.slice(0, parseInt(limit, 10));
     });
-    
-    // Create grouped receipt entries with totals
-    const groupedReceipts = Object.keys(receiptGroups).map(receiptNum => {
-      const items = receiptGroups[receiptNum];
-      const firstItem = items[0];
-      
-      // Calculate totals across all items
-      const receiptTotal = items.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0);
-      const receiptPaid = items.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0);
-      
-      return {
-        ...firstItem,
-        receipt_number: receiptNum,
-        total_amount: receiptTotal,
-        paid_amount: receiptPaid,
-        receipt_item_count: items.length,
-        is_overdue: firstItem.is_overdue,
-        hours_overdue: firstItem.hours_overdue,
-        all_items: items // Include all items for reference
-      };
-    });
-    
-    // Sort grouped receipts and limit
-    groupedReceipts.sort((a, b) => {
-      if (a.is_overdue !== b.is_overdue) return b.is_overdue - a.is_overdue;
-      const aDate = a.estimated_collection_date || a.ready_date;
-      const bDate = b.estimated_collection_date || b.ready_date;
-      return new Date(aDate) - new Date(bDate);
-    });
-    
-    const limited = groupedReceipts.slice(0, parseInt(limit));
     res.json(limited);
   } catch (err) {
     console.error('Error fetching collection queue:', err);
@@ -937,12 +948,18 @@ router.post('/batch', authenticate, requireBranchAccess(), requirePermission('ca
 
     const orderBranchId =
       req.user.role === 'admin'
-        ? branch_id || req.user?.branchId || null
+        ? branch_id || getEffectiveBranchId(req) || req.user?.branchId || null
         : req.user?.branchId || null;
 
+    if (orderBranchId == null) {
+      return res.status(400).json({ error: 'Select a branch before creating an order.' });
+    }
+
     const customer = await db.get('SELECT * FROM customers WHERE id = ?', [customer_id]);
-    if (!customer) {
-      return res.status(404).json({ error: 'Customer not found' });
+    if (!customer || !(await customerBelongsToBranch(db, customer, orderBranchId))) {
+      return res.status(400).json({
+        error: 'This customer is saved under another branch. Add them again on this branch — the name or phone can be the same.',
+      });
     }
 
     let branchName = null;
@@ -954,6 +971,22 @@ router.post('/batch', authenticate, requireBranchAccess(), requirePermission('ca
     }
 
     await client.query('BEGIN');
+
+    if (customer.primary_branch_id == null) {
+      const otherBranch = await client.query(
+        `SELECT 1 FROM orders
+         WHERE customer_id = $1 AND branch_id IS NOT NULL AND branch_id <> $2
+           AND COALESCE(is_voided, FALSE) = FALSE
+         LIMIT 1`,
+        [customer.id, orderBranchId]
+      );
+      if (!otherBranch.rows.length) {
+        await client.query(
+          'UPDATE customers SET primary_branch_id = $1 WHERE id = $2 AND primary_branch_id IS NULL',
+          [orderBranchId, customer.id]
+        );
+      }
+    }
 
     const trimmedManual = String(manualReceipt || '').trim();
     let sharedReceiptNumber = trimmedManual || null;
@@ -1935,6 +1968,7 @@ router.patch('/customer/:customerId/phone', authenticate, requireBranchAccess(),
     const existing = await db.get(
       `SELECT id FROM customers
        WHERE id != ?
+         AND primary_branch_id IS NOT DISTINCT FROM (SELECT primary_branch_id FROM customers WHERE id = ?)
          AND (
            phone = ?
            OR phone = ?
@@ -1942,7 +1976,7 @@ router.patch('/customer/:customerId/phone', authenticate, requireBranchAccess(),
            OR REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') = ?
          )
        LIMIT 1`,
-      [customerId, trimmedPhone, normalized, trimmedPhone, normalized.replace(/\D/g, '')]
+      [customerId, customerId, trimmedPhone, normalized, trimmedPhone, normalized.replace(/\D/g, '')]
     );
     if (existing) {
       return res.status(400).json({ error: 'Phone number already in use by another customer' });
@@ -2146,8 +2180,10 @@ router.post('/upload-stock-excel', authenticate, requireBranchAccess(), requireP
       const chunk = uniqueNames.slice(i, i + 80);
       const placeholders = chunk.map(() => '?').join(',');
       const found = await db.all(
-        `SELECT id, name, phone FROM customers WHERE LOWER(name) IN (${placeholders})`,
-        chunk.map((n) => n.toLowerCase())
+        `SELECT c.id, c.name, c.phone FROM customers c
+         WHERE LOWER(c.name) IN (${placeholders})
+           AND ${branchCustomerMatchSql('c')}`,
+        [...chunk.map((n) => n.toLowerCase()), branchId, branchId]
       ).catch(() => []);
       for (const c of found || []) {
         customerByName.set(String(c.name || '').toLowerCase(), { id: c.id, phone: c.phone });
@@ -2318,17 +2354,38 @@ router.post('/upload-stock-excel', authenticate, requireBranchAccess(), requireP
             }
             customerByName.set(nameKey, { id: customerId, phone: phoneToStore });
           } catch (insertErr) {
-            // Race / unique phone: try lookup again
-            const again = await db.get('SELECT id, phone FROM customers WHERE LOWER(name) = LOWER(?)', [customerName]).catch(() => null);
-            if (again?.id) {
-              customerId = again.id;
-              customerPhoneAfter = again.phone;
-              customerByName.set(nameKey, { id: again.id, phone: again.phone });
+            const uniquePhone = /unique/i.test(String(insertErr.message || '')) && /phone/i.test(String(insertErr.message || ''));
+            if (uniquePhone) {
+              await releaseCompanyWidePhoneLock().catch(() => {});
+              try {
+                const result = await db.run(
+                  'INSERT INTO customers (name, phone, primary_branch_id) VALUES (?, ?, ?) RETURNING id',
+                  [customerName, phoneToStore, branchId]
+                );
+                customerId = resolveInsertId(result);
+              } catch (retryErr) {
+                insertErr = retryErr;
+              }
+            }
+            if (!customerId) {
+              const again = await db.get(
+                `SELECT c.id, c.phone FROM customers c
+                 WHERE LOWER(c.name) = LOWER(?)
+                   AND ${branchCustomerMatchSql('c')}`,
+                [customerName, branchId, branchId]
+              ).catch(() => null);
+              if (again?.id) {
+                customerId = again.id;
+                customerPhoneAfter = again.phone;
+                customerByName.set(nameKey, { id: again.id, phone: again.phone });
+              } else {
+                errors.push(`Row ${index + 2}: Error creating customer - ${insertErr.message}`);
+                skipped++;
+                processed++;
+                continue;
+              }
             } else {
-              errors.push(`Row ${index + 2}: Error creating customer - ${insertErr.message}`);
-              skipped++;
-              processed++;
-              continue;
+              customerByName.set(nameKey, { id: customerId, phone: phoneToStore });
             }
           }
         } else if (phone && isPlaceholderPhone(customer.phone)) {
@@ -2337,13 +2394,14 @@ router.post('/upload-stock-excel', authenticate, requireBranchAccess(), requireP
             const phoneTaken = await db.get(
               `SELECT id FROM customers
                WHERE id != ?
+                 AND primary_branch_id IS NOT DISTINCT FROM ?
                  AND (
                    phone = ?
                    OR phone = ?
                    OR TRIM(phone) = ?
                  )
                LIMIT 1`,
-              [customerId, phone, normalized, phone]
+              [customerId, branchId, phone, normalized, phone]
             );
             if (!phoneTaken) {
               await db.run(

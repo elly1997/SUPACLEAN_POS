@@ -26,6 +26,8 @@ export default function useHorizontalScrollRegion() {
   };
 
   const onPointerDown = (e) => {
+    // Touch and pen already pan the page. Capturing them blocks scrolling.
+    if (e.pointerType && e.pointerType !== 'mouse') return;
     if (isInteractiveTarget(e.target)) return;
     if (e.button != null && e.button !== 0) return;
     const el = e.currentTarget;

@@ -46,8 +46,10 @@ api.interceptors.response.use(
       requestUrl === '/orders' ||
       requestUrl === '/orders/batch' ||
       requestUrl.startsWith('/orders/batch');
-    // Never queue order creates offline — retries duplicate lines and inflate receipt totals.
-    if (isNetworkError && isMutation && error.config?.url && !isOrderCreate) {
+    const isExpenseCreate = method === 'POST' && (requestUrl === '/expenses' || requestUrl.endsWith('/expenses'));
+    // Never queue order or expense creates. A timeout often means the server already saved the row;
+    // replaying the queue inserts another copy (this is what flooded a single day's expenses).
+    if (isNetworkError && isMutation && error.config?.url && !isOrderCreate && !isExpenseCreate && !error.config?.skipOfflineQueue) {
       error.queuedForSync = true;
       try {
         await addToQueue(method, error.config.url, error.config.data ?? null);
@@ -100,7 +102,9 @@ export async function syncPendingActions({ onProgress } = {}) {
       await api.request({
         method: item.method,
         url: item.url,
-        data: item.body ?? undefined
+        data: item.body ?? undefined,
+        // A timed-out replay must not enqueue a second copy of the same action.
+        skipOfflineQueue: true
       });
       await removeFromQueue(item.id);
       synced++;
@@ -196,12 +200,22 @@ export async function searchCustomers(q, options = {}) {
     return { data: [] };
   }
   const limit = options.limit || 15;
+  const openBranchId = options.branchId == null || options.branchId === '' ? null : Number(options.branchId);
+  const keepBranch = (list) => {
+    if (openBranchId == null) return list || [];
+    return (list || []).filter((c) => {
+      const home = c.branch_id ?? c.primary_branch_id;
+      if (home == null || home === '') return true;
+      return Number(home) === openBranchId;
+    });
+  };
+
   if (isOffline()) {
     try {
       const cached = await getSyncCache('customers');
       if (cached && Array.isArray(cached.data)) {
         const s = term.toLowerCase();
-        const data = cached.data
+        const data = keepBranch(cached.data)
           .filter(
             (c) =>
               (c.name && c.name.toLowerCase().includes(s)) ||
@@ -216,7 +230,8 @@ export async function searchCustomers(q, options = {}) {
     }
   }
   const params = new URLSearchParams({ q: term, limit: String(limit) });
-  return api.get(`/customers/search?${params.toString()}`);
+  const res = await api.get(`/customers/search?${params.toString()}`);
+  return { ...res, data: keepBranch(res.data || []) };
 }
 
 export const getCustomer = (id) => api.get(`/customers/${id}`);
@@ -784,7 +799,10 @@ export async function getExpenses(params = {}) {
   }
 }
 export const getExpense = (id) => api.get(`/expenses/${id}`);
-export const createExpense = (data) => api.post('/expenses', data);
+export const createExpense = (data) => {
+  const key = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `exp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return api.post('/expenses', data, { headers: { 'Idempotency-Key': key }, timeout: 45000 });
+};
 export const updateExpense = (id, data) => api.put(`/expenses/${id}`, data);
 export const deleteExpense = (id, body) =>
   body != null ? api.delete(`/expenses/${id}`, { data: body }) : api.delete(`/expenses/${id}`);

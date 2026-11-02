@@ -83,49 +83,72 @@ const Dashboard = () => {
   });
   const branchLine = branch?.name || '';
 
-  const loadDashboardData = useCallback(async () => {
+  const loadGen = useRef(0);
+
+  const loadDashboardData = useCallback(async (mode = 'full') => {
+    const gen = ++loadGen.current;
     const readyCustomer = readySearchTerm.trim() || undefined;
     const pendingCustomer = pendingSearchTerm.trim() || undefined;
     const monthStart = `${today.slice(0, 7)}-01`;
+    const includeHeavy = mode === 'full';
 
     try {
       // Phase 1: headline stats (fast cached cash + counts) — paint KPIs first
       const [summaryRes, statsRes] = await Promise.all([
-        getTodayCashSummary(),
+        getTodayCashSummary().catch((err) => {
+          if (includeHeavy) throw err;
+          return { data: null };
+        }),
         getOrderDashboardStats(),
       ]);
-      setSummary(summaryRes.data);
+      if (gen !== loadGen.current) return;
+      if (summaryRes?.data) setSummary(summaryRes.data);
       setOrderStats(statsRes.data || null);
       setLoading(false);
 
-      // Phase 2: lists + month total + unreconciled (non-blocking for first paint)
-      const unreconciledPromise = canManageCash
+      // Live refresh keeps the counter moving. Month totals and unreconciled
+      // history are heavier and only reload on open or every few minutes.
+      const unreconciledPromise = includeHeavy && canManageCash
         ? getUnreconciledClosings({ limit: 50 }).catch(() => ({ data: [] }))
-        : Promise.resolve({ data: [] });
-      const inboxPromise = isAdmin
+        : Promise.resolve(null);
+      const inboxPromise = includeHeavy && isAdmin
         ? getAdminInboxCounts().catch(() => ({ data: {} }))
-        : Promise.resolve({ data: {} });
+        : Promise.resolve(null);
+      const monthPromise = includeHeavy
+        ? getCashSummaryRange(monthStart, today).catch(() => ({ data: [] }))
+        : Promise.resolve(null);
       const [pendingRes, queueRes, monthRes, unreconRes, inboxRes] = await Promise.all([
         getOrders({ status: 'pending', limit: DASHBOARD_LIST_LIMIT, ...(pendingCustomer && { customer: pendingCustomer }) }),
         getCollectionQueue({ limit: DASHBOARD_LIST_LIMIT, ...(readyCustomer && { customer: readyCustomer }) }),
-        getCashSummaryRange(monthStart, today),
+        monthPromise,
         unreconciledPromise,
         inboxPromise,
       ]);
-      const monthTotal = (Array.isArray(monthRes?.data) ? monthRes.data : []).reduce((acc, row) => (
-        acc + (Number(row.cash_sales || 0) + Number(row.book_sales || 0) + Number(row.card_sales || 0) + Number(row.mobile_money_sales || 0))
-      ), 0);
-
-      setMonthIncome(monthTotal);
+      if (gen !== loadGen.current) return;
+      if (monthRes) {
+        const monthTotal = (Array.isArray(monthRes?.data) ? monthRes.data : []).reduce((acc, row) => (
+          acc + (Number(row.cash_sales || 0) + Number(row.book_sales || 0) + Number(row.card_sales || 0) + Number(row.mobile_money_sales || 0))
+        ), 0);
+        setMonthIncome(monthTotal);
+      }
       setPendingOrders(pendingRes.data || []);
       setReadyQueue(queueRes.data || []);
-      setUnreconciledCount(Array.isArray(unreconRes.data) ? unreconRes.data.length : 0);
-      const counts = inboxRes?.data || {};
-      setInboxOpenCount(Number(counts.unread || counts.pending_actions || 0));
+      if (unreconRes) {
+        setUnreconciledCount(Array.isArray(unreconRes.data) ? unreconRes.data.length : 0);
+      }
+      if (inboxRes) {
+        const counts = inboxRes?.data || {};
+        setInboxOpenCount(Number(counts.unread || counts.pending_actions || 0));
+      }
       const synced = [summaryRes, pendingRes, queueRes].find((r) => r.fromCache && r.syncedAt);
       if (synced) setLastSyncedAt(synced.syncedAt); else setLastSyncedAt(null);
     } catch (error) {
+      if (gen !== loadGen.current) return;
       console.error('Error loading dashboard:', error);
+      if (mode !== 'full') {
+        setLoading(false);
+        return;
+      }
       const errorMsg = error.response?.data?.error || error.message || 'Network Error';
       if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Network Error')) {
         showToast('Cannot connect to server. Please ensure the server is running.', 'error');
@@ -139,11 +162,19 @@ const Dashboard = () => {
   }, [today, readySearchTerm, pendingSearchTerm, showToast, canManageCash, isAdmin]);
 
   useEffect(() => {
-    loadDashboardData();
+    loadDashboardData('full');
+    let ticks = 0;
+    // Each till picks its own interval so every screen does not hit the server in the same second.
+    const intervalMs = 50000 + Math.floor(Math.random() * 20000);
     const interval = setInterval(() => {
-      if (!document.hidden) loadDashboardData();
-    }, 30000);
-    const onVis = () => { visibleRef.current = !document.hidden; };
+      if (document.hidden) return;
+      ticks += 1;
+      loadDashboardData(ticks % 4 === 0 ? 'full' : 'live');
+    }, intervalMs);
+    const onVis = () => {
+      visibleRef.current = !document.hidden;
+      if (!document.hidden) loadDashboardData('live');
+    };
     document.addEventListener('visibilitychange', onVis);
     return () => {
       clearInterval(interval);
@@ -205,7 +236,7 @@ const Dashboard = () => {
         await updateOrderStatus(id, newStatus);
       }
       showToast(`Receipt ${formatReceiptForDisplay(receiptGroup.receipt_number, receiptGroup.items)} marked as ${newStatus}`, 'success');
-      loadDashboardData();
+      loadDashboardData('full');
     } catch (error) {
       const msg = error.response?.data?.error || error.message || 'Error updating order';
       showToast(msg, 'error');

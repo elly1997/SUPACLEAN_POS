@@ -285,30 +285,59 @@ async function refreshUnreconciledSummariesFromDate(branchId, startDate) {
 
 /** In-flight background refresh keys — avoids duplicate heavy recalcs on rapid page loads. */
 const bgRefreshInFlight = new Set();
+const bgRefreshLastRun = new Map();
+const bgRefreshQueue = [];
+let bgRefreshRunning = 0;
+const BG_REFRESH_COOLDOWN_MS = 90_000;
+const BG_REFRESH_MAX_CONCURRENT = 1;
+
+function pumpBackgroundRefresh() {
+  while (bgRefreshRunning < BG_REFRESH_MAX_CONCURRENT && bgRefreshQueue.length > 0) {
+    const job = bgRefreshQueue.shift();
+    bgRefreshRunning += 1;
+    Promise.resolve()
+      .then(job)
+      .catch((err) => {
+        console.error('Background daily summary refresh failed:', err?.message || err);
+      })
+      .finally(() => {
+        bgRefreshRunning -= 1;
+        pumpBackgroundRefresh();
+      });
+  }
+}
 
 /**
  * Queue a non-blocking daily summary recalc (debounced per branch+date).
+ * One branch's recalc cannot pile onto every other till: work runs one at a time,
+ * and the same day is not recomputed again for 90 seconds.
  * Use after payments, orders, expenses — not on every GET.
  */
 function scheduleBackgroundDailySummaryRefresh(date, branchId, { force = false } = {}) {
   const day = toSqlDateString(date);
   if (!day || branchId == null) return;
-  const key = `${branchId}:${day}:${force ? 'force' : 'normal'}`;
+  const key = `${branchId}:${day}`;
   if (bgRefreshInFlight.has(key)) return;
+  if (!force) {
+    const last = bgRefreshLastRun.get(key) || 0;
+    if (Date.now() - last < BG_REFRESH_COOLDOWN_MS) return;
+  }
   bgRefreshInFlight.add(key);
-  setImmediate(async () => {
+  bgRefreshQueue.push(async () => {
     try {
       if (force) {
         await refreshDailySummaryForce(day, branchId);
       } else {
         await refreshUnreconciledDailySummary(day, branchId);
       }
+      bgRefreshLastRun.set(key, Date.now());
     } catch (err) {
       console.error('Background daily summary refresh failed:', day, branchId, err.message);
     } finally {
       bgRefreshInFlight.delete(key);
     }
   });
+  setImmediate(pumpBackgroundRefresh);
 }
 
 /**
@@ -1086,7 +1115,7 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
 
   try {
     if (isAdminAllBranches) {
-      let rows = await db.all(
+      const rows = await db.all(
         `SELECT dcs.*, b.name as branch_name
          FROM daily_cash_summaries dcs
          LEFT JOIN branches b ON b.id = dcs.branch_id
@@ -1096,15 +1125,10 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
          LIMIT ?`,
         [businessToday, limit]
       );
-      for (const r of rows || []) {
-        if (r?.date && r.branch_id != null && !r.is_reconciled) {
-          scheduleBackgroundDailySummaryRefresh(r.date, r.branch_id);
-        }
-      }
       return res.json(rows || []);
     }
 
-    let rows = await db.all(
+    const rows = await db.all(
       `SELECT dcs.*, b.name as branch_name
        FROM daily_cash_summaries dcs
        LEFT JOIN branches b ON b.id = dcs.branch_id
@@ -1115,11 +1139,6 @@ router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageC
        LIMIT ?`,
       [branchId, businessToday, limit]
     );
-    for (const r of rows || []) {
-      if (r?.date && !r.is_reconciled) {
-        scheduleBackgroundDailySummaryRefresh(r.date, branchId);
-      }
-    }
     return res.json(rows || []);
   } catch (err) {
     console.error('Error fetching unreconciled daily closings:', err);
@@ -1182,12 +1201,6 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
       'SELECT * FROM daily_cash_summaries WHERE date >= ? AND date <= ? AND branch_id = ? ORDER BY date DESC',
       [start_date, end_date, branchId]
     );
-    const businessToday = getBusinessTodayYmd();
-    for (const r of rows || []) {
-      if (r?.date && !r.is_reconciled && toSqlDateString(r.date) === businessToday) {
-        scheduleBackgroundDailySummaryRefresh(r.date, branchId);
-      }
-    }
     res.json(rows || []);
   } catch (err) {
     console.error('Error fetching cash summary range:', err);
