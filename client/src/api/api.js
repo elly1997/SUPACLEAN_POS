@@ -2,7 +2,7 @@ import axios from 'axios';
 import { addToQueue, getAllPending, removeFromQueue } from '../utils/offlineQueue';
 import { getSyncCache, setSyncCache, isNetworkError, isOffline } from '../utils/syncCache';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -351,6 +351,8 @@ export const searchOrdersByCustomer = (params = {}) => api.get('/orders/search/c
 export const getReceiptQRCode = (receiptNumber) => api.get(`/orders/receipt/${receiptNumber}/qrcode`);
 export const getOrder = (id) => api.get(`/orders/${id}`);
 export const getOrderByReceipt = (receiptNumber) => api.get(`/orders/receipt/${receiptNumber}`);
+// Partial receipt search for the Collection page (matches any part of the receipt number)
+export const searchReceipts = (q) => api.get('/orders/search/receipt', { params: { q } });
 export const generateReceiptNumber = (forDate = null, branchId = null) =>
   api.get('/orders/generate-receipt-number', {
     params: {
@@ -995,6 +997,14 @@ export async function getBankDepositTotal(params = {}) {
     throw err;
   }
 }
+
+// Coupons (Task 4)
+export const validateCoupon = (code, subtotal, branchId) =>
+  api.post('/coupons/validate', { code, subtotal, branch_id: branchId });
+export const getCoupons = () => api.get('/coupons');
+export const getCouponSummary = () => api.get('/coupons/summary');
+export const createCoupon = (data) => api.post('/coupons', data);
+export const updateCoupon = (id, data) => api.put(`/coupons/${id}`, data);
 
 // Loyalty
 export const getCustomerLoyalty = (customerId) => api.get(`/loyalty/customer/${customerId}`);

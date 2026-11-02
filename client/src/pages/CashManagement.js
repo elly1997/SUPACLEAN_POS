@@ -94,7 +94,7 @@ const CashManagement = () => {
     if (!summary) return;
     const declared = summary.opening_cash_declared != null ? Number(summary.opening_cash_declared) : Number(summary.opening_balance || 0);
     setOpeningCashInput(String(declared));
-  }, [summary?.opening_cash_declared, summary?.opening_balance]);
+  }, [summary?.opening_cash_declared, summary?.opening_balance, summary]);
 
   const loadData = async () => {
     setErrorMessage(null);
@@ -160,9 +160,11 @@ const CashManagement = () => {
     }
   };
 
+
   useEffect(() => {
     loadUnreconciledClosings();
   }, [selectedBranchId]);
+
 
   useEffect(() => {
     if (closeStep === 3 && canManageExpenses && todayExpenses.length === 0) {
@@ -658,7 +660,7 @@ const CashManagement = () => {
                 Orders
               </button>
               {' or '}
-              <button type="button" className="btn-link" onClick={() => navigate('/collection')}>
+              <button type="button" className="btn-link" onClick={() => navigate('/orders')}>
                 Collection
               </button>
               , then refresh totals.
@@ -914,6 +916,7 @@ const CashManagement = () => {
               <label>Declared opening cash *</label>
               <input
                 type="number"
+                inputMode="decimal"
                 min="0"
                 step="0.01"
                 value={openingCashInput}
@@ -1129,6 +1132,7 @@ const CashManagement = () => {
                 <label>Amount *</label>
                 <input
                   type="number"
+                  inputMode="decimal"
                   step="0.01"
                   min="0"
                   value={depositForm.amount}

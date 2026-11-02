@@ -42,21 +42,45 @@ app.use(
 
 app.use(compression());
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    const normalized = normalizeOrigin(origin);
-    if (allowedOrigins.includes(normalized)) return callback(null, true);
-    return callback(new Error(`CORS blocked for origin: ${origin}`));
-  },
-  credentials: true
+app.use(cors((req, callback) => {
+  const origin = req.headers.origin;
+
+  // Same-origin requests (and non-browser clients) are always allowed.
+  if (!origin) return callback(null, { origin: true, credentials: true });
+
+  const normalized = normalizeOrigin(origin);
+  const originHost = normalized.replace(/^https?:\/\//, '').split('/')[0];
+
+  // Hosts that identify this deployment: the API's own Host header and the host
+  // the request was forwarded from (x-forwarded-host, set by the dev/reverse proxy).
+  const selfHosts = new Set();
+  for (const raw of [req.headers.host, (req.headers['x-forwarded-host'] || '').split(',')[0]]) {
+    const h = String(raw || '').trim().split(':')[0];
+    if (h) selfHosts.add(h);
+  }
+  const originHostname = originHost.split(':')[0];
+  const isSelfOrigin = originHostname && selfHosts.has(originHostname);
+
+  // Allow the deployment's own origin (browser sends Origin on same-origin POST/PUT/DELETE)
+  // in addition to the explicitly configured CLIENT_URL / RENDER_EXTERNAL_URL values.
+  if (allowedOrigins.includes(normalized) || isSelfOrigin) {
+    return callback(null, { origin: true, credentials: true });
+  }
+
+  return callback(new Error(`CORS blocked for origin: ${origin}`));
 }));
 app.use(bodyParser.json({ limit: '2mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '2mb' }));
 
 app.use((req, res, next) => {
-  req.setTimeout(30000);
-  res.setTimeout(30000);
+  // Vercel's serverless runtime uses a mock socket that has no setTimeout,
+  // so calling req.setTimeout()/res.setTimeout() there throws a TypeError.
+  try {
+    if (req.socket && typeof req.socket.setTimeout === 'function') req.socket.setTimeout(30000);
+    if (res.socket && typeof res.socket.setTimeout === 'function') res.socket.setTimeout(30000);
+  } catch (err) {
+    console.warn('Socket timeout is not supported in this runtime:', err.message);
+  }
   next();
 });
 
@@ -68,18 +92,49 @@ if (!isProduction) {
 }
 
 require('./database/db');
-require('./database/ensureBankingSchema');
-require('./database/ensureNotificationsDedupeKey');
-require('./database/ensureUsersAuthSchema');
-require('./database/ensurePayrollSchema');
-require('./database/ensureExpenseCategoriesSchema');
-require('./database/ensureCleaningSchema');
-require('./database/ensureOrderVoidSchema');
-require('./database/ensureOrderArchiveSchema');
-require('./database/ensureAdminInboxSchema');
-require('./database/ensurePerformanceIndexes');
-require('./database/ensureLongevitySchema');
-require('./database/ensureSmsMarketingSchema');
+
+// Idempotent boot-time DDL (see server/database/schemaEnsure.js). On serverless
+// these run staggered so a cold start cannot fire them all at once, and they are
+// skipped unless RUN_SCHEMA_ENSURE=1.
+const SCHEMA_ENSURE_MODULES = [
+  './database/ensurePosCoreSchema',
+  './database/ensureBranchFeaturesSchema',
+  './database/ensureBankingSchema',
+  './database/ensureNotificationsDedupeKey',
+  './database/ensureUsersAuthSchema',
+  './database/ensurePayrollSchema',
+  './database/ensureExpenseCategoriesSchema',
+  './database/ensureCleaningSchema',
+  './database/ensureOrderVoidSchema',
+  './database/ensureOrderArchiveSchema',
+  './database/ensureAdminInboxSchema',
+  './database/ensureReceiptSequenceSchema',
+  './database/ensureItemsSchema',
+  './database/ensurePerformanceIndexes',
+  './database/ensureLongevitySchema',
+  './database/ensureCustomerTaxSchema',
+  './database/ensureSmsMarketingSchema',
+  './database/ensureMonthlyBillingSchema',
+  './database/ensureCouponsSchema',
+];
+
+const { shouldRunSchemaEnsure } = require('./database/schemaEnsure');
+
+if (shouldRunSchemaEnsure()) {
+  const staggerMs = process.env.VERCEL ? 250 : 0;
+  (async () => {
+    for (const modulePath of SCHEMA_ENSURE_MODULES) {
+      try {
+        require(modulePath);
+      } catch (err) {
+        console.error(`Schema ensure failed to load: ${modulePath}`, err.message);
+      }
+      if (staggerMs) await new Promise((resolve) => setTimeout(resolve, staggerMs));
+    }
+  })();
+} else {
+  console.log('Skipping boot-time schema ensure on this runtime (set RUN_SCHEMA_ENSURE=1 to run it).');
+}
 
 try {
   app.use('/api/auth', require('./routes/auth'));
@@ -98,6 +153,7 @@ try {
   app.use('/api/bank-accounts', require('./routes/bankAccounts'));
   app.use('/api/bank-deposits', require('./routes/bankDeposits'));
   app.use('/api/loyalty', require('./routes/loyalty'));
+  app.use('/api/coupons', require('./routes/coupons'));
   app.use('/api/validation', require('./routes/validation'));
   app.use('/api/order-item-photos', require('./routes/orderItemPhotos'));
   app.use('/api/delivery-notes', require('./routes/deliveryNotes'));
@@ -111,9 +167,9 @@ try {
   app.use('/api/admin/sms-marketing', require('./routes/adminSmsMarketing'));
   app.use('/api/admin/inbox', require('./routes/adminInbox'));
   app.use('/api/admin', require('./routes/auditExport'));
-  console.log('✅ All routes loaded successfully');
+  console.log('OK:  All routes loaded successfully');
 } catch (error) {
-  console.error('❌ Error loading routes:', error);
+  console.error('ERROR:  Error loading routes:', error);
   console.error('Stack trace:', error.stack);
   process.exit(1);
 }
@@ -121,7 +177,9 @@ try {
 app.get('/api/health', async (req, res) => {
   const started = Date.now();
   try {
-    const db = require('./database/query');
+    // Use the single database entry point: resolves to SQLite locally or
+    // PostgreSQL when DATABASE_URL is set (query.js alone would fail on SQLite).
+    const db = require('./database/db');
     await db.get('SELECT 1 AS ok', []);
     res.json({
       status: 'OK',
@@ -160,11 +218,19 @@ app.use('/uploads', authenticate, express.static(path.join(__dirname, '../upload
   fallthrough: false,
 }));
 
-if (isProduction) {
+// Unknown API routes must answer with an error, never the SPA shell.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `Not found: ${req.method} ${req.originalUrl}` });
+});
+
+// Express serves the built frontend only when it is the host of the deployment
+// itself (Render, Docker, `node server/index.js`). On Vercel the static build
+// output is served by the CDN, so this function must not answer page requests.
+if (isProduction && !process.env.VERCEL) {
   const buildDir = path.join(__dirname, '../client/build');
   const fs = require('fs');
   if (!fs.existsSync(path.join(buildDir, 'index.html'))) {
-    console.error('❌ Frontend build missing. Run Build Command: npm run build:render');
+    console.error('ERROR:  Frontend build missing. Run Build Command: npm run build:render');
     console.error('   Expected: client/build/index.html');
   }
   app.use(express.static(buildDir));
@@ -192,21 +258,30 @@ app.use((err, req, res, next) => {
   });
 });
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 SUPACLEAN POS Server running on port ${PORT}`);
-  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
-});
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${PORT} is already in use. Please kill the process or use a different port.`);
-    console.error(`Run: npm run kill-port`);
-    process.exit(1);
-  } else {
-    console.error('Server error:', err);
-    process.exit(1);
-  }
-});
+// Export for Vercel serverless — must be before app.listen
+module.exports = app;
+
+// Only listen when NOT on Vercel (serverless handles invocation)
+let server;
+if (!process.env.VERCEL) {
+  server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(` SUPACLEAN POS Server running on port ${PORT}`);
+    console.log(` Environment: ${process.env.NODE_ENV || 'development'}`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`ERROR:  Port ${PORT} is already in use. Please kill the process or use a different port.`);
+      console.error(`Run: npm run kill-port`);
+      process.exit(1);
+    } else {
+      console.error('Server error:', err);
+      process.exit(1);
+    }
+  });
+
+}  // end if (!process.env.VERCEL)
 
 function gracefulShutdown(signal) {
   console.log(`\n${signal} signal received: closing HTTP server`);

@@ -4,6 +4,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
 import LegacyLayout from './components/layout-legacy/Layout';
+import InstallPrompt from './components/InstallPrompt';
 import Loader from './components/Loader';
 import Login from './pages/Login';
 import './App.css';
@@ -13,7 +14,6 @@ const Dashboard = lazy(() => import(/* webpackChunkName: "page-dashboard" */ './
 const NewOrder = lazy(() => import(/* webpackChunkName: "page-new-order" */ './pages/NewOrder'));
 const Orders = lazy(() => import(/* webpackChunkName: "page-orders" */ './pages/Orders'));
 const Customers = lazy(() => import(/* webpackChunkName: "page-customers" */ './pages/Customers'));
-const Collection = lazy(() => import(/* webpackChunkName: "page-collection" */ './pages/Collection'));
 const Reports = lazy(() => import(/* webpackChunkName: "page-reports" */ './pages/Reports'));
 const PriceList = lazy(() => import(/* webpackChunkName: "page-price-list" */ './pages/PriceList'));
 const CashManagement = lazy(() => import(/* webpackChunkName: "page-cash" */ './pages/CashManagement'));
@@ -25,6 +25,7 @@ const CleaningServices = lazy(() => import(/* webpackChunkName: "page-cleaning" 
 const Payroll = lazy(() => import(/* webpackChunkName: "page-payroll" */ './pages/Payroll'));
 const Terms = lazy(() => import(/* webpackChunkName: "page-terms" */ './pages/Terms'));
 const AdminSmsMarketing = lazy(() => import(/* webpackChunkName: "page-admin-sms-marketing" */ './pages/AdminSmsMarketing'));
+const AdminCoupons = lazy(() => import(/* webpackChunkName: "page-admin-coupons" */ './pages/AdminCoupons'));
 
 class AppErrorBoundary extends React.Component {
   state = { hasError: false, error: null };
@@ -110,6 +111,7 @@ const AppLayout = legacyPosShell ? LegacyLayout : Layout;
 function App() {
   return (
     <ThemeProvider>
+      <InstallPrompt />
       <AuthProvider>
         <AppErrorBoundary>
         <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -128,7 +130,6 @@ function App() {
                         <Route path="/new-order" element={<NewOrder />} />
                         <Route path="/orders" element={<Orders />} />
                         <Route path="/customers" element={<Customers />} />
-                        <Route path="/collection" element={<Collection />} />
                         <Route path="/price-list" element={<PriceList />} />
                         <Route path="/cash-management" element={<CashManagement />} />
                         <Route path="/expenses" element={<Expenses />} />
@@ -139,6 +140,7 @@ function App() {
                         <Route path="/admin/branches" element={<AdminBranches />} />
                         <Route path="/admin/banking" element={<AdminBanking />} />
                         <Route path="/admin/sms-marketing" element={<AdminSmsMarketing />} />
+                        <Route path="/admin/coupons" element={<AdminCoupons />} />
                         <Route path="*" element={<Navigate to="/dashboard" replace />} />
                       </Routes>
                     </AppLayout>

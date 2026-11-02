@@ -13,7 +13,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error('Error opening database:', err.message);
   } else {
-    console.log('✅ Connected to SQLite database');
+    console.log('OK:  Connected to SQLite database');
     // Enable WAL mode for better performance and concurrency
     db.run('PRAGMA journal_mode = WAL;');
     db.run('PRAGMA busy_timeout = 8000;');
@@ -23,7 +23,13 @@ const db = new sqlite3.Database(dbPath, (err) => {
     db.run('PRAGMA temp_store = MEMORY;');
     db.run('PRAGMA mmap_size = 268435456;'); // 256MB memory-mapped I/O
     db.run('PRAGMA foreign_keys = ON;'); // Enable foreign key constraints
-    initializeTables();
+    // Serialize schema setup: this SQLite driver executes statements on a
+    // background thread. Wrapping the whole setup in db.serialize() guarantees
+    // the CREATE TABLE statements finish before migrateDatabase()/createIndexes()
+    // run, which would otherwise crash on a fresh database ("no such table/column").
+    db.serialize(() => {
+      initializeTables();
+    });
   }
 });
 
@@ -35,6 +41,8 @@ function initializeTables() {
     phone TEXT NOT NULL UNIQUE,
     email TEXT,
     address TEXT,
+    tin TEXT,
+    vrn TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
@@ -84,6 +92,9 @@ function initializeTables() {
     archived_at DATETIME,
     archived_by TEXT,
     archive_reason TEXT,
+    coupon_id INTEGER,
+    coupon_code TEXT,
+    discount_amount REAL DEFAULT 0,
     FOREIGN KEY (customer_id) REFERENCES customers(id),
     FOREIGN KEY (service_id) REFERENCES services(id)
   )`);
@@ -114,9 +125,12 @@ function initializeTables() {
   )`);
 
   // Daily Cash Summaries table
+  // NOTE: one summary row per (date, branch). The UNIQUE constraint on `date`
+  // alone was removed in the migration below because it prevented more than one
+  // branch from having a cash summary on the same day.
   db.run(`CREATE TABLE IF NOT EXISTS daily_cash_summaries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT UNIQUE NOT NULL,
+    date TEXT NOT NULL,
     opening_balance REAL DEFAULT 0,
     cash_sales REAL DEFAULT 0,
     book_sales REAL DEFAULT 0,
@@ -261,6 +275,24 @@ function initializeTables() {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Coupons table (Task 4 — coupon program, min. order 20,000 TSh)
+  db.run(`CREATE TABLE IF NOT EXISTS coupons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL DEFAULT 'percent',
+    value REAL NOT NULL DEFAULT 0,
+    min_order_amount REAL NOT NULL DEFAULT 20000,
+    max_uses INTEGER DEFAULT 0,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    starts_at DATETIME,
+    expires_at DATETIME,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    branch_id INTEGER,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // Branches table (Multi-branch support)
   db.run(`CREATE TABLE IF NOT EXISTS branches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -278,7 +310,7 @@ function initializeTables() {
     db.run(`INSERT OR IGNORE INTO branches (name, code, branch_type, address, is_active) 
             VALUES ('Main Branch', 'AR01', 'workshop', 'Arusha, Tanzania', 1)`, (err) => {
       if (!err) {
-        console.log('✅ Default main branch created');
+        console.log('OK:  Default main branch created');
       }
     });
   });
@@ -353,7 +385,7 @@ function initializeTables() {
     FOREIGN KEY (order_id) REFERENCES orders(id)
   )`);
 
-  console.log('✅ Database tables initialized');
+  console.log('OK:  Database tables initialized');
   // Migrate existing database if needed
   migrateDatabase();
   
@@ -376,7 +408,9 @@ function createIndexes() {
   db.run('CREATE INDEX IF NOT EXISTS idx_orders_order_date ON orders(order_date)');
   db.run('CREATE INDEX IF NOT EXISTS idx_orders_receipt_number ON orders(receipt_number)');
   db.run('CREATE INDEX IF NOT EXISTS idx_orders_payment_status ON orders(payment_status)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_orders_estimated_collection ON orders(estimated_collection_date)');
+  // NOTE: idx_orders_estimated_collection is created below after a PRAGMA check, because
+  // estimated_collection_date is added asynchronously by migrateDatabase() and may not
+  // exist yet on a fresh SQLite database when createIndexes() runs.
   
   // Customers table indexes
   db.run('CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone)');
@@ -398,6 +432,9 @@ function createIndexes() {
   
   // Check if branch_id exists in orders table before creating index
   db.all("PRAGMA table_info(orders)", [], (err, columns) => {
+    if (!err && columns.some(col => col.name === 'estimated_collection_date')) {
+      db.run('CREATE INDEX IF NOT EXISTS idx_orders_estimated_collection ON orders(estimated_collection_date)');
+    }
     if (!err && columns.some(col => col.name === 'branch_id')) {
       db.run('CREATE INDEX IF NOT EXISTS idx_orders_branch_id ON orders(branch_id)');
     }
@@ -418,7 +455,7 @@ function createIndexes() {
     }
   });
   
-  console.log('✅ Database indexes created');
+  console.log('OK:  Database indexes created');
 }
 
 function migrateDatabase() {
@@ -484,6 +521,15 @@ function migrateDatabase() {
       if (!columnNames.includes('archive_reason')) {
         migrations.push('ALTER TABLE orders ADD COLUMN archive_reason TEXT');
       }
+      if (!columnNames.includes('coupon_id')) {
+        migrations.push('ALTER TABLE orders ADD COLUMN coupon_id INTEGER');
+      }
+      if (!columnNames.includes('coupon_code')) {
+        migrations.push('ALTER TABLE orders ADD COLUMN coupon_code TEXT');
+      }
+      if (!columnNames.includes('discount_amount')) {
+        migrations.push('ALTER TABLE orders ADD COLUMN discount_amount REAL DEFAULT 0');
+      }
       
       // Check and create loyalty tables if they don't exist
       db.run(`CREATE TABLE IF NOT EXISTS loyalty_points (
@@ -528,7 +574,7 @@ function migrateDatabase() {
           const notifNames = notifColumns.map((col) => col.name);
           if (!notifNames.includes('dedupe_key')) {
             db.run('ALTER TABLE notifications ADD COLUMN dedupe_key TEXT', (alterErr) => {
-              if (!alterErr) console.log('✅ Added dedupe_key column to notifications');
+              if (!alterErr) console.log('OK:  Added dedupe_key column to notifications');
             });
           }
         }
@@ -539,17 +585,17 @@ function migrateDatabase() {
           const names = userCols.map((c) => c.name);
           if (!names.includes('email')) {
             db.run('ALTER TABLE users ADD COLUMN email TEXT', (alterErr) => {
-              if (!alterErr) console.log('✅ Added email column to users (SQLite)');
+              if (!alterErr) console.log('OK:  Added email column to users (SQLite)');
             });
           }
           if (!names.includes('must_change_password')) {
             db.run('ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0', (alterErr) => {
-              if (!alterErr) console.log('✅ Added must_change_password column to users (SQLite)');
+              if (!alterErr) console.log('OK:  Added must_change_password column to users (SQLite)');
             });
           }
           if (!names.includes('updated_at')) {
             db.run('ALTER TABLE users ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP', (alterErr) => {
-              if (!alterErr) console.log('✅ Added updated_at column to users (SQLite)');
+              if (!alterErr) console.log('OK:  Added updated_at column to users (SQLite)');
             });
           }
         }
@@ -562,7 +608,7 @@ function migrateDatabase() {
           if (!customerColumnNames.includes('sms_notifications_enabled')) {
             db.run("ALTER TABLE customers ADD COLUMN sms_notifications_enabled INTEGER DEFAULT 1", (alterErr) => {
               if (!alterErr) {
-                console.log('✅ Added sms_notifications_enabled column to customers');
+                console.log('OK:  Added sms_notifications_enabled column to customers');
               } else {
                 console.log('Note: sms_notifications_enabled column may already exist');
               }
@@ -571,7 +617,7 @@ function migrateDatabase() {
           if (!customerColumnNames.includes('tags')) {
             db.run("ALTER TABLE customers ADD COLUMN tags TEXT", (alterErr) => {
               if (!alterErr) {
-                console.log('✅ Added tags column to customers');
+                console.log('OK:  Added tags column to customers');
               } else {
                 console.log('Note: tags column may already exist');
               }
@@ -591,7 +637,7 @@ function migrateDatabase() {
                 if (dropErr) {
                   console.log(`Note: Could not drop index ${idx.name}:`, dropErr.message);
                 } else {
-                  console.log(`✅ Dropped index: ${idx.name}`);
+                  console.log(`OK:  Dropped index: ${idx.name}`);
                 }
               });
             }
@@ -600,7 +646,7 @@ function migrateDatabase() {
           // Also try to drop the specific autoindex if it exists
           db.run("DROP INDEX IF EXISTS sqlite_autoindex_orders_1", (dropErr) => {
             if (!dropErr) {
-              console.log('✅ Removed sqlite_autoindex_orders_1');
+              console.log('OK:  Removed sqlite_autoindex_orders_1');
             }
           });
         }
@@ -611,7 +657,7 @@ function migrateDatabase() {
         if (!listErr && indexList) {
           indexList.forEach(idx => {
             if (idx.unique === 1) {
-              console.log(`⚠️  Warning: Unique index found: ${idx.name}`);
+              console.log(`WARN: ️  Warning: Unique index found: ${idx.name}`);
             }
           });
         }
@@ -624,7 +670,22 @@ function migrateDatabase() {
           if (!customerInfoColumnNames.includes('primary_branch_id')) {
             db.run("ALTER TABLE customers ADD COLUMN primary_branch_id INTEGER", (alterErr) => {
               if (!alterErr) {
-                console.log('✅ Added primary_branch_id column to customers');
+                console.log('OK:  Added primary_branch_id column to customers');
+              }
+            });
+          }
+          // Tax identification columns used by the customer forms and billing.
+          if (!customerInfoColumnNames.includes('tin')) {
+            db.run("ALTER TABLE customers ADD COLUMN tin TEXT", (alterErr) => {
+              if (!alterErr) {
+                console.log('OK:  Added tin column to customers');
+              }
+            });
+          }
+          if (!customerInfoColumnNames.includes('vrn')) {
+            db.run("ALTER TABLE customers ADD COLUMN vrn TEXT", (alterErr) => {
+              if (!alterErr) {
+                console.log('OK:  Added vrn column to customers');
               }
             });
           }
@@ -638,7 +699,7 @@ function migrateDatabase() {
           if (!transColumnNames.includes('branch_id')) {
             db.run("ALTER TABLE transactions ADD COLUMN branch_id INTEGER", (alterErr) => {
               if (!alterErr) {
-                console.log('✅ Added branch_id column to transactions');
+                console.log('OK:  Added branch_id column to transactions');
               }
             });
           }
@@ -663,22 +724,22 @@ function migrateDatabase() {
           const expColumnNames = expColumns.map(col => col.name);
           if (!expColumnNames.includes('branch_id')) {
             db.run("ALTER TABLE expenses ADD COLUMN branch_id INTEGER", (alterErr) => {
-              if (!alterErr) console.log('✅ Added branch_id column to expenses');
+              if (!alterErr) console.log('OK:  Added branch_id column to expenses');
             });
           }
           if (!expColumnNames.includes('bank_account_id')) {
             db.run("ALTER TABLE expenses ADD COLUMN bank_account_id INTEGER", (alterErr) => {
-              if (!alterErr) console.log('✅ Added bank_account_id to expenses');
+              if (!alterErr) console.log('OK:  Added bank_account_id to expenses');
             });
           }
           if (!expColumnNames.includes('deposit_reference_number')) {
             db.run("ALTER TABLE expenses ADD COLUMN deposit_reference_number TEXT", (alterErr) => {
-              if (!alterErr) console.log('✅ Added deposit_reference_number to expenses');
+              if (!alterErr) console.log('OK:  Added deposit_reference_number to expenses');
             });
           }
           if (!expColumnNames.includes('bank_deposit_id')) {
             db.run("ALTER TABLE expenses ADD COLUMN bank_deposit_id INTEGER", (alterErr) => {
-              if (!alterErr) console.log('✅ Added bank_deposit_id to expenses');
+              if (!alterErr) console.log('OK:  Added bank_deposit_id to expenses');
             });
           }
         }
@@ -691,14 +752,14 @@ function migrateDatabase() {
           if (!bankColumnNames.includes('branch_id')) {
             db.run("ALTER TABLE bank_deposits ADD COLUMN branch_id INTEGER", (alterErr) => {
               if (!alterErr) {
-                console.log('✅ Added branch_id column to bank_deposits');
+                console.log('OK:  Added branch_id column to bank_deposits');
               }
             });
           }
           if (!bankColumnNames.includes('bank_account_id')) {
             db.run("ALTER TABLE bank_deposits ADD COLUMN bank_account_id INTEGER", (alterErr) => {
               if (!alterErr) {
-                console.log('✅ Added bank_account_id column to bank_deposits');
+                console.log('OK:  Added bank_account_id column to bank_deposits');
               }
             });
           }
@@ -712,14 +773,14 @@ function migrateDatabase() {
           if (!dcsColumnNames.includes('branch_id')) {
             db.run("ALTER TABLE daily_cash_summaries ADD COLUMN branch_id INTEGER", (alterErr) => {
               if (!alterErr) {
-                console.log('✅ Added branch_id column to daily_cash_summaries');
+                console.log('OK:  Added branch_id column to daily_cash_summaries');
               }
             });
           }
           if (!dcsColumnNames.includes('reconciled_closing_balance')) {
             db.run("ALTER TABLE daily_cash_summaries ADD COLUMN reconciled_closing_balance REAL", (alterErr) => {
               if (!alterErr) {
-                console.log('✅ Added reconciled_closing_balance to daily_cash_summaries');
+                console.log('OK:  Added reconciled_closing_balance to daily_cash_summaries');
                 db.run(
                   `UPDATE daily_cash_summaries SET reconciled_closing_balance = closing_balance
                    WHERE COALESCE(is_reconciled, 0) = 1 AND reconciled_closing_balance IS NULL`,
@@ -731,12 +792,123 @@ function migrateDatabase() {
           if (!dcsColumnNames.includes('credit_sales')) {
             db.run("ALTER TABLE daily_cash_summaries ADD COLUMN credit_sales REAL DEFAULT 0", (alterErr) => {
               if (!alterErr) {
-                console.log('✅ Added credit_sales column to daily_cash_summaries');
+                console.log('OK:  Added credit_sales column to daily_cash_summaries');
               }
             });
           }
         }
       });
+
+      // Replace the legacy global UNIQUE(date) constraint on daily_cash_summaries
+      // with a UNIQUE(date, branch_id) constraint so each branch can own one
+      // cash summary per day.
+      //
+      // SQLite implements UNIQUE columns as implicit indexes that cannot be
+      // dropped, so the table has to be rebuilt: copy the rows into a new
+      // table without the UNIQUE(date), swap the names and recreate indexes.
+      db.all(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='daily_cash_summaries'",
+        [],
+        (dcsTableErr, dcsTableRows) => {
+          if (dcsTableErr || !dcsTableRows || !dcsTableRows.length) return;
+          const tableSql = dcsTableRows[0].sql || '';
+          const hasGlobalDateUnique = /\bdate\b[^,]*\bUNIQUE\b/i.test(tableSql);
+          if (!hasGlobalDateUnique) return;
+
+          db.all("PRAGMA table_info(daily_cash_summaries)", [], (infoErr, columns) => {
+            if (infoErr || !columns || !columns.length) return;
+            const colNames = columns.map((c) => c.name);
+            const cols = colNames.map((n) => `"${n}"`).join(', ');
+            const selects = colNames.map((n) => `"${n}"`).join(', ');
+
+            db.run('BEGIN', (beginErr) => {
+              if (beginErr) return;
+              db.run(
+                `CREATE TABLE daily_cash_summaries_new (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  date TEXT NOT NULL,
+                  opening_balance REAL DEFAULT 0,
+                  cash_sales REAL DEFAULT 0,
+                  book_sales REAL DEFAULT 0,
+                  card_sales REAL DEFAULT 0,
+                  mobile_money_sales REAL DEFAULT 0,
+                  credit_sales REAL DEFAULT 0,
+                  bank_deposits REAL DEFAULT 0,
+                  bank_payments REAL DEFAULT 0,
+                  mpesa_received REAL DEFAULT 0,
+                  mpesa_paid REAL DEFAULT 0,
+                  expenses_from_cash REAL DEFAULT 0,
+                  expenses_from_bank REAL DEFAULT 0,
+                  expenses_from_mpesa REAL DEFAULT 0,
+                  cash_in_hand REAL DEFAULT 0,
+                  closing_balance REAL DEFAULT 0,
+                  is_reconciled INTEGER DEFAULT 0,
+                  reconciled_by TEXT,
+                  reconciled_at DATETIME,
+                  notes TEXT,
+                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  branch_id INTEGER,
+                  reconciled_closing_balance REAL,
+                  opening_cash_declared REAL,
+                  opening_variance REAL NOT NULL DEFAULT 0,
+                  opening_session_by TEXT,
+                  opening_session_at TIMESTAMP
+                )`,
+                (createErr) => {
+                  if (createErr) {
+                    console.log('Note: could not rebuild daily_cash_summaries:', createErr.message);
+                    db.run('ROLLBACK', () => {});
+                    return;
+                  }
+                  db.run(
+                    `INSERT INTO daily_cash_summaries_new (${cols}) SELECT ${selects} FROM daily_cash_summaries`,
+                    (copyErr) => {
+                      if (copyErr) {
+                        console.log('Note: could not copy daily_cash_summaries rows:', copyErr.message);
+                        db.run('ROLLBACK', () => {});
+                        return;
+                      }
+                      db.run('DROP TABLE daily_cash_summaries', (dropErr) => {
+                        if (dropErr) {
+                          console.log('Note: could not drop daily_cash_summaries:', dropErr.message);
+                          db.run('ROLLBACK', () => {});
+                          return;
+                        }
+                        db.run('ALTER TABLE daily_cash_summaries_new RENAME TO daily_cash_summaries', (renameErr) => {
+                          if (renameErr) {
+                            console.log('Note: could not rename daily_cash_summaries:', renameErr.message);
+                            db.run('ROLLBACK', () => {});
+                            return;
+                          }
+                          db.run(
+                            `CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_cash_summaries_date_branch
+                             ON daily_cash_summaries (date, branch_id)`,
+                            (idxErr) => {
+                              if (idxErr) {
+                                console.log('Note: could not create (date, branch_id) unique index:', idxErr.message);
+                                db.run('ROLLBACK', () => {});
+                                return;
+                              }
+                              db.run('COMMIT', (commitErr) => {
+                                if (commitErr) {
+                                  console.log('Note: daily_cash_summaries rebuild commit failed:', commitErr.message);
+                                } else {
+                                  console.log('OK:  daily_cash_summaries rebuilt — unique on (date, branch_id)');
+                                }
+                              });
+                            }
+                          );
+                        });
+                      });
+                    }
+                  );
+                }
+              );
+            });
+          });
+        }
+      );
 
       // Migrate loyalty_rewards table - add service_value column if missing
       db.all("PRAGMA table_info(loyalty_rewards)", [], (rewardsErr, rewardsColumns) => {
@@ -745,7 +917,7 @@ function migrateDatabase() {
           if (!rewardsColumnNames.includes('service_value')) {
             db.run("ALTER TABLE loyalty_rewards ADD COLUMN service_value REAL DEFAULT 0", (alterErr) => {
               if (!alterErr) {
-                console.log('✅ Added service_value column to loyalty_rewards');
+                console.log('OK:  Added service_value column to loyalty_rewards');
               } else {
                 console.log('Note: service_value column migration:', alterErr.message);
               }
@@ -763,15 +935,15 @@ function migrateDatabase() {
       });
       
       function insertDefaultLoyaltyReward() {
-        // Insert default reward: 100 points = Free wash worth 10,000 TSh
+        // Insert default reward: 10 points = Free wash worth 10,000 TSh
         // Try with service_value first
         db.run(`INSERT OR IGNORE INTO loyalty_rewards (name, description, points_required, service_value, discount_amount) VALUES
-          ('Free Wash', 'Free wash service worth TSh 10,000', 100, 10000, 10000)`, (insertErr) => {
+          ('Free Wash', 'Free wash service worth TSh 10,000', 10, 10000, 10000)`, (insertErr) => {
           if (insertErr) {
             // If service_value column doesn't exist yet, try without it
             if (insertErr.message.includes('service_value') || insertErr.message.includes('no such column')) {
               db.run(`INSERT OR IGNORE INTO loyalty_rewards (name, description, points_required, discount_amount) VALUES
-                ('Free Wash', 'Free wash service worth TSh 10,000', 100, 10000)`, (retryErr) => {
+                ('Free Wash', 'Free wash service worth TSh 10,000', 10, 10000)`, (retryErr) => {
                 if (retryErr) {
                   console.error('Error inserting default reward:', retryErr.message);
                 }
@@ -780,20 +952,27 @@ function migrateDatabase() {
               console.error('Error inserting default reward:', insertErr.message);
             }
           }
+          // Migrate legacy default (100 points) to the new 10-point redemption rule.
+          // Only touches rows still at the old default value, so custom edits are preserved.
+          db.run(`UPDATE loyalty_rewards SET points_required = 10 WHERE name = 'Free Wash' AND points_required = 100`, (updateErr) => {
+            if (updateErr) {
+              console.error('Error updating default reward points_required:', updateErr.message);
+            }
+          });
         });
       }
       
       if (migrations.length > 0) {
-        console.log('🔄 Migrating database schema...');
+        console.log('SYNC:  Migrating database schema...');
         migrations.forEach((migration, index) => {
           db.run(migration, (err) => {
             if (err) {
               console.error(`Error running migration ${index + 1}:`, err);
             } else {
-              console.log(`✅ Migration ${index + 1} completed`);
+              console.log(`OK:  Migration ${index + 1} completed`);
             }
             if (index === migrations.length - 1) {
-              console.log('✅ Database migration completed');
+              console.log('OK:  Database migration completed');
               // After migrations, assign existing data to default branch
               assignDataToDefaultBranch();
             }
@@ -814,7 +993,7 @@ function migrateDatabase() {
             db.run("UPDATE orders SET branch_id = ?, created_at_branch_id = ? WHERE branch_id IS NULL", 
               [defaultBranchId, defaultBranchId], (orderErr) => {
               if (!orderErr) {
-                console.log('✅ Assigned existing orders to default branch');
+                console.log('OK:  Assigned existing orders to default branch');
               }
             });
             
@@ -822,7 +1001,7 @@ function migrateDatabase() {
             db.run("UPDATE transactions SET branch_id = ? WHERE branch_id IS NULL", 
               [defaultBranchId], (transErr) => {
               if (!transErr) {
-                console.log('✅ Assigned existing transactions to default branch');
+                console.log('OK:  Assigned existing transactions to default branch');
               }
             });
             
@@ -830,7 +1009,7 @@ function migrateDatabase() {
             db.run("UPDATE expenses SET branch_id = ? WHERE branch_id IS NULL", 
               [defaultBranchId], (expErr) => {
               if (!expErr) {
-                console.log('✅ Assigned existing expenses to default branch');
+                console.log('OK:  Assigned existing expenses to default branch');
               }
             });
             
@@ -838,7 +1017,7 @@ function migrateDatabase() {
             db.run("UPDATE bank_deposits SET branch_id = ? WHERE branch_id IS NULL", 
               [defaultBranchId], (bankErr) => {
               if (!bankErr) {
-                console.log('✅ Assigned existing bank deposits to default branch');
+                console.log('OK:  Assigned existing bank deposits to default branch');
               }
             });
           }
@@ -928,7 +1107,7 @@ function insertDefaultServices() {
   });
 
   stmt.finalize();
-  console.log('✅ All services from price list inserted');
+  console.log('OK:  All services from price list inserted');
 }
 
 function insertDefaultSettings() {
@@ -949,7 +1128,7 @@ function insertDefaultSettings() {
   });
 
   stmt.finalize();
-  console.log('✅ Default settings inserted');
+  console.log('OK:  Default settings inserted');
 }
 
 module.exports = db;

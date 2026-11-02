@@ -1,6 +1,10 @@
 /**
  * PostgreSQL indexes for hot POS read paths (orders list, customers list, cash summaries).
  */
+require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
+
+if (!process.env.DATABASE_URL) return;
+
 const db = require('./query');
 
 (async () => {
@@ -26,13 +30,17 @@ const db = require('./query');
       []
     );
     await db.run(
-      'CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token)',
+      'CREATE INDEX IF NOT EXISTS idx_orders_receipt_number ON orders (receipt_number)',
       []
     );
     await db.run(
-      `CREATE INDEX IF NOT EXISTS idx_orders_active_branch_status
-       ON orders (branch_id, status, order_date DESC)
-       WHERE COALESCE(is_voided, FALSE) = FALSE AND archived_at IS NULL`,
+      'CREATE INDEX IF NOT EXISTS idx_orders_receipt_number_lower ON orders (lower(receipt_number))',
+      []
+    );
+    // Customer tag search (ILIKE '%tag%') - trgm GIN keeps it indexed as the table grows
+    await db.run('CREATE EXTENSION IF NOT EXISTS pg_trgm', []);
+    await db.run(
+      'CREATE INDEX IF NOT EXISTS idx_customers_tags_trgm ON customers USING gin (tags gin_trgm_ops)',
       []
     );
   } catch (err) {

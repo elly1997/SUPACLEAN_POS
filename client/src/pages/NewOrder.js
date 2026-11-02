@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { getServices, getItems, searchCustomers, createCustomer, createOrderBatch, getCustomerOrders, getSettings, sendReceiptSms } from '../api/api';
+import { getServices, getItems, searchCustomers, createCustomer, createOrderBatch, getCustomerOrders, getSettings, sendReceiptSms, validateCoupon } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
@@ -167,6 +167,11 @@ const NewOrder = () => {
   const [totalAmount, setTotalAmount] = useState(0);
   const [receiptDiscountType, setReceiptDiscountType] = useState('amount');
   const [receiptDiscountValue, setReceiptDiscountValue] = useState('');
+  // Coupon (Task 4)
+  const [couponCodeInput, setCouponCodeInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState(null); // { code, discount_amount, ... }
+  const [couponError, setCouponError] = useState('');
+  const [validatingCoupon, setValidatingCoupon] = useState(false);
   const [orderDateTime, setOrderDateTime] = useState(() => toLocalDateTimeInput(new Date()));
   const [manualReceiptNumber, setManualReceiptNumber] = useState('');
   const [loading, setLoading] = useState(false);
@@ -320,7 +325,7 @@ const NewOrder = () => {
     setTotalAmount(total);
   }, [orderItems, services, calculateLineTotal]);
 
-  const discountAmount = useMemo(() => {
+  const manualDiscount = useMemo(() => {
     const raw = parseFloat(receiptDiscountValue);
     if (Number.isNaN(raw) || raw <= 0) return 0;
     if (receiptDiscountType === 'percent') {
@@ -329,7 +334,47 @@ const NewOrder = () => {
     return Math.min(totalAmount, raw);
   }, [receiptDiscountType, receiptDiscountValue, totalAmount]);
 
+  const couponDiscount = useMemo(
+    () => Math.min(totalAmount, parseFloat(appliedCoupon?.discount_amount) || 0),
+    [totalAmount, appliedCoupon]
+  );
+
+  const discountAmount = useMemo(
+    () => Math.min(totalAmount, manualDiscount + couponDiscount),
+    [totalAmount, manualDiscount, couponDiscount]
+  );
+
   const payableTotal = useMemo(() => Math.max(0, totalAmount - discountAmount), [totalAmount, discountAmount]);
+
+  // Task 4.4 — Validate & apply a coupon against the current subtotal
+  const handleApplyCoupon = async () => {
+    const code = (couponCodeInput || '').trim();
+    if (!code) {
+      setAppliedCoupon(null);
+      setCouponError('');
+      return;
+    }
+    setValidatingCoupon(true);
+    setCouponError('');
+    try {
+      const res = await validateCoupon(code, totalAmount, selectedBranchId);
+      setAppliedCoupon(res.data?.coupon ? res.data : null);
+      if (!res.data?.valid) {
+        setCouponError(res.data?.error || 'Coupon not valid');
+      }
+    } catch (error) {
+      setAppliedCoupon(null);
+      setCouponError(error.response?.data?.error || 'Could not validate coupon');
+    } finally {
+      setValidatingCoupon(false);
+    }
+  };
+
+  const clearCoupon = () => {
+    setCouponCodeInput('');
+    setAppliedCoupon(null);
+    setCouponError('');
+  };
 
   const handleReset = useCallback(() => {
     setSelectedCustomer(null);
@@ -678,6 +723,7 @@ const NewOrder = () => {
             ? (payableTotal > 0 ? paidAmount * (itemTotal / payableTotal) : 0)
             : paidAmount;
         return {
+          item_id: item.item_id || null,
           service_id: item.service_id || (services[0]?.id || 1),
           quantity: parseInt(item.quantity, 10),
           weight_kg: item.weight_kg ? parseFloat(item.weight_kg) : null,
@@ -702,6 +748,7 @@ const NewOrder = () => {
         payment_method: orderData.payment_method,
         created_by: 'Cashier',
         receipt_number: trimmedManualReceipt || undefined,
+        ...(appliedCoupon?.code ? { coupon_code: appliedCoupon.code } : {}),
         ...(effectiveBranchId ? { branch_id: effectiveBranchId } : {}),
       });
 
@@ -720,7 +767,7 @@ const NewOrder = () => {
         // Always use consolidated receipt format for consistency (single or multiple items)
         try {
           const brand = await loadBrandSettings().catch(() => null);
-          const combinedReceipt = await combineReceipts(receipts, selectedCustomer, payableTotal, orderData, discountAmount, brand);
+          const combinedReceipt = await combineReceipts(receipts, selectedCustomer, payableTotal, orderData, discountAmount, brand, appliedCoupon?.code || appliedCoupon?.coupon?.code || null);
           
           if (!combinedReceipt || !combinedReceipt.text || String(combinedReceipt.text).trim().length === 0) {
             console.error('Receipt text is empty:', combinedReceipt);
@@ -765,7 +812,7 @@ const NewOrder = () => {
 
   const RECEIPT_COMPACT_THRESHOLD = 12;
 
-  const combineReceipts = async (receipts, customer, total, paymentData, discount = 0, brand = null) => {
+  const combineReceipts = async (receipts, customer, total, paymentData, discount = 0, brand = null, couponCode = null) => {
     const businessName = (brand && brand.business_name) || 'SUPACLEAN';
     const tagline = (brand && brand.business_tagline) || 'Laundry & Dry Cleaning';
     const footerLine = (brand && brand.receipt_footer) || 'Thank you for choosing SUPACLEAN!';
@@ -837,7 +884,7 @@ Phone: ${customer.phone}
     const sep = useCompact ? '─'.repeat(32) : '───────────────────────────────────────────';
     let footerText = `${sep}\n`;
     if ((Number(discount) || 0) > 0) {
-      footerText += `DISCOUNT: -TSh ${Number(discount).toLocaleString()}\n`;
+      footerText += `DISCOUNT: -TSh ${Number(discount).toLocaleString()}${couponCode ? ` (Coupon: ${couponCode})` : ''}\n`;
     }
     footerText += `TOTAL: TSh ${finalTotal.toLocaleString()}\n`;
     if (paymentData.payment_status === 'not_paid') {
@@ -1118,7 +1165,13 @@ Phone: ${customer.phone}
         return updatedItems;
       }
 
-      const defaultService = services.find((s) => (s.name || '').toLowerCase().includes('regular')) || services[0];
+      // Point price-list lines at the item's own service counterpart (same name)
+      // so service linkage, receipts, and service-based reports carry the real
+      // item — falls back to a "regular"-named delivery service, then first.
+      const defaultService =
+        services.find((s) => (s.name || '').toLowerCase() === (item.name || '').toLowerCase()) ||
+        services.find((s) => (s.name || '').toLowerCase().includes('regular')) ||
+        services[0];
       const deliveryType = selectedServiceType === 'express' ? 'same_day' : defaultDeliveryType;
       let expressMultiplier = 0;
       if (selectedServiceType !== 'express' && deliveryType === 'same_day') {
@@ -1279,6 +1332,9 @@ Phone: ${customer.phone}
                               {customer.branch_name && (
                                 <span className="customer-dropdown-branch">Home: {customer.branch_code || customer.branch_name}</span>
                               )}
+                              {customer.is_other_branch && (
+                                <span className="customer-dropdown-branch other-branch-badge">From another branch</span>
+                              )}
                             </div>
                           </div>
                         ))
@@ -1301,6 +1357,9 @@ Phone: ${customer.phone}
                       <div className="customer-info-text">
                         <strong>{selectedCustomer.name}</strong>
                         <span>{selectedCustomer.phone}</span>
+                        {selectedCustomer.is_other_branch && (
+                          <span className="customer-dropdown-branch other-branch-badge" style={{ marginLeft: '8px', fontSize: '12px' }}>From another branch</span>
+                        )}
                         {customerHistory.length > 0 && (
                           <div className="customer-history-compact">
                             <small>Last order: {customerHistory[0]?.service_name}</small>
@@ -1649,6 +1708,7 @@ Phone: ${customer.phone}
                               <div className="weight-control">
                                 <input
                                   type="number"
+                                  inputMode="decimal"
                                   step="0.1"
                                   min="0"
                                   placeholder="kg"
@@ -1675,6 +1735,7 @@ Phone: ${customer.phone}
                               {item.manual_price_enabled && (
                                 <input
                                   type="number"
+                                  inputMode="decimal"
                                   step="0.01"
                                   min="0"
                                   placeholder="Manual line price (TSh)"
@@ -1710,8 +1771,14 @@ Phone: ${customer.phone}
                     </div>
                     <div className="total-line">
                       <span>Receipt Discount:</span>
-                      <span>- TSh {discountAmount.toLocaleString()}</span>
+                      <span>- TSh {manualDiscount.toLocaleString()}</span>
                     </div>
+                    {couponDiscount > 0 && (
+                      <div className="total-line">
+                        <span>Coupon {appliedCoupon?.coupon?.code || appliedCoupon?.code || ''}:</span>
+                        <span>- TSh {couponDiscount.toLocaleString()}</span>
+                      </div>
+                    )}
                     <div className="total-line total-amount">
                       <span>Total Amount:</span>
                       <strong>TSh {payableTotal.toLocaleString()}</strong>
@@ -1732,6 +1799,7 @@ Phone: ${customer.phone}
                         </select>
                         <input
                           type="number"
+                          inputMode="decimal"
                           min="0"
                           step="0.01"
                           value={receiptDiscountValue}
@@ -1739,6 +1807,35 @@ Phone: ${customer.phone}
                           placeholder={receiptDiscountType === 'percent' ? 'e.g. 10' : 'e.g. 1500'}
                         />
                       </div>
+                    </div>
+
+                    {/* Coupon (Task 4) */}
+                    <div className="form-group-modern">
+                      <label>Coupon Code</label>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                          type="text"
+                          value={couponCodeInput}
+                          onChange={(e) => setCouponCodeInput(e.target.value.toUpperCase())}
+                          placeholder="Enter coupon code"
+                          disabled={validatingCoupon}
+                        />
+                        {appliedCoupon ? (
+                          <button type="button" className="btn-secondary" onClick={clearCoupon}>Remove</button>
+                        ) : (
+                          <button type="button" className="btn-secondary" onClick={handleApplyCoupon} disabled={validatingCoupon || !couponCodeInput.trim()}>
+                            {validatingCoupon ? '…' : 'Apply'}
+                          </button>
+                        )}
+                      </div>
+                      {appliedCoupon && (
+                        <div style={{ fontSize: '13px', color: 'var(--success-color)', marginTop: 4 }}>
+                          ✅ Coupon {appliedCoupon.coupon?.code || appliedCoupon.code} applied — TSh {Number(appliedCoupon.discount_amount || 0).toLocaleString()} off
+                        </div>
+                      )}
+                      {couponError && (
+                        <div style={{ fontSize: '13px', color: 'var(--danger-color)', marginTop: 4 }}>⚠️ {couponError}</div>
+                      )}
                     </div>
 
                     <div className="form-group-modern">
@@ -1776,6 +1873,7 @@ Phone: ${customer.phone}
                         <label>Advance Payment Amount</label>
                         <input
                           type="number"
+                          inputMode="decimal"
                           step="0.01"
                           min="0"
                           max={payableTotal}

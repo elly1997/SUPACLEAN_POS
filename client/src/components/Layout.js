@@ -90,7 +90,7 @@ const Layout = ({ children }) => {
   }, [location.pathname]);
 
   const ROLE_NAV_PRESETS = {
-    cashier: ['/dashboard', '/new-order', '/collection', '/orders', '/cash-management'],
+    cashier: ['/dashboard', '/new-order', '/orders', '/cash-management'],
     processor: ['/dashboard', '/orders'],
     manager: null,
     admin: null
@@ -107,7 +107,6 @@ const Layout = ({ children }) => {
       label: 'Counter',
       items: [
         { path: '/new-order', label: 'New Order', icon: '➕', permission: 'canCreateOrders', feature: 'new_order' },
-        { path: '/collection', label: 'Collection', icon: '✅', permission: 'canManageOrders', feature: 'collection' },
       ]
     },
     {
@@ -159,6 +158,15 @@ const Layout = ({ children }) => {
     }),
   })).filter(grp => grp.items.length > 0);
 
+  // Mobile bottom tab bar: till-critical destinations first, in fixed order.
+  const flatNavItems = filteredGroups.flatMap((g) => g.items);
+  const tabPriority = ['/new-order', '/orders', '/dashboard'];
+  const tabItems = tabPriority
+    .map((p) => flatNavItems.find((it) => it.path === p))
+    .filter(Boolean)
+    .slice(0, 3);
+  const showBottomTabs = isMobile && tabItems.length > 0;
+
   if (isAdmin) {
     filteredGroups.push({
       label: 'Admin',
@@ -166,6 +174,7 @@ const Layout = ({ children }) => {
         { path: '/admin/branches', label: 'Branches', icon: '🏢', feature: 'admin' },
         { path: '/admin/banking', label: 'Banking', icon: '🏦', feature: 'admin' },
         { path: '/admin/sms-marketing', label: 'SMS Marketing', icon: '📱', feature: 'admin' },
+        { path: '/admin/coupons', label: 'Coupons', icon: '🎟️', feature: 'admin' },
       ]
     });
   }
@@ -290,6 +299,29 @@ const Layout = ({ children }) => {
         <div key={location.pathname} className="content-wrapper pos-shell-screen-enter">
           {children}
         </div>
+        {showBottomTabs && (
+          <nav className="mobile-bottom-tabs" aria-label="Primary">
+            {tabItems.map((item) => (
+              <button
+                key={item.path}
+                type="button"
+                className={`mobile-tab ${location.pathname === item.path ? 'active' : ''}`}
+                onClick={() => navigate(item.path)}
+                aria-current={location.pathname === item.path ? 'page' : undefined}
+              >
+                <span className="mobile-tab__label">{item.label}</span>
+              </button>
+            ))}
+            <button
+              type="button"
+              className="mobile-tab"
+              onClick={() => setMobileMenuOpen(true)}
+              aria-label="More menu"
+            >
+              <span className="mobile-tab__label">More</span>
+            </button>
+          </nav>
+        )}
       </main>
     </div>
   );

@@ -21,13 +21,14 @@ const {
   daysOverdueFromEstimated
 } = require('../utils/sms');
 const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
-const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/permissions');
+const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny, requireReceiptAccess } = require('../middleware/auth');
+const { requirePermission, requireAnyPermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
 const { customerBelongsToBranch, branchCustomerMatchSql } = require('../utils/customerBranch');
 const { releaseCompanyWidePhoneLock } = require('../database/ensureLongevitySchema');
 const { coalesceRead } = require('../utils/readCoalesce');
 const { validatePayment } = require('../utils/paymentValidation');
+const { roundMoney } = require('../utils/money');
 const { recordPaymentTransaction, recordPaymentTransactionClient, logPaymentChange, logPaymentChangeClient } = require('../utils/paymentTransactions');
 const { applyReceiptPaymentAtomic } = require('../utils/receiptPayment');
 const { parseArchiveOptions, archiveOldOrders: runArchiveOldOrders } = require('../utils/archiveOldOrders');
@@ -53,16 +54,19 @@ const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
 
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, '../../uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+// Serverless-safe uploads directory (/tmp is writable on Vercel)
+const uploadsDir = process.env.VERCEL
+  ? path.join('/tmp', 'uploads')
+  : path.join(__dirname, '../../uploads');
+try {
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+} catch (error) {
+  console.error('Upload directory unavailable:', error && error.message ? error.message : error);
 }
 
 const upload = multer({ dest: uploadsDir });
-
-const roundMoney = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x * 100) / 100);
-const roundFigure = (x) => (typeof x !== 'number' || Number.isNaN(x) ? 0 : Math.round(x));
 
 function paymentBookDateYmd(paymentDate) {
   return typeof paymentDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(paymentDate.trim())
@@ -77,16 +81,18 @@ function buildPaymentTimestampIso(paymentDate) {
 }
 
 function triggerDailySummaryRefreshAsync(paymentDate, branchId) {
-  cashManagement.scheduleBackgroundDailySummaryRefresh(paymentDate, branchId);
+  cashManagement.scheduleBackgroundDailySummaryRefresh(paymentDate, branchId).catch(err => {
+    console.error('BACKGROUND: daily summary refresh failed:', err.message);
+  });
 }
 
 function buildPerOrderPaidAllocations(orders, receiptPaidAmount) {
   const sorted = [...orders].sort((a, b) => Number(a.id) - Number(b.id));
-  let remaining = Math.max(0, roundFigure(receiptPaidAmount));
+  let remaining = Math.max(0, roundMoney(receiptPaidAmount));
   const allocations = [];
 
   for (const o of sorted) {
-    const total = Math.max(0, roundFigure(Number(o.total_amount) || 0));
+    const total = Math.max(0, roundMoney(Number(o.total_amount) || 0));
     const paidNow = Math.min(total, remaining);
     remaining -= paidNow;
     const status = paidNow >= total ? 'paid_full' : (paidNow > 0 ? 'advance' : 'not_paid');
@@ -104,7 +110,7 @@ function buildPerOrderPaidAllocations(orders, receiptPaidAmount) {
 router.use(authenticate, requireBranchFeatureAny('new_order', 'order_processing'));
 
 // Get all orders
-router.get('/', requireBranchAccess(), async (req, res) => {
+router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
   const { 
     status, 
     customer_id, 
@@ -235,7 +241,7 @@ router.get('/', requireBranchAccess(), async (req, res) => {
 });
 
 // Dashboard counts (receipt-based, branch-scoped) to keep Dashboard and Orders figures consistent
-router.get('/dashboard-stats', requireBranchAccess(), async (req, res) => {
+router.get('/dashboard-stats', authenticate, requireBranchAccess(), async (req, res) => {
   const branchFilter = getBranchFilter(req, 'o');
 
   const query = `
@@ -283,7 +289,7 @@ router.get('/dashboard-stats', requireBranchAccess(), async (req, res) => {
 
 // Archive completed historical orders so active operational screens stay fast.
 // This is a soft archive: records remain available for audit/history and cash summaries.
-router.post('/archive-old', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.post('/archive-old', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   if (req.user?.role !== 'admin') {
     return res.status(403).json({ error: 'Only admins can run order archive maintenance.' });
   }
@@ -304,7 +310,7 @@ router.post('/archive-old', requireBranchAccess(), requirePermission('canManageO
 });
 
 // Get collection queue (ready orders with queue info) - grouped by receipt number. Branch-scoped; optional customer name/phone search.
-router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
+router.get('/collection-queue', authenticate, requireBranchAccess(), async (req, res) => {
   const { limit = 20, overdue_only, customer } = req.query;
   const branchFilter = getBranchFilter(req, 'o');
   
@@ -407,14 +413,15 @@ router.get('/collection-queue', requireBranchAccess(), async (req, res) => {
 });
 
 // Get order by receipt number - returns ALL items for the receipt with aggregated totals
-// Case-insensitive receipt number search
-router.get('/receipt/:receiptNumber', requireBranchAccess(), async (req, res) => {
+// Case-insensitive receipt number search (receipt numbers are global identifiers, not branch-scoped)
+router.get('/receipt/:receiptNumber', authenticate, requireReceiptAccess(), async (req, res) => {
   const { receiptNumber } = req.params;
-  const branchFilter = getBranchFilter(req, 'o');
   
   try {
-    // Get ALL orders for this receipt number (case-insensitive)
-    // Join with items table to get item names
+    // Get ALL orders for this receipt number (case-insensitive) across all branches.
+    // A receipt number is a global identifier; we do NOT filter by the user's branch so
+    // that lookups succeed even when the receipt lives on a different branch or when
+    // the user has no branch yet.
     const allOrders = await db.all(
       `SELECT o.*, s.name as service_name, s.description as service_description,
               c.name as customer_name, c.phone as customer_phone, c.email as customer_email,
@@ -427,9 +434,8 @@ router.get('/receipt/:receiptNumber', requireBranchAccess(), async (req, res) =>
        LEFT JOIN items i ON o.item_id = i.id
        LEFT JOIN branches b ON o.branch_id = b.id
        WHERE UPPER(o.receipt_number) = UPPER(?)
-       ${branchFilter.clause}
        ORDER BY o.id`,
-      [receiptNumber, ...branchFilter.params]
+      [receiptNumber]
     );
     
     if (!allOrders || allOrders.length === 0) {
@@ -456,8 +462,58 @@ router.get('/receipt/:receiptNumber', requireBranchAccess(), async (req, res) =>
   }
 });
 
+// Partial receipt search (Collection page): match by any part of the receipt number.
+// Returns grouped receipt summaries so the user can disambiguate multiple matches.
+// Like the exact receipt lookup, receipt numbers are global identifiers — not branch-scoped
+// — so we do not apply the user's branch filter here.
+router.get('/search/receipt', authenticate, requireReceiptAccess(), async (req, res) => {
+  const { q } = req.query;
+  if (!q || !q.trim()) {
+    return res.status(400).json({ error: 'Query is required' });
+  }
+  // Do NOT use branch filter — receipt numbers are global identifiers across all branches
+  // (same as /receipt/:receiptNumber). Apply it only when explicitly restricting to the
+  // user's branch for data-isolation purposes IF the caller is searching a different context.
+  const term = `%${q.trim()}%`;
+  try {
+    const rows = await db.all(
+      `SELECT o.receipt_number,
+              c.name AS customer_name, c.phone AS customer_phone,
+              MIN(o.order_date) AS order_date,
+              MIN(o.estimated_collection_date) AS estimated_collection_date,
+              (ARRAY_AGG(o.status ORDER BY
+                CASE o.status
+                  WHEN 'collected' THEN 7
+                  WHEN 'ready' THEN 6
+                  WHEN 'processing' THEN 5
+                  WHEN 'pending' THEN 4
+                  WHEN 'sent' THEN 3
+                  WHEN 'voided' THEN 2
+                  ELSE 1
+                END DESC))[1] AS status,
+              MAX(o.collected_date) AS collected_date,
+              (ARRAY_AGG(o.payment_method ORDER BY o.id DESC))[1] AS payment_method,
+              MIN(o.ready_date) AS ready_date,
+              SUM(o.total_amount) AS total_amount,
+              SUM(o.paid_amount) AS paid_amount,
+              COUNT(o.id)::int AS item_count
+       FROM orders o
+       JOIN customers c ON o.customer_id = c.id
+       WHERE UPPER(o.receipt_number) LIKE UPPER(?)
+       GROUP BY o.receipt_number, c.name, c.phone
+       ORDER BY MIN(o.id) DESC
+       LIMIT 20`,
+      [term]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error searching receipts:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Staff/manager: request void — appears in admin inbox for approve/decline
-router.post('/receipt/:receiptNumber/void-request', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.post('/receipt/:receiptNumber/void-request', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { receiptNumber } = req.params;
   const branchFilter = getBranchFilter(req, 'o');
   const acknowledgeReconciledDay = req.body?.acknowledge_reconciled_day === true
@@ -495,7 +551,7 @@ router.post('/receipt/:receiptNumber/void-request', requireBranchAccess(), requi
 });
 
 // Admin-only immediate void — also logs an awareness item in the admin inbox
-router.post('/receipt/:receiptNumber/void', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.post('/receipt/:receiptNumber/void', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { receiptNumber } = req.params;
   const branchFilter = getBranchFilter(req, 'o');
   const acknowledgeReconciledDay = req.body?.acknowledge_reconciled_day === true
@@ -550,7 +606,7 @@ router.post('/receipt/:receiptNumber/void', requireBranchAccess(), requirePermis
 });
 
 // Pending void-request status for a receipt (staff + admin)
-router.get('/receipt/:receiptNumber/void-request', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.get('/receipt/:receiptNumber/void-request', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   try {
     const item = await getPendingVoidForReceipt(req.params.receiptNumber);
     res.json({ pending: !!item, item: item || null });
@@ -561,7 +617,7 @@ router.get('/receipt/:receiptNumber/void-request', requireBranchAccess(), requir
 });
 
 // List pending void requests visible to this user (branch-scoped; admin sees all or selected branch)
-router.get('/void-requests/pending', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.get('/void-requests/pending', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   try {
     const branchId = getEffectiveBranchId(req);
     const params = [];
@@ -600,7 +656,7 @@ router.get('/void-requests/pending', requireBranchAccess(), requirePermission('c
 });
 
 // Send receipt SMS after order created and receipt printed (customer name, ID, items, amount, status)
-router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), async (req, res) => {
+router.post('/receipt/:receiptNumber/send-receipt-sms', authenticate, requireBranchAccess(), async (req, res) => {
   const { receiptNumber } = req.params;
   const branchFilter = getBranchFilter(req, 'o');
 
@@ -703,10 +759,16 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', requireBranchAccess(), a
 });
 
 // Search orders by customer phone or name
-router.get('/search/customer', requireBranchAccess(), async (req, res) => {
-  const { phone, name, status } = req.query;
-  
-  if (!phone && !name) {
+router.get('/search/customer', authenticate, requireBranchAccess(), async (req, res) => {
+  const { phone, name, status, customer } = req.query;
+
+  // The client sends a single "customer" term that may be a name or a phone
+  // number, so fall back to it when neither dedicated filter is supplied.
+  const effectivePhone = phone || null;
+  const effectiveName = name || null;
+  const customerTerm = customer ? String(customer).trim() : '';
+
+  if (!effectivePhone && !effectiveName && !customerTerm) {
     return res.status(400).json({ error: 'Phone number or customer name is required' });
   }
 
@@ -726,14 +788,20 @@ router.get('/search/customer', requireBranchAccess(), async (req, res) => {
   `;
   let params = [...branchFilter.params];
 
-  if (phone) {
+  if (effectivePhone) {
     query += ' AND c.phone ILIKE ?';
-    params.push(`%${phone}%`);
+    params.push(`%${effectivePhone}%`);
   }
 
-  if (name) {
+  if (effectiveName) {
     query += ' AND c.name ILIKE ?';
-    params.push(`%${name}%`);
+    params.push(`%${effectiveName}%`);
+  }
+
+  // A combined term matches either the customer's name or their phone.
+  if (customerTerm && !effectivePhone && !effectiveName) {
+    query += ' AND (c.name ILIKE ? OR c.phone ILIKE ?)';
+    params.push(`%${customerTerm}%`, `%${customerTerm}%`);
   }
 
   if (status) {
@@ -753,7 +821,7 @@ router.get('/search/customer', requireBranchAccess(), async (req, res) => {
 });
 
 // Generate receipt number endpoint (for batch orders)
-router.get('/generate-receipt-number', requireBranchAccess(), async (req, res) => {
+router.get('/generate-receipt-number', authenticate, requireBranchAccess(), async (req, res) => {
   try {
     const { for_date, branch_id: branchIdParam } = req.query;
     const targetDate = for_date ? new Date(for_date) : new Date();
@@ -775,7 +843,7 @@ router.get('/generate-receipt-number', requireBranchAccess(), async (req, res) =
 });
 
 // Generate QR code for receipt
-router.get('/receipt/:receiptNumber/qrcode', async (req, res) => {
+router.get('/receipt/:receiptNumber/qrcode', authenticate, requireBranchAccess(), async (req, res) => {
   const { receiptNumber } = req.params;
   
   try {
@@ -833,7 +901,7 @@ const IDEMPOTENCY_ROUTE_ORDERS = 'POST /api/orders';
  * Create a multi-line receipt in one atomic request (one receipt number, all items).
  * Prevents duplicate lines and wrong totals when several cashiers work at once.
  */
-router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {
+router.post('/batch', authenticate, requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {
   const idempotencyKey = readIdempotencyKey(req);
   if (idempotencyKey) {
     pruneExpiredIdempotencyKeys().catch(() => {});
@@ -856,6 +924,7 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
       created_by,
       branch_id,
       receipt_number: manualReceipt,
+      coupon_code,
     } = req.body;
 
     if (!customer_id) {
@@ -1003,8 +1072,8 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
           receipt_number, customer_id, service_id, quantity, weight_kg, color, garment_type,
           special_instructions, delivery_type, express_surcharge_multiplier, total_amount,
           paid_amount, payment_status, payment_method, created_by, order_date,
-          estimated_collection_date, branch_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          estimated_collection_date, branch_id, item_id
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
         RETURNING id`,
         [
           sharedReceiptNumber,
@@ -1025,6 +1094,7 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
           finalOrderDateIso,
           estimated_collection_date || null,
           orderBranchId,
+          line.item_id ? parseInt(line.item_id, 10) : null,
         ]
       );
 
@@ -1088,7 +1158,9 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
       items: results,
     };
     if (orderBranchId != null) {
-      cashManagement.scheduleBackgroundDailySummaryRefresh(paymentBookDateYmd(finalOrderDateIso), orderBranchId);
+      cashManagement.scheduleBackgroundDailySummaryRefresh(paymentBookDateYmd(finalOrderDateIso), orderBranchId).catch(err => {
+        console.error('BACKGROUND: daily summary refresh failed (batch):', err.message);
+      });
     }
     if (idempotencyKey) {
       await storeIdempotencyResponse(IDEMPOTENCY_ROUTE_ORDERS_BATCH, idempotencyKey, 200, payload);
@@ -1097,7 +1169,9 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
   } catch (err) {
     try {
       await client.query('ROLLBACK');
-    } catch (_) {}
+    } catch (rbErr) {
+      console.error('ERROR: orders batch ROLLBACK failed:', rbErr.message);
+    }
     console.error('POST /api/orders/batch error:', err);
     res.status(500).json({ error: err.message || 'Failed to create batch order' });
   } finally {
@@ -1106,7 +1180,7 @@ router.post('/batch', requireBranchAccess(), requirePermission('canCreateOrders'
 });
 
 // Create new order (cashiers, managers, and admins can create)
-router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {
+router.post('/', authenticate, requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {
   try {
     const idempotencyKey = readIdempotencyKey(req);
     if (idempotencyKey) {
@@ -1250,15 +1324,16 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
           if (final_paid_amount > 0 && payment_status === 'advance') {
             recordPaymentTransaction(orderObj, final_paid_amount, payment_method || 'cash', created_by || 'System')
               .then((transactionId) => {
-                console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Order ${orderId}`);
+                console.log(`OK:  Payment transaction recorded: Transaction ID ${transactionId} for Order ${orderId}`);
               })
               .catch((err) => {
                 console.error('Error recording payment transaction:', err);
               });
           }
 
-          // Log payment creation to audit log
-          logPaymentChange({
+          // Log payment creation to audit log (awaited: a void with no audit trail is worse than a slow response)
+          try {
+            await logPaymentChange({
             order_id: orderId,
             action: 'created',
             new_payment_status: payment_status || 'not_paid',
@@ -1266,12 +1341,15 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
             new_payment_method: payment_method || 'cash',
             changed_by: created_by || 'System',
             notes: 'Order created'
-          }).catch((err) => {
+            });
+          } catch (err) {
             console.error('Error logging payment change:', err);
-          });
+          }
 
           if (branchId != null) {
-            cashManagement.scheduleBackgroundDailySummaryRefresh(paymentBookDateYmd(finalOrderDateIso), branchId);
+            cashManagement.scheduleBackgroundDailySummaryRefresh(paymentBookDateYmd(finalOrderDateIso), branchId).catch(err => {
+              console.error('BACKGROUND: daily summary refresh failed (single):', err.message);
+            });
           }
 
           // Get customer details for receipt
@@ -1402,7 +1480,7 @@ router.post('/', requireBranchAccess(), requirePermission('canCreateOrders'), as
 });
 
 // Update order status (managers, processors, and admins can update)
-router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
@@ -1446,9 +1524,9 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
 
     // Cannot mark as collected without payment
     if (status === 'collected') {
-      const total = roundFigure(parseFloat(order.total_amount) || 0);
-      const paid = roundFigure(parseFloat(order.paid_amount) || 0);
-      const balanceDue = roundFigure(total - paid);
+      const total = roundMoney(parseFloat(order.total_amount) || 0);
+      const paid = roundMoney(parseFloat(order.paid_amount) || 0);
+      const balanceDue = roundMoney(total - paid);
       if (balanceDue > 0) {
         return res.status(400).json({
           error: 'Cannot mark as collected without payment. Receive payment first (Pay button) or use the Collection page to collect with payment.'
@@ -1465,18 +1543,21 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
       updateQuery += ', branch_id = ?';
       params.push(branchId);
     }
+    // Branch-audit columns: prefer the acting user's branch; admins acting
+    // cross-branch fall back to the effective branch so the trail is never NULL.
+    const atBranchId = branchId != null ? branchId : getEffectiveBranchId(req) || order.branch_id;
     if (status === 'ready') {
       updateQuery += ', ready_date = CURRENT_TIMESTAMP';
-      if (branchId) {
+      if (atBranchId != null) {
         updateQuery += ', ready_at_branch_id = ?';
-        params.push(branchId);
+        params.push(atBranchId);
       }
     }
     if (status === 'collected') {
       updateQuery += ', collected_date = CURRENT_TIMESTAMP';
-      if (branchId) {
+      if (atBranchId != null) {
         updateQuery += ', collected_at_branch_id = ?';
-        params.push(branchId);
+        params.push(atBranchId);
       }
     }
     updateQuery += ' WHERE id = ?';
@@ -1546,24 +1627,24 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
                 receiptNumber: orderWithCustomer.receipt_number
               }).then(result => {
                 if (result.skippedDuplicate) {
-                  console.log(`📱 Ready SMS skipped (duplicate window) for receipt ${orderWithCustomer.receipt_number}`);
+                  console.log(`SMS:  Ready SMS skipped (duplicate window) for receipt ${orderWithCustomer.receipt_number}`);
                 } else if (result?.smsSuppressed) {
                   console.log(
-                    `📱 Ready SMS suppressed (globally disabled) for receipt ${orderWithCustomer.receipt_number}`
+                    `SMS:  Ready SMS suppressed (globally disabled) for receipt ${orderWithCustomer.receipt_number}`
                   );
                 } else if (result.success) {
-                  console.log(`✅ Ready notification sent via ${result.channel || 'sms'} to ${orderWithCustomer.customer_phone} for receipt ${orderWithCustomer.receipt_number}`);
+                  console.log(`OK:  Ready notification sent via ${result.channel || 'sms'} to ${orderWithCustomer.customer_phone} for receipt ${orderWithCustomer.receipt_number}`);
                 } else {
-                  console.error(`❌ Failed to send to ${orderWithCustomer.customer_phone}:`, result.error);
+                  console.error(`ERROR:  Failed to send to ${orderWithCustomer.customer_phone}:`, result.error);
                 }
               }).catch(err => {
-                console.error(`❌ Error sending ready notification:`, err);
+                console.error(`ERROR:  Error sending ready notification:`, err);
               });
             } else {
-              console.log(`📩 Ready notification already sent for receipt ${orderWithCustomer.receipt_number}; skipping duplicate.`);
+              console.log(`MAIL:  Ready notification already sent for receipt ${orderWithCustomer.receipt_number}; skipping duplicate.`);
             }
           } else if (!smsEnabled) {
-            console.log(`📱 SMS notifications disabled for customer ${orderWithCustomer.customer_name}`);
+            console.log(`SMS:  SMS notifications disabled for customer ${orderWithCustomer.customer_name}`);
           }
         }
       } catch (smsErr) {
@@ -1580,7 +1661,7 @@ router.put('/:id/status', requireBranchAccess(), requirePermission('canManageOrd
 });
 
 // Update estimated collection date (managers, processors, and admins can update)
-router.put('/:id/estimated-collection-date', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.put('/:id/estimated-collection-date', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { id } = req.params;
   const { estimated_collection_date } = req.body;
 
@@ -1622,9 +1703,9 @@ router.put('/:id/estimated-collection-date', requireBranchAccess(), requirePermi
   }
 });
 
-// Collect order (by receipt number) with optional payment (managers, processors, and admins can collect)
+// Collect order (by receipt number) with optional payment (cashiers, managers, processors, and admins can collect)
 // This endpoint handles ALL items on a receipt together - collects the entire receipt, not individual items
-router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.post('/collect/:receiptNumber', authenticate, requireBranchFeature('collection'), requireBranchAccess(), requireAnyPermission('canCollect', 'canManageOrders'), async (req, res) => {
   const { receiptNumber } = req.params;
   const { payment_amount, payment_method = 'cash', payment_date, notes } = req.body;
 
@@ -1639,7 +1720,7 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
 
     const branchFilter = getBranchFilter(req, 'o');
     const payAmount =
-      payment_amount !== undefined && payment_amount > 0 ? roundFigure(parseFloat(payment_amount)) : 0;
+      payment_amount !== undefined && payment_amount > 0 ? roundMoney(parseFloat(payment_amount)) : 0;
 
     if (payAmount > 0 && !assertNotFutureBusinessDate(paymentBookDateYmd(payment_date), res, 'payment_date')) {
       return;
@@ -1663,7 +1744,7 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
 
     const { firstOrder, receiptTotal, receiptPaid, paymentAmount, transactionId, itemCount } = txResult.data;
     if (transactionId) {
-      console.log(`✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${receiptNumber}`);
+      console.log(`OK:  Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${receiptNumber}`);
       triggerDailySummaryRefreshAsync(paymentTimestampIso.slice(0, 10), firstOrder.branch_id);
     }
 
@@ -1672,7 +1753,7 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
         const { awardPointsOnCollection } = require('./loyalty');
         const loyaltyResult = await awardPointsOnCollection(firstOrder.customer_id, firstOrder.id, receiptTotal);
         console.log(
-          `✅ Loyalty points awarded: ${loyaltyResult?.points_earned ?? 0} points to customer ${firstOrder.customer_id}`
+          `OK:  Loyalty points awarded: ${loyaltyResult?.points_earned ?? 0} points to customer ${firstOrder.customer_id}`
         );
       } catch (err) {
         console.error('Error awarding loyalty points:', err);
@@ -1717,7 +1798,8 @@ router.post('/collect/:receiptNumber', requireBranchFeature('collection'), requi
 });
 
 // Receive payment for an order (without collecting) - uses RECEIPT-level totals for multi-item receipts
-router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+router.post('/:id/receive-payment', authenticate, requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+  // NOTE: :id is the numeric order id (client sends order.id); the payment itself applies receipt-wide via applyReceiptPaymentAtomic.
   const { id } = req.params;
   const { payment_amount, payment_method = 'cash', payment_date, notes } = req.body;
 
@@ -1764,7 +1846,7 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
     const txResult = await applyReceiptPaymentAtomic({
       receiptNumber: order.receipt_number,
       branchFilter,
-      paymentAmount: roundFigure(parseFloat(payment_amount)),
+      paymentAmount: roundMoney(parseFloat(payment_amount)),
       paymentMethod: payment_method,
       paymentTimestampIso,
       notes,
@@ -1779,7 +1861,7 @@ router.post('/:id/receive-payment', requireBranchAccess(), requirePermission('ca
     const { receiptTotal, receiptPaid, paymentAmount, transactionId, itemCount } = txResult.data;
     if (transactionId) {
       console.log(
-        `✅ Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${order.receipt_number} (${itemCount} items)`
+        `OK:  Payment transaction recorded: Transaction ID ${transactionId} for Receipt ${order.receipt_number} (${itemCount} items)`
       );
       triggerDailySummaryRefreshAsync(paymentTimestampIso.slice(0, 10), order.branch_id);
     }
@@ -1863,7 +1945,7 @@ function addUtcDaysToOrderIso(orderDateIso, daysToAdd) {
 }
 
 // Add or update customer phone from Orders screen (managers with canManageOrders)
-router.patch('/customer/:customerId/phone', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.patch('/customer/:customerId/phone', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { customerId } = req.params;
   const { phone } = req.body;
 
@@ -1915,7 +1997,7 @@ router.patch('/customer/:customerId/phone', requireBranchAccess(), requirePermis
 });
 
 // Upload Excel file and import stock/orders
-router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('canManageOrders'), upload.single('file'), async (req, res) => {
+router.post('/upload-stock-excel', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
@@ -2417,7 +2499,7 @@ router.post('/upload-stock-excel', requireBranchAccess(), requirePermission('can
 });
 
 // Get notification history for an order or customer
-router.get('/notifications', async (req, res) => {
+router.get('/notifications', authenticate, requireBranchAccess(), async (req, res) => {
   const { order_id, customer_id, limit = 50 } = req.query;
   
   let query = `
@@ -2452,7 +2534,7 @@ router.get('/notifications', async (req, res) => {
 });
 
 // Manually send notification
-router.post('/:id/send-notification', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.post('/:id/send-notification', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { id } = req.params;
   const { notification_type = 'ready' } = req.body;
   
@@ -2564,7 +2646,7 @@ router.post('/:id/send-notification', requireBranchAccess(), requirePermission('
 });
 
 // Send collection reminder for a specific order
-router.post('/:id/send-reminder', requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
+router.post('/:id/send-reminder', authenticate, requireBranchAccess(), requirePermission('canManageOrders'), async (req, res) => {
   const { id } = req.params;
   const { channels = ['sms'] } = req.body;
   const { sendCollectionReminder } = require('../utils/notifications');

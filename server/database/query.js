@@ -23,7 +23,9 @@ const dbPool = new Pool({
     : false,
   max: poolMax,
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
-  connectionTimeoutMillis: 10000, // Increased to 10 seconds for Supabase pooler
+  // Generous connect timeout: managed Postgres (Neon/Supabase) can be slow to
+  // accept the first connection when the compute has scaled down to zero.
+  connectionTimeoutMillis: 30000,
 });
 
 // Log first pool connection only (each schema module triggers its own query on startup).
@@ -33,11 +35,11 @@ dbPool.on('connect', (client) => {
   client.query('SET statement_timeout = 25000').catch(() => {});
   if (loggedPoolConnect) return;
   loggedPoolConnect = true;
-  console.log('✅ Connected to PostgreSQL database');
+  console.log('OK:  Connected to PostgreSQL database');
 });
 
 dbPool.on('error', (err) => {
-  console.error('❌ Unexpected error on idle PostgreSQL client', err);
+  console.error('ERROR:  Unexpected error on idle PostgreSQL client', err);
   // Keep API process alive on transient pool/client faults.
   // Individual queries will still fail fast and surface meaningful errors.
 });

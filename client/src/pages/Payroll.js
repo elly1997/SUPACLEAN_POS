@@ -915,47 +915,18 @@ const Payroll = () => {
         <div className="payroll-card">
           <h3>Add Employee</h3>
           <form onSubmit={submitEmployee} className="payroll-form-grid">
-            <label className="payroll-field">
-              <span>Full name</span>
-              <input required value={employeeForm.full_name} onChange={(e) => setEmployeeForm({ ...employeeForm, full_name: e.target.value })} />
-            </label>
-            <label className="payroll-field">
-              <span>Employee code</span>
-              <input value={employeeForm.employee_code} onChange={(e) => setEmployeeForm({ ...employeeForm, employee_code: e.target.value })} />
-            </label>
-            <label className="payroll-field">
-              <span>Phone</span>
-              <input value={employeeForm.phone} onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })} />
-            </label>
-            <label className="payroll-field">
-              <span>Account number</span>
-              <input inputMode="numeric" value={employeeForm.account_number} onChange={(e) => setEmployeeForm({ ...employeeForm, account_number: e.target.value })} />
-            </label>
-            <BankFields record={employeeForm} onRecord={setEmployeeForm} />
-            <label className="payroll-field">
-              <span>Gross salary</span>
-              <input type="number" required min="0" value={employeeForm.gross_salary} onChange={(e) => setEmployeeForm({ ...employeeForm, gross_salary: e.target.value })} />
-            </label>
-            <label className="payroll-field">
-              <span>Allowances</span>
-              <input type="number" min="0" value={employeeForm.default_allowances} onChange={(e) => setEmployeeForm({ ...employeeForm, default_allowances: e.target.value })} />
-            </label>
-            <label className="payroll-field">
-              <span>Bonuses</span>
-              <input type="number" min="0" value={employeeForm.default_bonuses} onChange={(e) => setEmployeeForm({ ...employeeForm, default_bonuses: e.target.value })} />
-            </label>
-            <label className="payroll-field">
-              <span>Other deductions</span>
-              <input type="number" min="0" value={employeeForm.default_other_deductions} onChange={(e) => setEmployeeForm({ ...employeeForm, default_other_deductions: e.target.value })} />
-            </label>
-            <div className="payroll-form-footer">
-              <div className="payroll-toggle-wrap">
-                <label><input type="checkbox" checked={employeeForm.nssf_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_enabled: e.target.checked })} /> NSSF</label>
-                <input type="number" min="0" max="100" step="0.01" aria-label="NSSF employee percent" placeholder="Employee %" value={employeeForm.nssf_employee_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employee_rate: e.target.value })} />
-                <input type="number" min="0" max="100" step="0.01" aria-label="NSSF employer percent" placeholder="Employer %" value={employeeForm.nssf_employer_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employer_rate: e.target.value })} />
-                <label><input type="checkbox" checked={employeeForm.paye_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, paye_enabled: e.target.checked })} /> PAYE</label>
-              </div>
-              <button className="btn-primary payroll-submit-btn" type="submit">Add employee</button>
+            <input required placeholder="Full name" value={employeeForm.full_name} onChange={(e) => setEmployeeForm({ ...employeeForm, full_name: e.target.value })} />
+            <input placeholder="Employee code" value={employeeForm.employee_code} onChange={(e) => setEmployeeForm({ ...employeeForm, employee_code: e.target.value })} />
+            <input placeholder="Phone" value={employeeForm.phone} onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })} />
+            <input type="number" required placeholder="Gross salary" value={employeeForm.gross_salary} onChange={(e) => setEmployeeForm({ ...employeeForm, gross_salary: e.target.value })} inputMode="numeric" />
+            <input type="number" placeholder="Allowances" value={employeeForm.default_allowances} onChange={(e) => setEmployeeForm({ ...employeeForm, default_allowances: e.target.value })} inputMode="numeric" />
+            <input type="number" placeholder="Bonuses" value={employeeForm.default_bonuses} onChange={(e) => setEmployeeForm({ ...employeeForm, default_bonuses: e.target.value })} inputMode="numeric" />
+            <input type="number" placeholder="Other deductions" value={employeeForm.default_other_deductions} onChange={(e) => setEmployeeForm({ ...employeeForm, default_other_deductions: e.target.value })} inputMode="numeric" />
+            <div className="payroll-toggle-wrap">
+              <label><input type="checkbox" checked={employeeForm.nssf_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_enabled: e.target.checked })} /> NSSF</label>
+              <input type="number" min="0" max="100" step="0.01" placeholder="NSSF employee %" value={employeeForm.nssf_employee_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employee_rate: e.target.value })} inputMode="decimal" />
+              <input type="number" min="0" max="100" step="0.01" placeholder="NSSF employer %" value={employeeForm.nssf_employer_rate} onChange={(e) => setEmployeeForm({ ...employeeForm, nssf_employer_rate: e.target.value })} inputMode="decimal" />
+              <label><input type="checkbox" checked={employeeForm.paye_enabled} onMouseDown={stopDragBubbling} onClick={stopDragBubbling} onChange={(e) => setEmployeeForm({ ...employeeForm, paye_enabled: e.target.checked })} /> PAYE</label>
             </div>
           </form>
         </div>
@@ -980,36 +951,103 @@ const Payroll = () => {
               <span className="payroll-count-chip">{filteredEmployees.length} staff</span>
             </div>
           </div>
-          {employees.length === 0 && (
-            <p className="payroll-history-empty">{loading ? 'Loading staff...' : 'No staff recorded yet'}</p>
-          )}
-          {employees.length > 0 && filteredEmployees.length === 0 && (
-            <p className="payroll-history-empty">No staff matched your search.</p>
-          )}
-          <div className="staff-directory">
-            {filteredEmployees.map((emp) => {
-              const editing = editingStaffId === emp.id;
-              return (
-                <article
-                  key={emp.id}
-                  id={`staff-card-${emp.id}`}
-                  className={`staff-card${editing ? ' is-editing' : ''}${emp.is_active ? '' : ' is-inactive'}`}
-                >
-                  {editing ? (
-                    <form
-                      className="staff-edit-form"
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        saveEditStaff();
-                      }}
-                    >
-                      <div className="staff-card-top">
-                        <div>
-                          <p className="staff-card-kicker">Editing staff</p>
-                          <h4 className="staff-card-name">{staffDraft.full_name || emp.full_name}</h4>
-                        </div>
-                        <div className="staff-card-actions">
-                          <button type="submit" className="btn-primary" disabled={savingStaff}>
+          <div
+            className="payroll-table-wrap staff-wrap interactive-scroll-region"
+            tabIndex={0}
+            role="region"
+            aria-label="All staff details table"
+            {...tableScrollHandlers}
+          >
+            <table className="payroll-table payroll-table--staff">
+              <thead>
+                <tr>
+                  <th>Full Name</th>
+                  <th>Employee Code</th>
+                  <th>Phone</th>
+                  <th className="num">Gross Salary</th>
+                  <th>NSSF</th>
+                  <th>PAYE</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredEmployees.map((emp) => (
+                  <tr key={emp.id}>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="text"
+                          value={staffDraft.full_name || ''}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, full_name: e.target.value }))}
+                        />
+                      ) : emp.full_name}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="text"
+                          value={staffDraft.employee_code || ''}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, employee_code: e.target.value }))}
+                        />
+                      ) : (emp.employee_code || '-')}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="text"
+                          value={staffDraft.phone || ''}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, phone: e.target.value }))}
+                        />
+                      ) : (emp.phone || '-')}
+                    </td>
+                    <td className="num">
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          value={staffDraft.gross_salary ?? 0}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, gross_salary: Number(e.target.value || 0) }))}
+                        />
+                      ) : Number(emp.gross_salary || 0).toLocaleString()}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="checkbox"
+                          checked={!!staffDraft.nssf_enabled}
+                          onMouseDown={stopDragBubbling}
+                          onClick={stopDragBubbling}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, nssf_enabled: e.target.checked }))}
+                        />
+                      ) : (emp.nssf_enabled ? 'Enabled' : 'Disabled')}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <input
+                          type="checkbox"
+                          checked={!!staffDraft.paye_enabled}
+                          onMouseDown={stopDragBubbling}
+                          onClick={stopDragBubbling}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, paye_enabled: e.target.checked }))}
+                        />
+                      ) : (emp.paye_enabled ? 'Enabled' : 'Disabled')}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <select
+                          value={staffDraft.is_active ? 'active' : 'inactive'}
+                          onChange={(e) => setStaffDraft((p) => ({ ...p, is_active: e.target.value === 'active' }))}
+                        >
+                          <option value="active">Active</option>
+                          <option value="inactive">Inactive</option>
+                        </select>
+                      ) : (emp.is_active ? 'Active' : 'Inactive')}
+                    </td>
+                    <td>
+                      {editingStaffId === emp.id ? (
+                        <div className="staff-row-actions">
+                          <button type="button" className="btn-primary" disabled={savingStaff} onClick={saveEditStaff}>
                             {savingStaff ? 'Saving...' : 'Save'}
                           </button>
                           <button type="button" className="btn-secondary" onClick={cancelEditStaff}>Cancel</button>

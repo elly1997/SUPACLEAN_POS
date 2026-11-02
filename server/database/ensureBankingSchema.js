@@ -44,9 +44,18 @@ async function ensure() {
     );
     // Unpaid order balances (AR) for the order date — shown as Credit Sales on daily closing report
     await db.run('ALTER TABLE daily_cash_summaries ADD COLUMN IF NOT EXISTS credit_sales NUMERIC(14,2) NOT NULL DEFAULT 0', []);
-    console.log('✅ Banking schema (bank_accounts + expenses bank deposit) ready');
+    // One cash summary per (date, branch). The old schema constrained `date`
+    // alone, which stopped a second branch from opening a summary on the same
+    // day. Index is created here (not as a table constraint) so it can also be
+    // applied to databases that were created with the old definition.
+    await db.run(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_cash_summaries_date_branch
+       ON daily_cash_summaries (date, branch_id)`,
+      []
+    );
+    console.log('OK:  Banking schema (bank_accounts + expenses bank deposit) ready');
   } catch (err) {
-    console.error('❌ Banking schema migration error:', err.message);
+    console.error('ERROR:  Banking schema migration error:', err.message);
   }
 }
 

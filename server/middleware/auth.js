@@ -63,7 +63,7 @@ function authenticate(req, res, next) {
          FROM user_sessions us
          JOIN users u ON us.user_id = u.id
          LEFT JOIN branches b ON b.id = COALESCE(us.branch_id, u.branch_id)
-         WHERE us.session_token = ? AND us.expires_at > CURRENT_TIMESTAMP AND COALESCE(u.is_active::int, 0) != 0`,
+         WHERE us.session_token = $1 AND us.expires_at > CURRENT_TIMESTAMP AND COALESCE(u.is_active::int, 0) != 0`,
         [sessionToken]
       );
 
@@ -192,6 +192,18 @@ function requireBranchFeatureAny(...featureKeys) {
     }
   };
 }
+/**
+ * Require receipt access (any authenticated user can access receipts).
+ * Use after authenticate.
+ */
+function requireReceiptAccess() {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    next();
+  };
+}
 
 module.exports = {
   authenticate,
@@ -199,5 +211,7 @@ module.exports = {
   requireBranchAccess,
   requireCleaningAccess,
   requireBranchFeature,
-  requireBranchFeatureAny
+  requireBranchFeatureAny,
+  requireReceiptAccess,
 };
+

@@ -2,7 +2,12 @@
  * Long-term POS resilience: partial indexes (active rows only), idempotency store,
  * normalized customer phone column for deduplication at scale.
  */
+require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
+
+if (!process.env.DATABASE_URL) return;
+
 const db = require('./query');
+const { shouldRunSchemaEnsure } = require('./schemaEnsure');
 const { normalizePhoneDigits } = require('../utils/customerPhone');
 
 async function backfillPhoneNormalizedBatch(limit = 5000) {
@@ -139,7 +144,7 @@ async function ensurePhoneNormalizedIndexes() {
        WHERE phone_normalized IS NOT NULL AND phone_normalized <> '' AND primary_branch_id IS NOT NULL`,
       []
     );
-    console.log('✅ customers phone unique per branch');
+    console.log('OK:  customers.phone_normalized unique index ready');
   } else {
     await db.run(
       `CREATE INDEX IF NOT EXISTS idx_customers_phone_normalized_lookup
@@ -148,12 +153,15 @@ async function ensurePhoneNormalizedIndexes() {
       []
     );
     console.warn(
-      `⚠️ Skipping per-branch unique phone index: ${dupes.groups} duplicate phone group(s) inside a branch.`
+      `WARN: ️ Skipping unique phone index: ${dupes.groups} duplicate normalized phone group(s) (${dupes.extra_rows} extra customer row(s)). Merge duplicates via admin tools before enforcing uniqueness.`
     );
   }
 }
 
 (async () => {
+  // Runs on long-running servers (local dev / Render); skipped on serverless
+  // cold starts unless RUN_SCHEMA_ENSURE=1 (see ./schemaEnsure).
+  if (!shouldRunSchemaEnsure()) return;
   try {
     await db.run(
       `CREATE TABLE IF NOT EXISTS idempotency_keys (
@@ -223,10 +231,10 @@ async function ensurePhoneNormalizedIndexes() {
 
     if (totalUpdated > 0 || totalSkipped > 0) {
       console.log(
-        `✅ Longevity schema ready (phone_normalized backfill: ${totalUpdated} updated, ${totalSkipped} duplicate(s) skipped)`
+        `OK:  Longevity schema ready (phone_normalized backfill: ${totalUpdated} updated, ${totalSkipped} duplicate(s) skipped)`
       );
     } else {
-      console.log('✅ Longevity schema ready');
+      console.log('OK:  Longevity schema ready');
     }
   } catch (err) {
     console.error('ensureLongevitySchema failed:', err.message);
