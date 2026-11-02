@@ -31,7 +31,7 @@ const db = require('./query');
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`, []);
 
-    await db.run('ALTER TABLE coupons ADD CONSTRAINT coupons_code_key UNIQUE (code)', []).catch(() => {});
+    await db.run('CREATE UNIQUE INDEX IF NOT EXISTS coupons_code_key ON coupons(code)', []).catch(() => {});
     await db.run('CREATE INDEX IF NOT EXISTS idx_coupons_code ON coupons(code)', []);
 
     // Audit columns on orders: which coupon was applied and the discount granted
