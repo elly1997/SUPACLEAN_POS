@@ -149,11 +149,7 @@ const TABLES = [
 ];
 
 const CONSTRAINTS = [
-`DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customers_phone_key') THEN
-    ALTER TABLE customers ADD CONSTRAINT customers_phone_key UNIQUE (phone);
-  END IF;
-END $$`,
+`CREATE INDEX IF NOT EXISTS customers_phone_key ON customers (phone);`,
 `DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_username_key') THEN
     ALTER TABLE users ADD CONSTRAINT users_username_key UNIQUE (username);
