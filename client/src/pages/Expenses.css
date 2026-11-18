@@ -411,7 +411,7 @@
   line-height: 1.4;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .summary-cards {
     grid-template-columns: 1fr;
   }

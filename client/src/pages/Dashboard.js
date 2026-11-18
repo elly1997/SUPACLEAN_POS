@@ -264,26 +264,30 @@ const Dashboard = () => {
           </p>
         </div>
         <div className="header-actions">
-          <button
-            type="button"
-            className="dk-btn dk-btn--secondary dk-btn--md"
-            onClick={viewInReports}
-          >
-            📈 Reports
-          </button>
+          <ListViewToggle view={listView} setView={setListView} />
+          {canViewReports && (
+            <button
+              type="button"
+              className="dk-btn dk-btn--secondary dk-btn--md"
+              onClick={viewInReports}
+              title="Open reports (last 7 days)"
+            >
+              Reports
+            </button>
+          )}
           <button
             type="button"
             className="dk-btn dk-btn--secondary dk-btn--md"
             onClick={() => navigate('/orders')}
           >
-            Go to Collection
+            Orders
           </button>
           <button
             type="button"
             className="dk-btn dk-btn--primary dk-btn--md"
             onClick={() => handleQuickAction('new-order')}
           >
-            ➕ New Order
+            New Order
           </button>
         </div>
       </div>
@@ -417,26 +421,19 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="dashboard-reports-link-wrap" style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-        <button type="button" className="btn-link dashboard-reports-link" onClick={viewInReports}>
-          📈 View in Reports (last 7 days)
-        </button>
-        <ListViewToggle view={listView} setView={setListView} />
-      </div>
-
       <div className="dashboard-grid dashboard-queues-grid">
         <div className="dashboard-card queue-card ready-queue-card">
           <div className="card-header">
             <div>
-              <h2>✅ Ready Orders Queue ({readyQueue.length})</h2>
+              <h2>Ready for collection ({readyQueue.length})</h2>
               {readyQueue.filter(r => r.is_overdue).length > 0 && (
                 <span className="overdue-count-badge">
-                  ⚠️ {readyQueue.filter(r => r.is_overdue).length} Overdue
+                  {readyQueue.filter(r => r.is_overdue).length} overdue
                 </span>
               )}
             </div>
             <button className="btn-link" onClick={() => navigate('/orders')}>
-              View in Collection →
+              Open Orders →
             </button>
           </div>
           <div className="dashboard-search-wrap">
@@ -529,7 +526,7 @@ const Dashboard = () => {
                             <Link
                               to={`/orders?receipt=${encodeURIComponent(receipt.receipt_number)}`}
                               className={`receipt-badge receipt-link dk-receipt-chip ${isOverdue ? 'dk-receipt-chip--overdue overdue-badge' : 'dk-receipt-chip--outline'}`}
-                              title="Open in Collection"
+                              title="Open in Orders"
                             >
                               {formatReceiptForDisplay(receipt.receipt_number, receipt.all_items || [])}
                             </Link>
@@ -570,7 +567,7 @@ const Dashboard = () => {
 
         <div className="dashboard-card queue-card pending-queue-card">
           <div className="card-header">
-            <h2>⏳ Pending Orders ({groupedPending.length})</h2>
+            <h2>In progress ({groupedPending.length})</h2>
             <button className="btn-link" onClick={() => navigate('/orders')}>
               View in Orders →
             </button>

@@ -8,13 +8,23 @@ import OfflineIndicator from './OfflineIndicator';
 import AdminNotificationCenter from './AdminNotificationCenter';
 import { isSoundEnabled, setSoundEnabled } from '../utils/sound';
 import './Layout.css';
+import '../styles/desktopUx.css';
 
 const Layout = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
-  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false);
+  // Phone ≤767: drawer + bottom tabs. Tablet 768–1024: collapsed rail. Desktop ≥1025: full sidebar.
+  const [isPhone, setIsPhone] = useState(false);
+  const [isTablet, setIsTablet] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('supaclean_sidebar_collapsed') === '1';
+    } catch {
+      return false;
+    }
+  });
   const [soundOn, setSoundOn] = useState(() => isSoundEnabled());
   const { theme, toggleTheme } = useTheme();
   const { user, branch, logout, isAdmin, hasPermission, selectedBranchId, setSelectedBranch } = useAuth();
@@ -25,14 +35,54 @@ const Layout = ({ children }) => {
   const adminViewsAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
   const [availableFeatures, setAvailableFeatures] = useState([]);
   const [branches, setBranches] = useState([]);
+  const useDrawer = isPhone;
+
+  const setSidebarCollapsed = useCallback((nextOrUpdater) => {
+    setDesktopSidebarCollapsed((prev) => {
+      const next = typeof nextOrUpdater === 'function' ? nextOrUpdater(prev) : nextOrUpdater;
+      try {
+        localStorage.setItem('supaclean_sidebar_collapsed', next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 768px)');
-    const handler = () => setIsMobile(mq.matches);
-    handler();
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
+    const phoneMq = window.matchMedia('(max-width: 767px)');
+    const tabletMq = window.matchMedia('(min-width: 768px) and (max-width: 1024px)');
+    const desktopMq = window.matchMedia('(min-width: 1025px)');
+    const syncViewport = () => {
+      setIsPhone(phoneMq.matches);
+      setIsTablet(tabletMq.matches);
+      setIsDesktop(desktopMq.matches);
+    };
+    syncViewport();
+    phoneMq.addEventListener('change', syncViewport);
+    tabletMq.addEventListener('change', syncViewport);
+    desktopMq.addEventListener('change', syncViewport);
+    return () => {
+      phoneMq.removeEventListener('change', syncViewport);
+      tabletMq.removeEventListener('change', syncViewport);
+      desktopMq.removeEventListener('change', syncViewport);
+    };
   }, []);
+
+  // Tablet counter: collapsed rail for content width. Desktop: restore saved preference.
+  useEffect(() => {
+    if (isTablet) {
+      setDesktopSidebarCollapsed(true);
+      return;
+    }
+    if (isDesktop) {
+      try {
+        setDesktopSidebarCollapsed(localStorage.getItem('supaclean_sidebar_collapsed') === '1');
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [isTablet, isDesktop]);
 
   useEffect(() => {
     if (featureBranchId) {
@@ -165,7 +215,7 @@ const Layout = ({ children }) => {
     .map((p) => flatNavItems.find((it) => it.path === p))
     .filter(Boolean)
     .slice(0, 3);
-  const showBottomTabs = isMobile && tabItems.length > 0;
+  const showBottomTabs = isPhone && tabItems.length > 0;
 
   if (isAdmin) {
     filteredGroups.push({
@@ -180,9 +230,11 @@ const Layout = ({ children }) => {
   }
 
   return (
-    <div className={`layout${user?.role === 'cashier' || user?.role === 'processor' ? ' layout--pos-touch' : ''}`}>
+    <div
+      className={`layout${user?.role === 'cashier' || user?.role === 'processor' ? ' layout--pos-touch' : ''}${isTablet ? ' layout--tablet' : ''}${isPhone ? ' layout--phone' : ''}${isDesktop ? ' layout--desktop' : ''}`}
+    >
       <OfflineIndicator onBackOnline={handleBackOnline} />
-      {isMobile && mobileMenuOpen && (
+      {useDrawer && mobileMenuOpen && (
         <button
           type="button"
           className="sidebar-overlay"
@@ -190,7 +242,7 @@ const Layout = ({ children }) => {
           aria-label="Close menu"
         />
       )}
-      <aside className={`sidebar ${(isMobile ? mobileMenuOpen : true) ? 'open' : 'closed'} ${!isMobile && desktopSidebarCollapsed ? 'collapsed' : ''}`}>
+      <aside className={`sidebar ${(useDrawer ? mobileMenuOpen : true) ? 'open' : 'closed'} ${!useDrawer && desktopSidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-header">
           <div className="logo-container">
             <img src="/supaclean-logo.svg" alt="SUPACLEAN Logo" className="logo" />
@@ -240,28 +292,32 @@ const Layout = ({ children }) => {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <button
-            className="theme-toggle"
-            onClick={toggleTheme}
-            title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-          >
-            {theme === 'light' ? '🌙' : '☀️'}
-            <span>{theme === 'light' ? 'Dark Mode' : 'Light Mode'}</span>
-          </button>
-          <button
-            type="button"
-            className={`theme-toggle sound-toggle ${soundOn ? 'on' : ''}`}
-            onClick={() => {
-              const next = !soundOn;
-              setSoundEnabled(next);
-              setSoundOn(next);
-            }}
-            title={soundOn ? 'Success sound on (click to turn off)' : 'Success sound off (click to turn on)'}
-            aria-pressed={soundOn}
-          >
-            {soundOn ? '🔔' : '🔕'}
-            <span>Sound {soundOn ? 'On' : 'Off'}</span>
-          </button>
+          <div className="sidebar-icon-switches" role="group" aria-label="Display and sound">
+            <button
+              type="button"
+              className={`icon-switch theme-switch ${theme === 'dark' ? 'is-on' : ''}`}
+              onClick={toggleTheme}
+              title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+              aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+              aria-pressed={theme === 'dark'}
+            >
+              <span className="icon-switch__glyph" aria-hidden="true">{theme === 'light' ? '🌙' : '☀️'}</span>
+            </button>
+            <button
+              type="button"
+              className={`icon-switch sound-switch ${soundOn ? 'is-on' : ''}`}
+              onClick={() => {
+                const next = !soundOn;
+                setSoundEnabled(next);
+                setSoundOn(next);
+              }}
+              title={soundOn ? 'Success sound on (click to turn off)' : 'Success sound off (click to turn on)'}
+              aria-label={soundOn ? 'Turn sound off' : 'Turn sound on'}
+              aria-pressed={soundOn}
+            >
+              <span className="icon-switch__glyph" aria-hidden="true">{soundOn ? '🔔' : '🔕'}</span>
+            </button>
+          </div>
           <button 
             className="logout-button"
             onClick={async () => {
@@ -275,26 +331,28 @@ const Layout = ({ children }) => {
           <p className="business-info">Arusha, Tanzania</p>
         </div>
       </aside>
-      <main className={`main-content ${(isMobile ? mobileMenuOpen : true) ? 'sidebar-open' : 'sidebar-closed'} ${!isMobile && desktopSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-        {!isMobile && (
+      <main className={`main-content ${(useDrawer ? mobileMenuOpen : true) ? 'sidebar-open' : 'sidebar-closed'} ${!useDrawer && desktopSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+        {!useDrawer && (
           <button
             type="button"
             className="desktop-sidebar-toggle"
-            onClick={() => setDesktopSidebarCollapsed((s) => !s)}
-            aria-label={desktopSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-            title={desktopSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+            onClick={() => setSidebarCollapsed((s) => !s)}
+            aria-label={desktopSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={desktopSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {desktopSidebarCollapsed ? '›' : '‹'}
           </button>
         )}
-        <button
-          type="button"
-          className="mobile-menu-btn"
-          onClick={() => setMobileMenuOpen(true)}
-          aria-label="Open menu"
-        >
-          ☰
-        </button>
+        {useDrawer && (
+          <button
+            type="button"
+            className="mobile-menu-btn"
+            onClick={() => setMobileMenuOpen(true)}
+            aria-label="Open menu"
+          >
+            ☰
+          </button>
+        )}
         {isAdmin && <AdminNotificationCenter />}
         <div key={location.pathname} className="content-wrapper pos-shell-screen-enter">
           {children}

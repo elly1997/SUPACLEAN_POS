@@ -202,8 +202,8 @@ button[type="submit"].btn-large {
   min-height: 44px;
 }
 
-/* Tablet/mobile: keep primary actions tappable and prevent shrink */
-@media (max-width: 768px) {
+/* Phone + tablet: keep primary actions tappable and prevent shrink */
+@media (max-width: 1024px) {
   .btn-primary,
   .btn-success,
   .btn-large,
@@ -212,6 +212,28 @@ button[type="submit"].btn-large {
     min-height: 44px;
     padding: 12px 20px;
     box-sizing: border-box;
+  }
+}
+
+/* Tablet width: enlarge interactive targets even with fine pointer (counter use) */
+@media (min-width: 768px) and (max-width: 1024px) {
+  .layout--pos-touch button,
+  .layout--pos-touch .btn,
+  .layout--pos-touch .btn-small,
+  .layout--tablet button.btn-primary,
+  .layout--tablet button.btn-secondary {
+    min-height: var(--touch-target-min);
+  }
+
+  .layout--pos-touch input,
+  .layout--pos-touch select,
+  .layout--pos-touch textarea {
+    min-height: var(--touch-target-min);
+    font-size: 16px;
+  }
+
+  .fab {
+    bottom: calc(var(--fab-offset) + env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -501,13 +523,22 @@ textarea:focus {
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 16px;
---space-lg: 24px;
+  --space-lg: 24px;
   --space-xl: 32px;
   --space-2xl: 48px;
 
   /* Quick action floating button */
   --fab-size: 56px;
   --fab-offset: 24px;
+
+  /*
+   * Responsive bands (document in media queries):
+   * --bp-phone: 767px  | --bp-tablet: 768–1024 | --bp-lg: 1200px+
+   */
+  --bottom-tabs-height: 56px;
+  --bp-phone-max: 767px;
+  --bp-tablet-max: 1024px;
+  --bp-desktop-min: 1200px;
 }
 
 [data-theme="dark"] {
@@ -680,6 +711,24 @@ textarea:focus {
     min-height: 36px;
     min-width: 36px;
   }
+}
+
+/* Form hardening: disable look while saving */
+button[disabled].btn-primary,
+button[disabled].btn-success,
+button[disabled].btn-secondary,
+.btn-primary:disabled,
+.btn-success:disabled,
+.btn-secondary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  pointer-events: none;
+}
+
+.is-saving,
+[aria-busy="true"] {
+  cursor: progress;
 }
 
 /* Empty state with action */

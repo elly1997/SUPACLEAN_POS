@@ -1734,7 +1734,21 @@
   gap: 12px;
 }
 
-@media (max-width: 1200px) {
+/* Tablet: keep catalog + cart side-by-side (counter-friendly) */
+@media (min-width: 900px) and (max-width: 1199px) {
+  .order-layout {
+    grid-template-columns: 1fr minmax(280px, 360px);
+    gap: 16px;
+  }
+
+  .order-summary-card {
+    position: sticky;
+    top: 12px;
+  }
+}
+
+/* Narrow / stacked: single column */
+@media (max-width: 899px) {
   .order-layout {
     grid-template-columns: 1fr;
   }
@@ -1745,7 +1759,7 @@
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .customer-dropdown-list {
     max-height: 180px;
   }
@@ -1754,7 +1768,7 @@
   .form-row-modern {
     grid-template-columns: 1fr;
   }
-  
+
   .items-services-list-row {
     gap: 10px;
     padding: 10px 12px;
@@ -1770,7 +1784,7 @@
     white-space: normal;
     word-break: break-word;
   }
-  
+
   .payment-methods,
   .payment-status-options {
     grid-template-columns: 1fr;
@@ -1807,6 +1821,7 @@
   .confirm-order-actions {
     flex-direction: column;
   }
+
   .confirm-order-actions button {
     width: 100%;
     justify-content: center;
@@ -1983,22 +1998,22 @@
 .order-item-card[data-service="iron"] { border-left-color: var(--service-iron); }
 .order-item-card[data-service="express"] { border-left-color: var(--service-express); }
 
-/* Sticky summary on mobile */
-@media (max-width: 768px) {
+/* Sticky summary on phone — sit above bottom tabs (z-index / offset) */
+@media (max-width: 767px) {
   .order-summary-card {
     position: fixed;
-    bottom: 0;
     left: 0;
     right: 0;
+    bottom: calc(var(--bottom-tabs-height, 56px) + env(safe-area-inset-bottom, 0px));
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
-    z-index: 50;
-    max-height: 40vh;
+    z-index: 950;
+    max-height: min(38vh, 320px);
     overflow-y: auto;
   }
 
   .new-order-modern {
-    padding-bottom: calc(40vh + 20px);
+    padding-bottom: calc(min(38vh, 320px) + var(--bottom-tabs-height, 56px) + env(safe-area-inset-bottom, 0px) + 24px);
   }
 
   .confirm-order-actions {

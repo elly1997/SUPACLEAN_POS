@@ -455,3 +455,33 @@
   font-size: 13px;
   color: var(--text-muted);
 }
+
+/* Tablet + phone responsive */
+@media (max-width: 1024px) {
+  .monthly-billing {
+    padding: 16px 0;
+    max-width: 100%;
+  }
+
+  .mb-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .mb-table-wrap {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 767px) {
+  .mb-action-card {
+    padding: 20px 16px;
+  }
+
+  .billing-summary-card {
+    padding: 14px;
+  }
+
+  .billing-summary-value {
+    font-size: 18px;
+  }
+}

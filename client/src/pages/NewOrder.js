@@ -1224,11 +1224,11 @@ Phone: ${customer.phone}
       <div className="order-header-modern">
         <div>
           <h1>New Order</h1>
-          <p className="subtitle">Create a new laundry order</p>
+          <p className="subtitle">Create a laundry order · customer, garments, payment</p>
         </div>
         <div className="header-actions">
-          <button onClick={handleReset} className="dk-btn dk-btn--secondary dk-btn--md" type="button">
-            🔄 Reset (Ctrl+N)
+          <button onClick={handleReset} className="dk-btn dk-btn--secondary dk-btn--md" type="button" title="Clear form (Ctrl+N)">
+            Reset
           </button>
         </div>
       </div>

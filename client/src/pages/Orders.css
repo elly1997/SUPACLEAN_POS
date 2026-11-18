@@ -686,3 +686,55 @@
   font-size: 12px;
   font-weight: 600;
 }
+
+/* Tablet + phone responsive */
+@media (max-width: 1024px) {
+  .orders-page {
+    padding: 12px 0;
+  }
+
+  .orders-quick-search {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .orders-quick-search-input {
+    max-width: none;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .orders-cards-grid {
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  }
+
+  .orders-table-wrapper {
+    max-height: min(58vh, 520px);
+  }
+}
+
+@media (max-width: 767px) {
+  .orders-filters-section {
+    margin-bottom: 16px;
+  }
+
+  .orders-list-card-actions {
+    flex-direction: column;
+  }
+
+  .orders-list-card-actions .btn-small,
+  .orders-list-card-actions button {
+    width: 100%;
+    justify-content: center;
+    min-height: 44px;
+  }
+
+  .filter-pill {
+    min-height: 40px;
+  }
+
+  .row-actions-touch button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

@@ -1,0 +1,238 @@
+/**
+ * Desktop UX refresh (≥1025px)
+ * Goals: denser chrome, sticky toolbars, less double-padding, clearer hierarchy.
+ */
+
+@media (min-width: 1025px) {
+  /* ── Shell ─────────────────────────────────────────────── */
+  .layout--desktop .sidebar-header {
+    padding: 20px 20px 16px;
+  }
+
+  .layout--desktop .sidebar-header h2 {
+    font-size: 20px;
+  }
+
+  .layout--desktop .nav-item {
+    padding: 8px 12px;
+    min-height: 40px;
+    font-size: 14px;
+    margin: 1px 10px;
+  }
+
+  .layout--desktop .nav-group-label {
+    padding: 10px 14px 2px 18px;
+  }
+
+  .layout--desktop .sidebar-footer {
+    padding: 12px 16px 16px;
+    gap: 10px;
+  }
+
+  .layout--desktop .logout-button {
+    padding: 8px 10px;
+    font-size: 12px;
+    min-height: 36px;
+  }
+
+  .layout--desktop .content-wrapper {
+    max-width: 1680px;
+    padding: 24px 28px 56px;
+  }
+
+  .layout--desktop .main-content:has(.admin-inbox) .content-wrapper {
+    padding-top: 56px;
+  }
+
+  .layout--desktop .desktop-sidebar-toggle {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+
+  /* ── Kill nested page padding (wrapper already pads) ───── */
+  .layout--desktop .dashboard-modern,
+  .layout--desktop .orders-page,
+  .layout--desktop .customers-page,
+  .layout--desktop .cash-management-page,
+  .layout--desktop .expenses-page,
+  .layout--desktop .reports-page,
+  .layout--desktop .price-list-page,
+  .layout--desktop .monthly-billing,
+  .layout--desktop .payroll-page,
+  .layout--desktop .new-order-modern {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .layout--desktop .dashboard-modern {
+    padding-top: 0;
+    padding-bottom: 24px;
+  }
+
+  .layout--desktop .orders-page,
+  .layout--desktop .customers-page {
+    padding-top: 0;
+    padding-bottom: 24px;
+  }
+
+  /* ── Sticky compact page headers ───────────────────────── */
+  .layout--desktop .dashboard-header,
+  .layout--desktop .page-header-modern,
+  .layout--desktop .order-header-modern,
+  .layout--desktop .expenses-page > .page-header,
+  .layout--desktop .reports-page > .page-header,
+  .layout--desktop .cash-management-page .page-header.page-header-modern {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    margin-bottom: 16px;
+    padding: 14px 18px;
+    gap: 12px;
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+  }
+
+  .layout--desktop .dashboard-header h1,
+  .layout--desktop .page-header-modern h1,
+  .layout--desktop .order-header-modern h1,
+  .layout--desktop .expenses-page > .page-header h1,
+  .layout--desktop .reports-page > .page-header h1 {
+    font-size: 22px;
+    margin-bottom: 2px;
+  }
+
+  .layout--desktop .dashboard-header .subtitle,
+  .layout--desktop .page-header-modern .subtitle,
+  .layout--desktop .order-header-modern .subtitle {
+    font-size: 13px;
+  }
+
+  .layout--desktop .header-actions .dk-btn--md {
+    min-height: 40px;
+    padding: 10px 16px;
+    font-size: 14px;
+  }
+
+  /* Primary CTA emphasis in header action clusters */
+  .layout--desktop .header-actions .dk-btn--primary {
+    box-shadow: 0 2px 10px rgba(0, 122, 255, 0.28);
+  }
+
+  /* ── Dashboard ─────────────────────────────────────────── */
+  .layout--desktop .dk-stat-strip {
+    margin-bottom: 16px;
+  }
+
+  .layout--desktop .dk-stat-cell {
+    padding: 12px 14px;
+  }
+
+  .layout--desktop .dk-stat-cell__value {
+    font-size: 18px;
+  }
+
+  .layout--desktop .dashboard-reports-link-wrap {
+    margin-bottom: 14px;
+  }
+
+  .layout--desktop .dashboard-queues-grid {
+    gap: 16px;
+  }
+
+  .layout--desktop .queue-card .card-header {
+    padding: 12px 14px;
+  }
+
+  .layout--desktop .queue-card .card-header h2 {
+    font-size: 15px;
+  }
+
+  .layout--desktop .dashboard-table th,
+  .layout--desktop .dashboard-table td {
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+
+  .layout--desktop .dashboard-table {
+    min-width: 0;
+  }
+
+  /* ── Orders / Customers toolbars ───────────────────────── */
+  .layout--desktop .orders-filters-section,
+  .layout--desktop .customers-page .filter-section {
+    position: sticky;
+    top: 72px;
+    z-index: 15;
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    background: rgba(255, 255, 255, 0.85);
+  }
+
+  [data-theme="dark"] .layout--desktop .orders-filters-section,
+  [data-theme="dark"] .layout--desktop .customers-page .filter-section {
+    background: rgba(28, 28, 30, 0.88);
+  }
+
+  .layout--desktop .orders-table-wrapper,
+  .layout--desktop .customers-table-container {
+    max-height: min(68vh, 720px);
+  }
+
+  /* ── New Order desktop counter layout ──────────────────── */
+  .layout--desktop .order-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 440px);
+    gap: 20px;
+    align-items: start;
+  }
+
+  .layout--desktop .order-summary-card {
+    position: sticky;
+    top: 88px;
+    max-height: calc(100vh - 112px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .layout--desktop .panel-section {
+    padding: 16px 18px;
+  }
+
+  .layout--desktop .order-header-modern {
+    margin-bottom: 16px;
+  }
+
+  /* ── Tables / density ──────────────────────────────────── */
+  .layout--desktop .btn-small {
+    min-height: 32px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .layout--desktop .filter-pill {
+    min-height: 34px;
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+
+  /* Hover affordance for desktop rows */
+  .layout--desktop .dashboard-table tbody tr:hover,
+  .layout--desktop .orders-table tbody tr:hover,
+  .layout--desktop .customers-table tbody tr:hover {
+    background: var(--bg-hover);
+  }
+}
+
+/* Ultra-wide: use space for side-by-side queues without stretching forever */
+@media (min-width: 1401px) {
+  .layout--desktop .content-wrapper {
+    padding-left: 32px;
+    padding-right: 32px;
+  }
+
+  .layout--desktop .order-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(380px, 480px);
+  }
+}

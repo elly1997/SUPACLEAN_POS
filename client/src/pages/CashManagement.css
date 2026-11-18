@@ -944,8 +944,20 @@
   background: rgba(28, 28, 30, 0.7);
 }
 
-@media (max-width: 768px) {
-  .cash-summary-grid {
+@media (max-width: 1024px) {
+  .cash-summary-hero {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .cash-summary-table,
+  .deposits-table {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .cash-summary-grid,
+  .cash-summary-hero {
     grid-template-columns: 1fr;
   }
 
@@ -974,6 +986,7 @@
   .cash-workspace-tabs .tab-btn {
     flex: 1;
     text-align: center;
+    min-height: 44px;
   }
 }
 

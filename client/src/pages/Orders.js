@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, Fragment } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getOrders, getOrderByReceipt, updateOrderStatus, updateEstimatedCollectionDate, uploadStockExcel, updateOrderCustomerPhone, receivePayment, sendCollectionReminder, voidOrderReceipt, requestVoidOrderReceipt, getPendingVoidRequests, archiveOldOrders, collectOrder, searchCustomers, getCollectionQueue, searchReceipts, searchOrdersByCustomer } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
@@ -34,6 +34,7 @@ const ORDERS_EXPORT_COLUMNS = [
 ];
 
 const Orders = () => {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { showToast, ToastContainer } = useToast();
   const { branch, selectedBranchId, hasPermission, isAdmin } = useAuth();
@@ -956,7 +957,7 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
       `;
 
     try {
-      const isPDA = typeof window !== 'undefined' && window.innerWidth <= 768;
+      const isPDA = typeof window !== 'undefined' && window.innerWidth <= 767;
       const printWindow = !isPDA ? window.open('', '_blank', 'width=400,height=600,scrollbars=yes') : null;
       if (printWindow && !printWindow.closed) {
         printWindow.document.open();
@@ -1674,7 +1675,6 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           <button
             type="button"
             className="dk-btn dk-btn--secondary dk-btn--md"
-            style={{ marginRight: '8px' }}
             onClick={() => setShowExportPopup(true)}
             disabled={exporting || exportingUncollected}
             title="Export orders or uncollected stock"
@@ -1682,7 +1682,7 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
             {(exporting || exportingUncollected) ? '…' : 'Export'}
           </button>
           <label className="dk-btn dk-btn--secondary dk-btn--md" style={{ cursor: 'pointer' }} title="CUST ID / receipt encodes the receipt day. Phone is optional — add missing numbers later on this screen. Paid = already paid when receipt was printed; items stay Ready until collected.">
-            📦 Upload Stock Excel
+            Upload Stock
             <input
               type="file"
               accept=".xlsx,.csv"
@@ -1690,6 +1690,13 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
               onChange={handleStockExcelUpload}
             />
           </label>
+          <button
+            type="button"
+            className="dk-btn dk-btn--primary dk-btn--md"
+            onClick={() => navigate('/new-order')}
+          >
+            New Order
+          </button>
         </div>
       </div>
 

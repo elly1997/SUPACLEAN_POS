@@ -1183,7 +1183,7 @@
 }
 
 /* Responsive adjustments */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .report-table-compact {
     font-size: 12px;
   }

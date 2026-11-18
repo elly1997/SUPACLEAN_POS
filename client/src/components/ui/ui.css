@@ -318,7 +318,7 @@
   flex: 1;
 }
 
-@media (min-width: 769px) {
+@media (min-width: 768px) {
   .mobile-actions {
     display: none;
   }

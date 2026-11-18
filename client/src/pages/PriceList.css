@@ -840,7 +840,22 @@
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
+  .services-list {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  }
+
+  .items-table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .items-table {
+    min-width: 720px;
+  }
+}
+
+@media (max-width: 767px) {
   .services-list {
     grid-template-columns: 1fr;
     gap: 16px;
@@ -871,7 +886,7 @@
   .edit-form-grid {
     grid-template-columns: 1fr;
   }
-  
+
   .page-header-modern {
     flex-direction: column;
     gap: 16px;
@@ -886,13 +901,8 @@
     width: 100%;
   }
 
-  /* Responsive Table */
-  .items-table-container {
-    overflow-x: auto;
-  }
-
   .items-table {
-    min-width: 800px;
+    min-width: 640px;
   }
 
   .items-table thead th,

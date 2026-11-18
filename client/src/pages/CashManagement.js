@@ -311,7 +311,7 @@ const CashManagement = () => {
       <p>${new Date().toLocaleString()}</p>
       <p>If this prints, your POS printer is working.</p>
       </body></html>`;
-    const isPDA = typeof window !== 'undefined' && window.innerWidth <= 768;
+    const isPDA = typeof window !== 'undefined' && window.innerWidth <= 767;
     const w = !isPDA ? window.open('', '_blank', 'width=320,height=400') : null;
     if (w && !w.closed) {
       w.document.open();

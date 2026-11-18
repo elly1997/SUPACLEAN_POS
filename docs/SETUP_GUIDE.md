@@ -324,9 +324,9 @@ If you run **multiple branches** or use **thermal POS** with item photos:
 
 The app adapts to screen size:
 
-- **Small screens (e.g. thermal POS, phone):** Sidebar becomes a hamburger menu; content uses compact padding so the full UI fits. Use the **menu button** (top-left) to open the sidebar, then tap a page.
-- **Tablet (e.g. iPad):** Same layout with comfortable spacing.
-- **Desktop:** Full sidebar and wide content.
+- **Phone / PDA (≤767px):** Sidebar becomes a hamburger drawer; bottom tabs for New Order / Orders / Dashboard; compact padding. Theme and sound are icon switches in the sidebar footer.
+- **Tablet (768–1024px):** Collapsed icon rail by default (expand with the › control) so the counter has more content width; New Order keeps catalog + cart side-by-side from ~900px.
+- **Desktop (≥1025px):** Full sidebar (collapsible; preference remembered), denser chrome, sticky page headers/filters, New Order keeps a sticky cart panel, and less nested padding for a cleaner workspace.
 
 ### Thermal and in-built POS printers
 
