@@ -15,6 +15,8 @@
  * one at a time.
  */
 
+const path = require('path');
+
 function shouldRunSchemaEnsure() {
   if (process.env.RUN_SCHEMA_ENSURE === '1') return true;
   if (process.env.RUN_SCHEMA_ENSURE === '0') return false;
@@ -24,6 +26,15 @@ function shouldRunSchemaEnsure() {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Resolve paths listed in server/index.js (e.g. './database/ensurePosCoreSchema')
+ * from the server root — not from this file's directory.
+ */
+function resolveFromServerRoot(modulePath) {
+  if (path.isAbsolute(modulePath)) return modulePath;
+  return path.resolve(__dirname, '..', modulePath);
 }
 
 /**
@@ -40,10 +51,10 @@ async function runSchemaEnsureModules(modulePaths, options = {}) {
 
   for (const modulePath of modulePaths) {
     try {
-      // Clear cache so a previous accidental load cannot skip ensure().
-      const resolved = require.resolve(modulePath);
-      delete require.cache[resolved];
-      const mod = require(modulePath);
+      const absolutePath = resolveFromServerRoot(modulePath);
+      delete require.cache[absolutePath];
+      delete require.cache[`${absolutePath}.js`];
+      const mod = require(absolutePath);
       if (mod && typeof mod.ensure === 'function') {
         await mod.ensure();
       } else {

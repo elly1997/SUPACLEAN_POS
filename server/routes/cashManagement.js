@@ -315,12 +315,12 @@ function pumpBackgroundRefresh() {
  */
 function scheduleBackgroundDailySummaryRefresh(date, branchId, { force = false } = {}) {
   const day = toSqlDateString(date);
-  if (!day || branchId == null) return;
+  if (!day || branchId == null) return Promise.resolve();
   const key = `${branchId}:${day}`;
-  if (bgRefreshInFlight.has(key)) return;
+  if (bgRefreshInFlight.has(key)) return Promise.resolve();
   if (!force) {
     const last = bgRefreshLastRun.get(key) || 0;
-    if (Date.now() - last < BG_REFRESH_COOLDOWN_MS) return;
+    if (Date.now() - last < BG_REFRESH_COOLDOWN_MS) return Promise.resolve();
   }
   bgRefreshInFlight.add(key);
   bgRefreshQueue.push(async () => {
@@ -338,6 +338,7 @@ function scheduleBackgroundDailySummaryRefresh(date, branchId, { force = false }
     }
   });
   setImmediate(pumpBackgroundRefresh);
+  return Promise.resolve();
 }
 
 /**
