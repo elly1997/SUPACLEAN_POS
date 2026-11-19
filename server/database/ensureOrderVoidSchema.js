@@ -8,7 +8,7 @@ if (!process.env.DATABASE_URL) return;
 
 const db = require('./query');
 
-(async () => {
+async function ensure() {
   try {
     await db.run('ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_voided BOOLEAN NOT NULL DEFAULT FALSE', []);
     await db.run('ALTER TABLE orders ADD COLUMN IF NOT EXISTS void_reason TEXT', []);
@@ -25,4 +25,11 @@ const db = require('./query');
   } catch (err) {
     console.error('ensureOrderVoidSchema failed:', err.message);
   }
-})();
+}
+
+
+if (require.main === module || process.env.SCHEMA_ENSURE_CONTROLLED !== '1') {
+  ensure();
+}
+
+module.exports = { ensure };

@@ -116,22 +116,17 @@ const SCHEMA_ENSURE_MODULES = [
   './database/ensureSmsMarketingSchema',
   './database/ensureMonthlyBillingSchema',
   './database/ensureCouponsSchema',
+  './database/ensureLoyaltyWalletSchema',
 ];
 
-const { shouldRunSchemaEnsure } = require('./database/schemaEnsure');
+const { shouldRunSchemaEnsure, runSchemaEnsureModules } = require('./database/schemaEnsure');
 
 if (shouldRunSchemaEnsure()) {
-  const staggerMs = process.env.VERCEL ? 250 : 0;
-  (async () => {
-    for (const modulePath of SCHEMA_ENSURE_MODULES) {
-      try {
-        require(modulePath);
-      } catch (err) {
-        console.error(`Schema ensure failed to load: ${modulePath}`, err.message);
-      }
-      if (staggerMs) await new Promise((resolve) => setTimeout(resolve, staggerMs));
-    }
-  })();
+  // Run one ensure module at a time — parallel boot was hitting Neon
+  // EMAXCONNSESSION (session pool_size ~15).
+  runSchemaEnsureModules(SCHEMA_ENSURE_MODULES).catch((err) => {
+    console.error('Schema ensure runner failed:', err.message);
+  });
 } else {
   console.log('Skipping boot-time schema ensure on this runtime (set RUN_SCHEMA_ENSURE=1 to run it).');
 }

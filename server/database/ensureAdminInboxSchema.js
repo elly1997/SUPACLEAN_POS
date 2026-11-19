@@ -8,7 +8,7 @@ if (!process.env.DATABASE_URL) return;
 
 const db = require('./query');
 
-(async () => {
+async function ensure() {
   try {
     await db.run(
       `CREATE TABLE IF NOT EXISTS admin_inbox (
@@ -65,4 +65,11 @@ const db = require('./query');
   } catch (err) {
     console.error('ensureAdminInboxSchema failed:', err.message);
   }
-})();
+}
+
+
+if (require.main === module || process.env.SCHEMA_ENSURE_CONTROLLED !== '1') {
+  ensure();
+}
+
+module.exports = { ensure };

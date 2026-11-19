@@ -172,5 +172,9 @@ async function ensure() {
   }
 }
 
+if (require.main === module || process.env.SCHEMA_ENSURE_CONTROLLED !== '1') {
+  ensure();
+}
+
 module.exports = { ensure };
 

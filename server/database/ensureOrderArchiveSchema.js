@@ -8,7 +8,7 @@ if (!process.env.DATABASE_URL) return;
 
 const db = require('./query');
 
-(async () => {
+async function ensure() {
   try {
     await db.run('ALTER TABLE orders ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP', []);
     await db.run('ALTER TABLE orders ADD COLUMN IF NOT EXISTS archived_by TEXT', []);
@@ -19,4 +19,11 @@ const db = require('./query');
   } catch (err) {
     console.error('ensureOrderArchiveSchema failed:', err.message);
   }
-})();
+}
+
+
+if (require.main === module || process.env.SCHEMA_ENSURE_CONTROLLED !== '1') {
+  ensure();
+}
+
+module.exports = { ensure };

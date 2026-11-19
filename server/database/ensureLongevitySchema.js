@@ -158,7 +158,7 @@ async function ensurePhoneNormalizedIndexes() {
   }
 }
 
-(async () => {
+async function ensure() {
   // Runs on long-running servers (local dev / Render); skipped on serverless
   // cold starts unless RUN_SCHEMA_ENSURE=1 (see ./schemaEnsure).
   if (!shouldRunSchemaEnsure()) return;
@@ -239,10 +239,13 @@ async function ensurePhoneNormalizedIndexes() {
   } catch (err) {
     console.error('ensureLongevitySchema failed:', err.message);
   }
-})();
+}
 
-module.exports = {
-  backfillPhoneNormalizedBatch,
+
+if (require.main === module || process.env.SCHEMA_ENSURE_CONTROLLED !== '1') {
+  ensure();
+}
+
+module.exports = { ensure, backfillPhoneNormalizedBatch,
   countDuplicateNormalizedPhones,
-  releaseCompanyWidePhoneLock,
-};
+  releaseCompanyWidePhoneLock, };

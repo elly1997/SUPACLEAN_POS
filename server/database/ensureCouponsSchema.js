@@ -12,7 +12,7 @@ if (!process.env.DATABASE_URL) return;
 
 const db = require('./query');
 
-(async () => {
+async function ensure() {
   try {
     await db.run(`CREATE TABLE IF NOT EXISTS coupons (
       id SERIAL PRIMARY KEY,
@@ -42,4 +42,11 @@ const db = require('./query');
   } catch (err) {
     console.error('ensureCouponsSchema failed:', err.message);
   }
-})();
+}
+
+
+if (require.main === module || process.env.SCHEMA_ENSURE_CONTROLLED !== '1') {
+  ensure();
+}
+
+module.exports = { ensure };

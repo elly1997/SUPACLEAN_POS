@@ -7,11 +7,13 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-// Pool size: Supabase/Neon free tiers often cap concurrent connections; keep default modest (override with DATABASE_POOL_MAX).
+// Pool size: Neon/Supabase session mode often caps at ~15 total clients for the
+// project. Stay well under that so boot schema + live traffic do not hit
+// EMAXCONNSESSION. Override with DATABASE_POOL_MAX (1–15 recommended).
 const poolMax = (() => {
   const n = parseInt(process.env.DATABASE_POOL_MAX || '', 10);
   if (Number.isFinite(n) && n >= 1 && n <= 50) return n;
-  return 12;
+  return 8;
 })();
 
 // Create PostgreSQL connection pool

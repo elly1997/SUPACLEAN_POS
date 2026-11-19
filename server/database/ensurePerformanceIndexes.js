@@ -7,7 +7,7 @@ if (!process.env.DATABASE_URL) return;
 
 const db = require('./query');
 
-(async () => {
+async function ensure() {
   try {
     await db.run(
       'CREATE INDEX IF NOT EXISTS idx_orders_branch_order_date ON orders(branch_id, order_date DESC)',
@@ -46,4 +46,11 @@ const db = require('./query');
   } catch (err) {
     console.error('ensurePerformanceIndexes failed:', err.message);
   }
-})();
+}
+
+
+if (require.main === module || process.env.SCHEMA_ENSURE_CONTROLLED !== '1') {
+  ensure();
+}
+
+module.exports = { ensure };
