@@ -201,7 +201,8 @@ export async function searchCustomers(q, options = {}) {
   }
   const limit = options.limit || 15;
   const openBranchId = options.branchId == null || options.branchId === '' ? null : Number(options.branchId);
-  const keepBranch = (list) => {
+  // Offline only: filter cached customers to the open branch. Online search is already branch-scoped by the API.
+  const keepBranchOffline = (list) => {
     if (openBranchId == null) return list || [];
     return (list || []).filter((c) => {
       const home = c.branch_id ?? c.primary_branch_id;
@@ -215,7 +216,7 @@ export async function searchCustomers(q, options = {}) {
       const cached = await getSyncCache('customers');
       if (cached && Array.isArray(cached.data)) {
         const s = term.toLowerCase();
-        const data = keepBranch(cached.data)
+        const data = keepBranchOffline(cached.data)
           .filter(
             (c) =>
               (c.name && c.name.toLowerCase().includes(s)) ||
@@ -231,7 +232,7 @@ export async function searchCustomers(q, options = {}) {
   }
   const params = new URLSearchParams({ q: term, limit: String(limit) });
   const res = await api.get(`/customers/search?${params.toString()}`);
-  return { ...res, data: keepBranch(res.data || []) };
+  return { ...res, data: res.data || [] };
 }
 
 export const getCustomer = (id) => api.get(`/customers/${id}`);

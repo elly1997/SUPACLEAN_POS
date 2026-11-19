@@ -4,7 +4,9 @@ const db = require('../database/query');
 const { authenticate, requireBranchAccess, requireBranchFeature } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permissions');
 const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter');
+const { branchCustomerMatchSql, customerBelongsToBranch } = require('../utils/customerBranch');
 const { normalizePhoneDigits, isPlaceholderPhone, digitsOnlySql } = require('../utils/customerPhone');
+const { releaseCompanyWidePhoneLock } = require('../database/ensureLongevitySchema');
 
 async function phoneNormalizedForCustomer(phone, excludeId = null, branchId = null) {
   const normalized = normalizePhoneDigits(String(phone || '').trim());
@@ -80,10 +82,8 @@ async function findCustomerByPhone(phone, branchId = null) {
   }
   const rows = await db.all(
     `SELECT * FROM customers
-     WHERE phone_normalized = ?
-        OR TRIM(phone) = ?
-        OR phone = ?
-        OR ${digitsOnlySql("COALESCE(phone, '')")} = ?
+     WHERE ${phoneMatchSql()}
+     ${branchSql}
      ORDER BY
        CASE WHEN primary_branch_id = ? THEN 0 WHEN phone_normalized = ? THEN 1 ELSE 2 END,
        id ASC
@@ -91,6 +91,123 @@ async function findCustomerByPhone(phone, branchId = null) {
     [...phoneParams, ...branchParam, branchId, normalized]
   );
   return rows && rows[0] ? rows[0] : null;
+}
+
+async function findPhoneOwner(phone) {
+  if (!phone || !phone.trim()) return null;
+  const trimmed = phone.trim();
+  if (isPlaceholderPhone(trimmed)) return null;
+  const normalized = normalizePhoneDigits(trimmed);
+  const digitsOnly = trimmed.replace(/\D/g, '');
+  return db.get(
+    `SELECT * FROM customers
+     WHERE ${phoneMatchSql()}
+     ORDER BY id ASC
+     LIMIT 1`,
+    [normalized, trimmed, normalized, digitsOnly]
+  );
+}
+
+function isPhoneUniqueError(err) {
+  const msg = String(err?.message || '');
+  return /unique/i.test(msg) && /phone/i.test(msg);
+}
+
+/** A customer already visible on this branch's list, including older rows with no home branch yet. */
+async function findListedCustomer(phone, name, branchId, options = {}) {
+  const byPhone = await findCustomerByPhone(phone, branchId);
+  if (byPhone) return byPhone;
+  const owner = await findPhoneOwner(phone);
+  if (owner && await customerBelongsToBranch(db, owner, branchId)) {
+    return owner;
+  }
+  if (!options.matchName) return null;
+  const trimmedName = String(name || '').trim();
+  if (!trimmedName || branchId == null) return null;
+  return db.get(
+    `SELECT c.* FROM customers c
+     WHERE lower(trim(c.name)) = lower(trim(?))
+       AND ${branchCustomerMatchSql('c')}
+     ORDER BY c.id ASC
+     LIMIT 1`,
+    [trimmedName, branchId, branchId]
+  );
+}
+
+function phonesMatch(left, right) {
+  const a = normalizePhoneDigits(String(left || '').trim());
+  const b = normalizePhoneDigits(String(right || '').trim());
+  return !!a && a === b;
+}
+
+/**
+ * Save a customer for one branch.
+ * A phone already used at another branch still creates a new row here.
+ * A phone already used at this branch returns that existing row.
+ */
+async function createBranchCustomer({ name, phone, branchId, email = null, address = null, tin = null, vrn = null }) {
+  const existing = await findListedCustomer(phone, name, branchId);
+  if (existing) {
+    await claimCustomerForBranch(existing, branchId);
+    return { customer: existing, created: false };
+  }
+
+  const owner = await findPhoneOwner(phone);
+  if (owner && !(await customerBelongsToBranch(db, owner, branchId))) {
+    await releaseCompanyWidePhoneLock();
+  }
+
+  const normalizedPhone = await phoneNormalizedForCustomer(phone, null, branchId);
+  const params = [
+    String(name).trim(),
+    String(phone).trim(),
+    normalizedPhone,
+    email ? String(email).trim() || null : null,
+    address ? String(address).trim() || null : null,
+    tin ? String(tin).trim() || null : null,
+    vrn ? String(vrn).trim() || null : null,
+    branchId,
+  ];
+  const insertSql = `INSERT INTO customers (name, phone, phone_normalized, email, address, tin, vrn, primary_branch_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`;
+
+  const insertOnce = () => db.run(insertSql, params);
+  try {
+    const result = await insertOnce();
+    const id = result?.row?.id ?? result?.lastID;
+    const customer = await db.get('SELECT * FROM customers WHERE id = ?', [id]);
+    return { customer, created: true };
+  } catch (err) {
+    if (!isPhoneUniqueError(err)) throw err;
+    await releaseCompanyWidePhoneLock();
+    const listed = await findListedCustomer(phone, name, branchId, { matchName: true });
+    if (listed && phonesMatch(listed.phone, phone) && await customerBelongsToBranch(db, listed, branchId)) {
+      await claimCustomerForBranch(listed, branchId);
+      return { customer: listed, created: false };
+    }
+    const result = await insertOnce();
+    const id = result?.row?.id ?? result?.lastID;
+    const customer = await db.get('SELECT * FROM customers WHERE id = ?', [id]);
+    return { customer, created: true };
+  }
+}
+
+async function claimCustomerForBranch(customer, branchId) {
+  if (!customer || branchId == null || customer.primary_branch_id != null) return customer;
+  const other = await db.get(
+    `SELECT 1 AS ok FROM orders
+     WHERE customer_id = ? AND branch_id IS NOT NULL AND branch_id <> ?
+       AND COALESCE(is_voided, FALSE) = FALSE
+     LIMIT 1`,
+    [customer.id, branchId]
+  );
+  if (other) return customer;
+  await db.run(
+    'UPDATE customers SET primary_branch_id = ? WHERE id = ? AND primary_branch_id IS NULL',
+    [branchId, customer.id]
+  );
+  customer.primary_branch_id = branchId;
+  return customer;
 }
 
 // Task 1.1 — Customer visibility rule (documented & enforced):
@@ -183,7 +300,10 @@ router.get('/search', async (req, res) => {
        LIMIT ?`,
       [effectiveBranchId, ...params, limit]
     );
-    res.json(rows || []);
+    res.json((rows || []).map((row) => ({
+      ...row,
+      is_other_branch: Number(row.is_other_branch) === 1,
+    })));
   } catch (err) {
     console.error('Error searching customers:', err);
     res.status(500).json({ error: err.message });
@@ -355,22 +475,14 @@ router.post('/quick-add', requirePermission('canCreateOrders'), async (req, res)
       tin,
       vrn,
     });
+    const c = await db.get(
+      'SELECT id, name, phone, tin, vrn, primary_branch_id FROM customers WHERE id = ?',
+      [customer.id]
+    );
     if (!created) {
-      const c = await db.get('SELECT id, name, phone, tin, vrn, primary_branch_id FROM customers WHERE id = ?', [customer.id]);
       const payload = await formatExistingCustomerResponse(customer, { tin: c?.tin, vrn: c?.vrn });
       return res.status(200).json({ ...c, ...payload, existing: true });
     }
-    const normalizedPhone = await phoneNormalizedForCustomer(phone);
-    const r = await db.run(
-      branchId
-        ? 'INSERT INTO customers (name, phone, phone_normalized, tin, vrn, primary_branch_id) VALUES (?, ?, ?, ?, ?, ?) RETURNING id'
-        : 'INSERT INTO customers (name, phone, phone_normalized, tin, vrn) VALUES (?, ?, ?, ?, ?) RETURNING id',
-      branchId
-        ? [name.trim(), phone.trim(), normalizedPhone, (tin || '').trim() || null, (vrn || '').trim() || null, branchId]
-        : [name.trim(), phone.trim(), normalizedPhone, (tin || '').trim() || null, (vrn || '').trim() || null]
-    );
-    const id = r?.row?.id ?? r?.lastID;
-    const c = await db.get('SELECT id, name, phone, tin, vrn FROM customers WHERE id = ?', [id]);
     res.status(201).json(c);
   } catch (err) {
     res.status(500).json({ error: err.message });
