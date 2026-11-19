@@ -81,9 +81,28 @@ function buildPaymentTimestampIso(paymentDate) {
 }
 
 function triggerDailySummaryRefreshAsync(paymentDate, branchId) {
-  cashManagement.scheduleBackgroundDailySummaryRefresh(paymentDate, branchId).catch(err => {
-    console.error('BACKGROUND: daily summary refresh failed:', err.message);
-  });
+  // Always tolerate skip/undefined returns — never throw from background refresh wiring.
+  const result = cashManagement.scheduleBackgroundDailySummaryRefresh?.(paymentDate, branchId);
+  // #region agent log
+  try {
+    const { agentDebugLog } = require('../utils/agentDebugLog');
+    agentDebugLog({
+      hypothesisId: 'C',
+      location: 'orders.js:triggerDailySummaryRefreshAsync',
+      message: 'trigger daily summary refresh',
+      data: {
+        hasFn: typeof cashManagement.scheduleBackgroundDailySummaryRefresh === 'function',
+        refreshIsPromise: !!result && typeof result.then === 'function',
+        branchId: branchId == null ? null : branchId,
+      },
+    });
+  } catch (_) { /* ignore */ }
+  // #endregion
+  if (result && typeof result.then === 'function') {
+    result.catch(err => {
+      console.error('BACKGROUND: daily summary refresh failed:', err.message);
+    });
+  }
 }
 
 function buildPerOrderPaidAllocations(orders, receiptPaidAmount) {
@@ -134,11 +153,14 @@ router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
   let query = `
     SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
            b.name as branch_name,
-           b.code as branch_code
+           b.code as branch_code,
+           COALESCE(lp.current_points, 0) AS current_points,
+           COALESCE(lp.tier, 'Bronze') AS tier
     FROM orders o
     JOIN services s ON o.service_id = s.id
     JOIN customers c ON o.customer_id = c.id
     LEFT JOIN branches b ON o.branch_id = b.id
+    LEFT JOIN loyalty_points lp ON lp.customer_id = c.id
     WHERE 1=1
     ${branchFilter.clause}
   `;
@@ -319,6 +341,8 @@ router.get('/collection-queue', authenticate, requireBranchAccess(), async (req,
     SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
            b.name as branch_name,
            b.code as branch_code,
+           COALESCE(lp.current_points, 0) AS current_points,
+           COALESCE(lp.tier, 'Bronze') AS tier,
            CASE 
              WHEN o.estimated_collection_date IS NOT NULL AND o.estimated_collection_date < CURRENT_TIMESTAMP THEN 1
              ELSE 0
@@ -332,6 +356,7 @@ router.get('/collection-queue', authenticate, requireBranchAccess(), async (req,
     JOIN services s ON o.service_id = s.id
     JOIN customers c ON o.customer_id = c.id
     LEFT JOIN branches b ON o.branch_id = b.id
+    LEFT JOIN loyalty_points lp ON lp.customer_id = c.id
     WHERE o.status = 'ready'
     ${sqlActiveOrdersOnly('o')}
     ${sqlUnarchivedOrdersOnly('o')}
@@ -427,12 +452,15 @@ router.get('/receipt/:receiptNumber', authenticate, requireReceiptAccess(), asyn
               c.name as customer_name, c.phone as customer_phone, c.email as customer_email,
               i.name as item_name, i.category as item_category,
               b.name as branch_name,
-              b.code as branch_code
+              b.code as branch_code,
+              COALESCE(lp.current_points, 0) AS current_points,
+              COALESCE(lp.tier, 'Bronze') AS tier
        FROM orders o
        JOIN services s ON o.service_id = s.id
        JOIN customers c ON o.customer_id = c.id
        LEFT JOIN items i ON o.item_id = i.id
        LEFT JOIN branches b ON o.branch_id = b.id
+       LEFT JOIN loyalty_points lp ON lp.customer_id = c.id
        WHERE UPPER(o.receipt_number) = UPPER(?)
        ORDER BY o.id`,
       [receiptNumber]
@@ -479,6 +507,8 @@ router.get('/search/receipt', authenticate, requireReceiptAccess(), async (req, 
     const rows = await db.all(
       `SELECT o.receipt_number,
               c.name AS customer_name, c.phone AS customer_phone,
+              COALESCE(lp.current_points, 0) AS current_points,
+              COALESCE(lp.tier, 'Bronze') AS tier,
               MIN(o.order_date) AS order_date,
               MIN(o.estimated_collection_date) AS estimated_collection_date,
               (ARRAY_AGG(o.status ORDER BY
@@ -499,8 +529,9 @@ router.get('/search/receipt', authenticate, requireReceiptAccess(), async (req, 
               COUNT(o.id)::int AS item_count
        FROM orders o
        JOIN customers c ON o.customer_id = c.id
+       LEFT JOIN loyalty_points lp ON lp.customer_id = c.id
        WHERE UPPER(o.receipt_number) LIKE UPPER(?)
-       GROUP BY o.receipt_number, c.name, c.phone
+       GROUP BY o.receipt_number, c.name, c.phone, lp.current_points, lp.tier
        ORDER BY MIN(o.id) DESC
        LIMIT 20`,
       [term]
@@ -778,11 +809,14 @@ router.get('/search/customer', authenticate, requireBranchAccess(), async (req, 
     SELECT o.*, s.name as service_name, s.description as service_description,
            c.name as customer_name, c.phone as customer_phone, c.email as customer_email,
            b.name as branch_name,
-           b.code as branch_code
+           b.code as branch_code,
+           COALESCE(lp.current_points, 0) AS current_points,
+           COALESCE(lp.tier, 'Bronze') AS tier
     FROM orders o
     JOIN services s ON o.service_id = s.id
     JOIN customers c ON o.customer_id = c.id
     LEFT JOIN branches b ON o.branch_id = b.id
+    LEFT JOIN loyalty_points lp ON lp.customer_id = c.id
     WHERE 1=1
     ${branchFilter.clause}
   `;
@@ -902,6 +936,21 @@ const IDEMPOTENCY_ROUTE_ORDERS = 'POST /api/orders';
  * Prevents duplicate lines and wrong totals when several cashiers work at once.
  */
 router.post('/batch', authenticate, requireBranchAccess(), requirePermission('canCreateOrders'), async (req, res) => {
+  // #region agent log
+  try {
+    const { agentDebugLog } = require('../utils/agentDebugLog');
+    agentDebugLog({
+      hypothesisId: 'E',
+      location: 'orders.js:POST /batch entry',
+      message: 'orders batch request received',
+      data: {
+        itemCount: Array.isArray(req.body?.items) ? req.body.items.length : 0,
+        hasCustomer: !!req.body?.customer_id,
+        branchId: req.body?.branch_id ?? req.user?.branchId ?? null,
+      },
+    });
+  } catch (_) { /* ignore */ }
+  // #endregion
   const idempotencyKey = readIdempotencyKey(req);
   if (idempotencyKey) {
     pruneExpiredIdempotencyKeys().catch(() => {});
@@ -1158,13 +1207,45 @@ router.post('/batch', authenticate, requireBranchAccess(), requirePermission('ca
       items: results,
     };
     if (orderBranchId != null) {
-      cashManagement.scheduleBackgroundDailySummaryRefresh(paymentBookDateYmd(finalOrderDateIso), orderBranchId).catch(err => {
-        console.error('BACKGROUND: daily summary refresh failed (batch):', err.message);
-      });
+      const refreshResult = cashManagement.scheduleBackgroundDailySummaryRefresh(
+        paymentBookDateYmd(finalOrderDateIso),
+        orderBranchId
+      );
+      // #region agent log
+      try {
+        const { agentDebugLog } = require('../utils/agentDebugLog');
+        agentDebugLog({
+          hypothesisId: 'C',
+          location: 'orders.js:batch after refresh schedule',
+          message: 'batch scheduled daily summary refresh',
+          data: {
+            orderBranchId,
+            refreshIsPromise: !!refreshResult && typeof refreshResult.then === 'function',
+            refreshType: refreshResult == null ? 'nullish' : typeof refreshResult,
+          },
+        });
+      } catch (_) { /* ignore */ }
+      // #endregion
+      if (refreshResult && typeof refreshResult.then === 'function') {
+        refreshResult.catch(err => {
+          console.error('BACKGROUND: daily summary refresh failed (batch):', err.message);
+        });
+      }
     }
     if (idempotencyKey) {
       await storeIdempotencyResponse(IDEMPOTENCY_ROUTE_ORDERS_BATCH, idempotencyKey, 200, payload);
     }
+    // #region agent log
+    try {
+      const { agentDebugLog } = require('../utils/agentDebugLog');
+      agentDebugLog({
+        hypothesisId: 'E',
+        location: 'orders.js:POST /batch success',
+        message: 'orders batch success',
+        data: { receipt: payload.receipt_number, lines: (payload.items || []).length },
+      });
+    } catch (_) { /* ignore */ }
+    // #endregion
     res.json(payload);
   } catch (err) {
     try {
@@ -1173,6 +1254,17 @@ router.post('/batch', authenticate, requireBranchAccess(), requirePermission('ca
       console.error('ERROR: orders batch ROLLBACK failed:', rbErr.message);
     }
     console.error('POST /api/orders/batch error:', err);
+    // #region agent log
+    try {
+      const { agentDebugLog } = require('../utils/agentDebugLog');
+      agentDebugLog({
+        hypothesisId: 'E',
+        location: 'orders.js:POST /batch error',
+        message: 'orders batch failed',
+        data: { error: String(err && err.message), name: err && err.name },
+      });
+    } catch (_) { /* ignore */ }
+    // #endregion
     res.status(500).json({ error: err.message || 'Failed to create batch order' });
   } finally {
     client.release();
@@ -1347,9 +1439,7 @@ router.post('/', authenticate, requireBranchAccess(), requirePermission('canCrea
           }
 
           if (branchId != null) {
-            cashManagement.scheduleBackgroundDailySummaryRefresh(paymentBookDateYmd(finalOrderDateIso), branchId).catch(err => {
-              console.error('BACKGROUND: daily summary refresh failed (single):', err.message);
-            });
+            triggerDailySummaryRefreshAsync(paymentBookDateYmd(finalOrderDateIso), branchId);
           }
 
           // Get customer details for receipt
@@ -1748,15 +1838,31 @@ router.post('/collect/:receiptNumber', authenticate, requireBranchFeature('colle
       triggerDailySummaryRefreshAsync(paymentTimestampIso.slice(0, 10), firstOrder.branch_id);
     }
 
-    if (txResult.data.receiptPaymentStatus === 'paid_full' && receiptTotal > 0) {
+    const collectPaidFull =
+      txResult.data.receiptPaymentStatus === 'paid_full' ||
+      (receiptTotal > 0 && Number(receiptPaid) >= Number(receiptTotal) - 0.01);
+    if (collectPaidFull && receiptTotal > 0 && firstOrder.customer_id) {
       try {
         const { awardPointsOnCollection } = require('./loyalty');
-        const loyaltyResult = await awardPointsOnCollection(firstOrder.customer_id, firstOrder.id, receiptTotal);
-        console.log(
-          `OK:  Loyalty points awarded: ${loyaltyResult?.points_earned ?? 0} points to customer ${firstOrder.customer_id}`
+        const loyaltyResult = await awardPointsOnCollection(
+          firstOrder.customer_id,
+          firstOrder.id,
+          receiptTotal
         );
+        if (loyaltyResult?.skipped) {
+          console.warn(
+            `WARN: Loyalty award skipped (${loyaltyResult.reason}) customer ${firstOrder.customer_id} order ${firstOrder.id}`
+          );
+        } else {
+          console.log(
+            `OK:  Loyalty points awarded: ${loyaltyResult?.points_earned ?? 0} points to customer ${firstOrder.customer_id}`
+          );
+        }
       } catch (err) {
-        console.error('Error awarding loyalty points:', err);
+        console.error(
+          `ERROR: Loyalty award failed for customer ${firstOrder.customer_id} order ${firstOrder.id}:`,
+          err.message
+        );
       }
     }
 

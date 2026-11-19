@@ -44,6 +44,23 @@ dbPool.on('error', (err) => {
   console.error('ERROR:  Unexpected error on idle PostgreSQL client', err);
   // Keep API process alive on transient pool/client faults.
   // Individual queries will still fail fast and surface meaningful errors.
+  // #region agent log
+  try {
+    const { agentDebugLog } = require('../utils/agentDebugLog');
+    agentDebugLog({
+      hypothesisId: 'B',
+      location: 'query.js:pool-error',
+      message: 'postgres pool idle client error',
+      data: {
+        error: String(err && err.message),
+        code: err && err.code,
+        totalCount: dbPool.totalCount,
+        idleCount: dbPool.idleCount,
+        waitingCount: dbPool.waitingCount,
+      },
+    });
+  } catch (_) { /* ignore */ }
+  // #endregion
 });
 
 /**
@@ -118,6 +135,26 @@ function run(sql, params = []) {
     })
     .catch(err => {
       console.error('Database query error (run):', err);
+      // #region agent log
+      if (String(err && err.message || '').includes('EMAXCONNSESSION') || err?.code === 'XX000') {
+        try {
+          const { agentDebugLog } = require('../utils/agentDebugLog');
+          agentDebugLog({
+            hypothesisId: 'B',
+            location: 'query.js:run-emax',
+            message: 'EMAXCONNSESSION or XX000 on db.run',
+            data: {
+              error: String(err && err.message),
+              code: err && err.code,
+              totalCount: dbPool.totalCount,
+              idleCount: dbPool.idleCount,
+              waitingCount: dbPool.waitingCount,
+              sqlPreview: String(sql || '').slice(0, 80),
+            },
+          });
+        } catch (_) { /* ignore */ }
+      }
+      // #endregion
       throw err;
     });
 }

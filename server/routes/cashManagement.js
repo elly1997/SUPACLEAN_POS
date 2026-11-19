@@ -315,30 +315,61 @@ function pumpBackgroundRefresh() {
  */
 function scheduleBackgroundDailySummaryRefresh(date, branchId, { force = false } = {}) {
   const day = toSqlDateString(date);
-  if (!day || branchId == null) return Promise.resolve();
-  const key = `${branchId}:${day}`;
-  if (bgRefreshInFlight.has(key)) return Promise.resolve();
-  if (!force) {
-    const last = bgRefreshLastRun.get(key) || 0;
-    if (Date.now() - last < BG_REFRESH_COOLDOWN_MS) return Promise.resolve();
-  }
-  bgRefreshInFlight.add(key);
-  bgRefreshQueue.push(async () => {
-    try {
-      if (force) {
-        await refreshDailySummaryForce(day, branchId);
-      } else {
-        await refreshUnreconciledDailySummary(day, branchId);
+  let reason = 'queued';
+  let result;
+  if (!day || branchId == null) {
+    reason = 'skip-bad-args';
+    result = Promise.resolve();
+  } else {
+    const key = `${branchId}:${day}`;
+    if (bgRefreshInFlight.has(key)) {
+      reason = 'skip-inflight';
+      result = Promise.resolve();
+    } else if (!force) {
+      const last = bgRefreshLastRun.get(key) || 0;
+      if (Date.now() - last < BG_REFRESH_COOLDOWN_MS) {
+        reason = 'skip-cooldown';
+        result = Promise.resolve();
       }
-      bgRefreshLastRun.set(key, Date.now());
-    } catch (err) {
-      console.error('Background daily summary refresh failed:', day, branchId, err.message);
-    } finally {
-      bgRefreshInFlight.delete(key);
     }
-  });
-  setImmediate(pumpBackgroundRefresh);
-  return Promise.resolve();
+    if (!result) {
+      bgRefreshInFlight.add(key);
+      bgRefreshQueue.push(async () => {
+        try {
+          if (force) {
+            await refreshDailySummaryForce(day, branchId);
+          } else {
+            await refreshUnreconciledDailySummary(day, branchId);
+          }
+          bgRefreshLastRun.set(key, Date.now());
+        } catch (err) {
+          console.error('Background daily summary refresh failed:', day, branchId, err.message);
+        } finally {
+          bgRefreshInFlight.delete(key);
+        }
+      });
+      setImmediate(pumpBackgroundRefresh);
+      reason = 'queued';
+      result = Promise.resolve();
+    }
+  }
+  // #region agent log
+  try {
+    const { agentDebugLog } = require('../utils/agentDebugLog');
+    agentDebugLog({
+      hypothesisId: 'C',
+      location: 'cashManagement.js:scheduleBackgroundDailySummaryRefresh',
+      message: 'daily summary refresh schedule result',
+      data: {
+        reason,
+        day: day || null,
+        branchId: branchId == null ? null : branchId,
+        returnsPromise: !!result && typeof result.then === 'function',
+      },
+    });
+  } catch (_) { /* ignore */ }
+  // #endregion
+  return result;
 }
 
 /**
@@ -1174,7 +1205,7 @@ router.get('/range', requireBranchAccess(), requirePermission('canManageCash'), 
           SUM(COALESCE(bank_deposits, 0)) as bank_deposits,
           SUM(COALESCE(expenses_from_cash, 0)) as expenses_from_cash,
           SUM(COALESCE(closing_balance, 0)) as closing_balance,
-          MAX(CASE WHEN is_reconciled = 1 THEN 1 ELSE 0 END) as is_reconciled
+          MAX(CASE WHEN is_reconciled IS TRUE THEN 1 ELSE 0 END) as is_reconciled
          FROM daily_cash_summaries
          WHERE date >= ? AND date <= ?
          GROUP BY date

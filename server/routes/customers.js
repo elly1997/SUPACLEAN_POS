@@ -263,7 +263,33 @@ router.get('/search', async (req, res) => {
   }
 
   const branchId = getEffectiveBranchId(req);
+  // #region agent log
+  try {
+    const { agentDebugLog } = require('../utils/agentDebugLog');
+    agentDebugLog({
+      hypothesisId: 'D',
+      location: 'customers.js:GET /search entry',
+      message: 'customer search entry',
+      data: {
+        qLen: q.length,
+        branchId: branchId == null ? null : branchId,
+        role: req.user?.role || null,
+      },
+    });
+  } catch (_) { /* ignore */ }
+  // #endregion
   if (branchId == null) {
+    // #region agent log
+    try {
+      const { agentDebugLog } = require('../utils/agentDebugLog');
+      agentDebugLog({
+        hypothesisId: 'D',
+        location: 'customers.js:GET /search no-branch',
+        message: 'customer search blocked: no branch',
+        data: { qLen: q.length },
+      });
+    } catch (_) { /* ignore */ }
+    // #endregion
     return res.status(400).json({
       error: 'Select a branch before searching customers. Each branch keeps its own customer list.',
     });
@@ -300,12 +326,34 @@ router.get('/search', async (req, res) => {
        LIMIT ?`,
       [effectiveBranchId, ...params, limit]
     );
+    // #region agent log
+    try {
+      const { agentDebugLog } = require('../utils/agentDebugLog');
+      agentDebugLog({
+        hypothesisId: 'D',
+        location: 'customers.js:GET /search success',
+        message: 'customer search success',
+        data: { branchId, rowCount: (rows || []).length },
+      });
+    } catch (_) { /* ignore */ }
+    // #endregion
     res.json((rows || []).map((row) => ({
       ...row,
       is_other_branch: Number(row.is_other_branch) === 1,
     })));
   } catch (err) {
     console.error('Error searching customers:', err);
+    // #region agent log
+    try {
+      const { agentDebugLog } = require('../utils/agentDebugLog');
+      agentDebugLog({
+        hypothesisId: 'D',
+        location: 'customers.js:GET /search error',
+        message: 'customer search failed',
+        data: { error: String(err && err.message), code: err && err.code },
+      });
+    } catch (_) { /* ignore */ }
+    // #endregion
     res.status(500).json({ error: err.message });
   }
 });
