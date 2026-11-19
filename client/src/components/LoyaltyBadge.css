@@ -1,0 +1,86 @@
+.loyalty-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.loyalty-badge__tier {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: capitalize;
+}
+
+.loyalty-badge__points {
+  color: var(--text-secondary, #6b7280);
+  font-weight: 600;
+}
+
+.loyalty-badge--sm .loyalty-badge__tier {
+  font-size: 10px;
+  padding: 2px 7px;
+}
+
+.loyalty-badge--sm .loyalty-badge__points {
+  font-size: 11px;
+}
+
+.loyalty-badge--md .loyalty-badge__tier {
+  font-size: 12px;
+  padding: 3px 9px;
+}
+
+.loyalty-badge--md .loyalty-badge__points {
+  font-size: 12px;
+}
+
+.loyalty-badge--bronze .loyalty-badge__tier {
+  background: #efebe9;
+  color: #795548;
+}
+
+.loyalty-badge--silver .loyalty-badge__tier {
+  background: #f3e5f5;
+  color: #7b1fa2;
+}
+
+.loyalty-badge--gold .loyalty-badge__tier {
+  background: #fff3e0;
+  color: #ef6c00;
+}
+
+.loyalty-badge--platinum .loyalty-badge__tier,
+.loyalty-badge--vip .loyalty-badge__tier {
+  background: #e8eaf6;
+  color: #3f51b5;
+}
+
+[data-theme="dark"] .loyalty-badge--bronze .loyalty-badge__tier {
+  background: rgba(121, 85, 72, 0.35);
+  color: #d7ccc8;
+}
+
+[data-theme="dark"] .loyalty-badge--silver .loyalty-badge__tier {
+  background: rgba(156, 39, 176, 0.3);
+  color: #e1bee7;
+}
+
+[data-theme="dark"] .loyalty-badge--gold .loyalty-badge__tier {
+  background: rgba(255, 152, 0, 0.28);
+  color: #ffcc80;
+}
+
+[data-theme="dark"] .loyalty-badge--platinum .loyalty-badge__tier,
+[data-theme="dark"] .loyalty-badge--vip .loyalty-badge__tier {
+  background: rgba(63, 81, 181, 0.32);
+  color: #c5cae9;
+}
+
+[data-theme="dark"] .loyalty-badge__points {
+  color: var(--text-muted, #9ca3af);
+}

@@ -9,6 +9,7 @@ import ListViewToggle from '../components/ListViewToggle';
 import SkeletonList from '../components/SkeletonList';
 import Loader from '../components/Loader';
 import ReceiptDetailPanel from '../components/ReceiptDetailPanel';
+import LoyaltyBadge from '../components/LoyaltyBadge';
 import { exportToPDF, exportToExcel, exportOrdersPackagingExcel } from '../utils/exportUtils';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import { formatCustomerReceiptId, formatReceiptForDisplay, formatBranchReceiptLine } from '../utils/receiptId';
@@ -1002,6 +1003,8 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           customer_id: order.customer_id,
           customer_name: order.customer_name,
           customer_phone: order.customer_phone,
+          tier: order.tier || 'Bronze',
+          current_points: Number(order.current_points) || 0,
           branch_id: order.branch_id,
           branch_name: order.branch_name,
           branch_code: order.branch_code,
@@ -1117,6 +1120,9 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
       ...receiptGroup.items[0],
       total_amount: receiptGroup.total_amount,
       paid_amount: receiptGroup.paid_amount,
+      customer_name: receiptGroup.customer_name,
+      tier: receiptGroup.tier,
+      current_points: receiptGroup.current_points,
     });
     setPaymentAmount(balance.toString());
     setPaymentDate(todayYmd());
@@ -1548,7 +1554,10 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {scanResult.map((r) => (
                   <button key={r.receipt_number} type="button" className="btn-small btn-secondary" onClick={() => setExpandedReceipts(new Set([r.receipt_number]))} style={{ justifyContent: 'space-between' }}>
-                    <span>{r.receipt_number} · {r.customer_name || '—'}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      {r.receipt_number} · {r.customer_name || '—'}
+                      <LoyaltyBadge tier={r.tier} points={r.current_points} />
+                    </span>
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{r.status}</span>
                   </button>
                 ))}
@@ -1568,7 +1577,10 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {customerReceipts.slice(0, 10).map((r) => (
                   <button key={r.receipt_number} type="button" className="btn-small btn-secondary" onClick={() => setExpandedReceipts(new Set([r.receipt_number]))}>
-                    <span>{r.receipt_number} · {r.customer_name || '—'}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      {r.receipt_number} · {r.customer_name || '—'}
+                      <LoyaltyBadge tier={r.tier} points={r.current_points} />
+                    </span>
                   </button>
                 ))}
               </div>
@@ -1577,10 +1589,12 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
         </div>
       </div>
       {/* Task 2.2 — Ready queue */}
-      <div style={{ marginTop: '16px' }}>
-        <button type="button" className="btn-secondary" onClick={handleToggleReadyQueue} style={{ width: '100%', justifyContent: 'space-between' }}>
-          <span>📦 Ready queue</span>
-          <span>{readyQueueLoading ? '…' : `${readyQueueOrders.length} orders`}</span>
+      <div className="orders-ready-queue">
+        <button type="button" className="btn-secondary orders-ready-queue__toggle" onClick={handleToggleReadyQueue}>
+          <span>Ready queue</span>
+          <span className="orders-ready-queue__count" aria-label={`${readyQueueOrders.length} ready orders`}>
+            {readyQueueLoading ? '…' : readyQueueOrders.length}
+          </span>
         </button>
         {showReadyQueue && (
           <div style={{ marginTop: '8px' }}>
@@ -1590,7 +1604,10 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                   const overdue = o.estimated_collection_date ? new Date(o.estimated_collection_date) < new Date() && o.status === 'ready' : false;
                   return (
                     <li key={o.receipt_number} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 0', borderBottom: '1px solid var(--border-color)' }}>
-                      <span>{o.receipt_number} · {o.customer_name || '—'}</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        {o.receipt_number} · {o.customer_name || '—'}
+                        <LoyaltyBadge tier={o.tier} points={o.current_points} />
+                      </span>
                       <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                         <span style={{ fontSize: '12px', color: overdue ? 'var(--danger-color)' : 'var(--text-muted)' }}>{overdue ? '⏰ OVERDUE' : 'ready'}</span>
                         <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{o.estimated_collection_date ? new Date(o.estimated_collection_date).toLocaleString() : '—'}</span>
@@ -1902,7 +1919,10 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                   </span>
                 </div>
                 <div className="orders-list-card-body">
-                  <p><strong>{receiptGroup.customer_name}</strong></p>
+                  <p style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <strong>{receiptGroup.customer_name}</strong>
+                    <LoyaltyBadge tier={receiptGroup.tier} points={receiptGroup.current_points} />
+                  </p>
                   {renderCustomerPhoneCell(receiptGroup)}
                   <p>{itemCount} line(s) · TSh {receiptGroup.total_amount.toLocaleString()}</p>
                   <p>{balance > 0 ? <span style={{ color: 'var(--warning-color)', fontWeight: 'bold' }}>Balance TSh {balance.toLocaleString()}</span> : <span style={{ color: 'var(--success-color)' }}>Paid</span>}</p>
@@ -1983,6 +2003,9 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                       <td>
                         <div>
                           <strong>{receiptGroup.customer_name}</strong>
+                          <div style={{ marginTop: '4px' }}>
+                            <LoyaltyBadge tier={receiptGroup.tier} points={receiptGroup.current_points} />
+                          </div>
                           {renderCustomerPhoneCell(receiptGroup)}
                         </div>
                       </td>
@@ -2147,7 +2170,10 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                   </div>
                   <div className="payment-item">
                     <span>Customer:</span>
-                    <strong>{selectedOrderForPayment.customer_name}</strong>
+                    <strong style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      {selectedOrderForPayment.customer_name}
+                      <LoyaltyBadge tier={selectedOrderForPayment.tier} points={selectedOrderForPayment.current_points} />
+                    </strong>
                   </div>
                   <div className="payment-item">
                     <span>Total Amount:</span>
@@ -2240,7 +2266,10 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
                     </div>
                     <div className="payment-item">
                       <span>Customer:</span>
-                      <strong>{selectedReceiptForCollect.customer_name}</strong>
+                      <strong style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        {selectedReceiptForCollect.customer_name}
+                        <LoyaltyBadge tier={selectedReceiptForCollect.tier} points={selectedReceiptForCollect.current_points} />
+                      </strong>
                     </div>
                     <div className="payment-item">
                       <span>Total Amount:</span>

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { getCoupons, createCoupon, updateCoupon } from '../api/api';
+import { getCoupons, createCoupon, updateCoupon, getBranches } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
-import './AdminBranches.css';
+import './AdminCoupons.css';
 
 const EMPTY_FORM = {
   code: '',
@@ -19,6 +19,7 @@ const AdminCoupons = () => {
   const { showToast, ToastContainer } = useToast();
   const { hasPermission } = useAuth();
   const [coupons, setCoupons] = useState([]);
+  const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
@@ -41,6 +42,24 @@ const AdminCoupons = () => {
   useEffect(() => {
     loadCoupons();
   }, [loadCoupons]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getBranches()
+      .then((res) => {
+        if (!cancelled) setBranches(Array.isArray(res?.data) ? res.data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setBranches([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const branchName = (branchId) => {
+    if (branchId == null || branchId === '') return 'All branches';
+    const b = branches.find((x) => Number(x.id) === Number(branchId));
+    return b?.name || `Branch #${branchId}`;
+  };
 
   const handleChange = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
 
@@ -106,100 +125,173 @@ const AdminCoupons = () => {
 
   if (!canManage) {
     return (
-      <div className="admin-page">
+      <div className="coupons-page">
         <ToastContainer />
-        <h2>🎟️ Coupons</h2>
-        <p>You do not have permission to manage coupons.</p>
+        <div className="page-header-modern">
+          <div>
+            <h1>Coupons</h1>
+            <p className="subtitle">You do not have permission to manage coupons.</p>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="admin-page">
+    <div className="coupons-page">
       <ToastContainer />
-      <h2>🎟️ Coupons</h2>
-      <p style={{ color: 'var(--text-muted)', marginBottom: '16px' }}>
+      <div className="page-header-modern">
+        <div>
+          <h1>Coupons</h1>
+          <p className="subtitle">Create and manage discount codes for the counter</p>
+        </div>
+      </div>
+
+      <p className="coupons-hint">
         A coupon can only be applied when the order subtotal is at least <strong>TSh 20,000</strong>.
+        Leave branch as “All branches” to allow every location.
       </p>
 
-      <form onSubmit={handleSubmit} className="admin-form" style={{ marginBottom: '24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', alignItems: 'end' }}>
-        <label>
-          Code *
-          <input type="text" value={form.code} onChange={(e) => handleChange('code', e.target.value.toUpperCase())} placeholder="e.g. SAVE20" required />
-        </label>
-        <label>
-          Type
-          <select value={form.type} onChange={(e) => handleChange('type', e.target.value)}>
-            <option value="percent">Percent (%)</option>
-            <option value="fixed">Fixed (TSh)</option>
-          </select>
-        </label>
-        <label>
-          Value *
-          <input type="number" min="0" step="0.01" value={form.value} onChange={(e) => handleChange('value', e.target.value)} placeholder={form.type === 'percent' ? 'e.g. 10' : 'e.g. 5000'} required />
-        </label>
-        <label>
-          Min Order (TSh)
-          <input type="number" min="0" value={form.min_order_amount} onChange={(e) => handleChange('min_order_amount', e.target.value)} />
-        </label>
-        <label>
-          Max Uses (0 = unlimited)
-          <input type="number" min="0" value={form.max_uses} onChange={(e) => handleChange('max_uses', e.target.value)} />
-        </label>
-        <label>
-          Expires
-          <input type="date" value={form.expires_at} onChange={(e) => handleChange('expires_at', e.target.value)} />
-        </label>
-        <label>
-          Branch ID (blank = all)
-          <input type="number" min="0" value={form.branch_id} onChange={(e) => handleChange('branch_id', e.target.value)} />
-        </label>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button type="submit" className="btn-primary" disabled={saving}>{saving ? 'Saving…' : (editingId ? 'Update' : 'Create')}</button>
-          {editingId && (
-            <button type="button" className="btn-secondary" onClick={() => { setEditingId(null); setForm(EMPTY_FORM); }}>Cancel</button>
-          )}
+      <form onSubmit={handleSubmit} className="coupons-form-card">
+        <h2 className="coupons-form-title">{editingId ? 'Edit coupon' : 'Create coupon'}</h2>
+        <div className="coupons-form-grid">
+          <div className="coupons-field">
+            <label htmlFor="coupon-code">Code *</label>
+            <input
+              id="coupon-code"
+              type="text"
+              value={form.code}
+              onChange={(e) => handleChange('code', e.target.value.toUpperCase())}
+              placeholder="e.g. SAVE20"
+              required
+              autoComplete="off"
+            />
+          </div>
+          <div className="coupons-field">
+            <label htmlFor="coupon-type">Type</label>
+            <select id="coupon-type" value={form.type} onChange={(e) => handleChange('type', e.target.value)}>
+              <option value="percent">Percent (%)</option>
+              <option value="fixed">Fixed (TSh)</option>
+            </select>
+          </div>
+          <div className="coupons-field">
+            <label htmlFor="coupon-value">Value *</label>
+            <input
+              id="coupon-value"
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.value}
+              onChange={(e) => handleChange('value', e.target.value)}
+              placeholder={form.type === 'percent' ? 'e.g. 10' : 'e.g. 5000'}
+              required
+            />
+          </div>
+          <div className="coupons-field">
+            <label htmlFor="coupon-min">Min order (TSh)</label>
+            <input
+              id="coupon-min"
+              type="number"
+              min="0"
+              value={form.min_order_amount}
+              onChange={(e) => handleChange('min_order_amount', e.target.value)}
+            />
+          </div>
+          <div className="coupons-field">
+            <label htmlFor="coupon-max">Max uses (0 = unlimited)</label>
+            <input
+              id="coupon-max"
+              type="number"
+              min="0"
+              value={form.max_uses}
+              onChange={(e) => handleChange('max_uses', e.target.value)}
+            />
+          </div>
+          <div className="coupons-field">
+            <label htmlFor="coupon-expires">Expires</label>
+            <input
+              id="coupon-expires"
+              type="date"
+              value={form.expires_at}
+              onChange={(e) => handleChange('expires_at', e.target.value)}
+            />
+          </div>
+          <div className="coupons-field">
+            <label htmlFor="coupon-branch">Branch</label>
+            <select
+              id="coupon-branch"
+              value={form.branch_id}
+              onChange={(e) => handleChange('branch_id', e.target.value)}
+            >
+              <option value="">All branches</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="coupons-actions">
+            <button type="submit" className="dk-btn dk-btn--primary dk-btn--md" disabled={saving}>
+              {saving ? 'Saving…' : (editingId ? 'Update' : 'Create')}
+            </button>
+            {editingId && (
+              <button
+                type="button"
+                className="dk-btn dk-btn--secondary dk-btn--md"
+                onClick={() => { setEditingId(null); setForm(EMPTY_FORM); }}
+              >
+                Cancel
+              </button>
+            )}
+          </div>
         </div>
       </form>
 
       {loading ? (
-        <p>Loading coupons…</p>
+        <div className="coupons-loading">Loading coupons…</div>
       ) : coupons.length === 0 ? (
-        <p>No coupons yet. Create one above.</p>
+        <div className="coupons-empty">No coupons yet. Create one above.</div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
-          <thead>
-            <tr style={{ textAlign: 'left', borderBottom: '2px solid var(--border-color)' }}>
-              <th style={{ padding: '8px' }}>Code</th>
-              <th style={{ padding: '8px' }}>Discount</th>
-              <th style={{ padding: '8px' }}>Min Order</th>
-              <th style={{ padding: '8px' }}>Used</th>
-              <th style={{ padding: '8px' }}>Expires</th>
-              <th style={{ padding: '8px' }}>Status</th>
-              <th style={{ padding: '8px' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {coupons.map((c) => (
-              <tr key={c.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                <td style={{ padding: '8px', fontWeight: 600 }}>{c.code}</td>
-                <td style={{ padding: '8px' }}>{c.type === 'percent' ? `${c.value}%` : `TSh ${Number(c.value).toLocaleString()}`}</td>
-                <td style={{ padding: '8px' }}>TSh {Number(c.min_order_amount || 0).toLocaleString()}</td>
-                <td style={{ padding: '8px' }}>{c.used_count}{c.max_uses > 0 ? ` / ${c.max_uses}` : ''}</td>
-                <td style={{ padding: '8px' }}>{c.expires_at ? new Date(c.expires_at).toLocaleDateString() : '—'}</td>
-                <td style={{ padding: '8px' }}>
-                  <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '12px', background: c.is_active ? '#d1fae5' : '#fee2e2', color: c.is_active ? '#065f46' : '#991b1b' }}>
-                    {c.is_active ? 'Active' : 'Inactive'}
-                  </span>
-                </td>
-                <td style={{ padding: '8px', display: 'flex', gap: '6px' }}>
-                  <button className="btn-small btn-primary" onClick={() => startEdit(c)}>Edit</button>
-                  <button className="btn-small btn-secondary" onClick={() => toggleActive(c)}>{c.is_active ? 'Deactivate' : 'Activate'}</button>
-                </td>
+        <div className="coupons-table-wrap">
+          <table className="coupons-table">
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Discount</th>
+                <th>Min order</th>
+                <th>Branch</th>
+                <th>Used</th>
+                <th>Expires</th>
+                <th>Status</th>
+                <th>Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {coupons.map((c) => (
+                <tr key={c.id}>
+                  <td className="coupons-code">{c.code}</td>
+                  <td>{c.type === 'percent' ? `${c.value}%` : `TSh ${Number(c.value).toLocaleString()}`}</td>
+                  <td>TSh {Number(c.min_order_amount || 0).toLocaleString()}</td>
+                  <td>{branchName(c.branch_id)}</td>
+                  <td>{c.used_count}{c.max_uses > 0 ? ` / ${c.max_uses}` : ''}</td>
+                  <td>{c.expires_at ? new Date(c.expires_at).toLocaleDateString() : '—'}</td>
+                  <td>
+                    <span className={`coupons-status ${c.is_active ? 'coupons-status--active' : 'coupons-status--inactive'}`}>
+                      {c.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="coupons-row-actions">
+                      <button type="button" className="btn-small btn-primary" onClick={() => startEdit(c)}>Edit</button>
+                      <button type="button" className="btn-small btn-secondary" onClick={() => toggleActive(c)}>
+                        {c.is_active ? 'Deactivate' : 'Activate'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

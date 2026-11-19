@@ -188,12 +188,31 @@
     align-items: start;
   }
 
+  /* Sticky cart without clipping/overlapping payment controls */
   .layout--desktop .order-summary-card {
     position: sticky;
     top: 88px;
-    max-height: calc(100vh - 112px);
+    max-height: none;
+    overflow: visible;
+  }
+
+  .layout--desktop .order-summary-card .order-items-list {
+    max-height: min(42vh, 420px);
     overflow-y: auto;
     overscroll-behavior: contain;
+    padding-right: 4px;
+    margin-bottom: 12px;
+  }
+
+  .layout--desktop .order-summary-card .payment-section-modern {
+    position: relative;
+    bottom: auto;
+    padding-bottom: 4px;
+    background: var(--bg-secondary);
+  }
+
+  .layout--desktop .order-item-card {
+    transform: none !important;
   }
 
   .layout--desktop .panel-section {
@@ -202,6 +221,12 @@
 
   .layout--desktop .order-header-modern {
     margin-bottom: 16px;
+  }
+
+  /* Sticky filters must not sit above cart/modals awkwardly */
+  .layout--desktop .orders-filters-section,
+  .layout--desktop .customers-page .filter-section {
+    z-index: 8;
   }
 
   /* ── Tables / density ──────────────────────────────────── */
