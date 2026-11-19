@@ -7,6 +7,7 @@ import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import { formatReceiptForDisplay } from '../utils/receiptId';
+import useScrollPanel from '../hooks/useScrollPanel';
 import './Dashboard.css';
 
 const DASHBOARD_LIST_LIMIT = 50;
@@ -15,6 +16,8 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
   const { selectedBranchId, user, hasPermission, branch } = useAuth();
+  const readyQueueScroll = useScrollPanel({ axis: 'y' });
+  const pendingQueueScroll = useScrollPanel({ axis: 'y' });
   const isCashier = user?.role === 'cashier';
   const isAdmin = user?.role === 'admin';
   const canManageCash = hasPermission?.('canManageCash') ?? false;
@@ -449,7 +452,13 @@ const Dashboard = () => {
           </div>
           {readyQueue.length > 0 ? (
             listView === 'card' ? (
-              <div className="dashboard-cards-grid queue-scroll-area">
+              <div
+                className="dashboard-cards-grid queue-scroll-area scroll-panel scroll-panel--y"
+                tabIndex={0}
+                role="region"
+                aria-label="Ready orders"
+                {...readyQueueScroll}
+              >
                 {readyQueue.map(receipt => {
                   const balance = (receipt.total_amount || 0) - (receipt.paid_amount || 0);
                   const isOverdue = receipt.is_overdue;
@@ -493,7 +502,13 @@ const Dashboard = () => {
                 })}
               </div>
             ) : (
-              <div className="dashboard-table-wrap queue-scroll-area">
+              <div
+                className="dashboard-table-wrap queue-scroll-area scroll-panel scroll-panel--xy"
+                tabIndex={0}
+                role="region"
+                aria-label="Ready orders table"
+                {...readyQueueScroll}
+              >
                 <table className="dashboard-table">
                   <thead>
                     <tr>
@@ -585,7 +600,13 @@ const Dashboard = () => {
           </div>
           {groupedPending.length > 0 ? (
             listView === 'card' ? (
-              <div className="dashboard-cards-grid queue-scroll-area">
+              <div
+                className="dashboard-cards-grid queue-scroll-area scroll-panel scroll-panel--y"
+                tabIndex={0}
+                role="region"
+                aria-label="Pending orders"
+                {...pendingQueueScroll}
+              >
                 {groupedPending.map((receiptGroup) => (
                   <div key={receiptGroup.receipt_number} className="dashboard-list-card dk-queue-card">
                     <div className="dashboard-list-card-header">
@@ -606,7 +627,13 @@ const Dashboard = () => {
                 ))}
               </div>
             ) : (
-              <div className="dashboard-table-wrap queue-scroll-area">
+              <div
+                className="dashboard-table-wrap queue-scroll-area scroll-panel scroll-panel--xy"
+                tabIndex={0}
+                role="region"
+                aria-label="Pending orders table"
+                {...pendingQueueScroll}
+              >
                 <table className="dashboard-table">
                   <thead>
                     <tr>

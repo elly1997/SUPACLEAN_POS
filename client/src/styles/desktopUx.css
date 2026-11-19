@@ -196,10 +196,8 @@
     overflow: visible;
   }
 
-  .layout--desktop .order-summary-card .order-items-list {
+  .layout--desktop .order-summary-card .order-items-list.scroll-panel {
     max-height: min(42vh, 420px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
     padding-right: 4px;
     margin-bottom: 12px;
   }

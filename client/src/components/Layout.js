@@ -9,6 +9,8 @@ import AdminNotificationCenter from './AdminNotificationCenter';
 import { isSoundEnabled, setSoundEnabled } from '../utils/sound';
 import './Layout.css';
 import '../styles/desktopUx.css';
+import '../styles/scrollPanels.css';
+import useScrollPanel from '../hooks/useScrollPanel';
 
 const Layout = ({ children }) => {
   const location = useLocation();
@@ -36,6 +38,7 @@ const Layout = ({ children }) => {
   const [availableFeatures, setAvailableFeatures] = useState([]);
   const [branches, setBranches] = useState([]);
   const useDrawer = isPhone;
+  const sidebarScroll = useScrollPanel({ axis: 'y' });
 
   const setSidebarCollapsed = useCallback((nextOrUpdater) => {
     setDesktopSidebarCollapsed((prev) => {
@@ -272,7 +275,12 @@ const Layout = ({ children }) => {
             <p className="user-info">{user.fullName} ({user.role})</p>
           )}
         </div>
-        <nav className="sidebar-nav" aria-label="Main navigation">
+        <nav
+          className="sidebar-nav scroll-panel scroll-panel--y"
+          aria-label="Main navigation"
+          tabIndex={0}
+          {...sidebarScroll}
+        >
           {filteredGroups.map((group, idx) => (
             <div key={group.label || `group-${idx}`} className="nav-group">
               {group.label && (
@@ -331,7 +339,7 @@ const Layout = ({ children }) => {
           <p className="business-info">Arusha, Tanzania</p>
         </div>
       </aside>
-      <main className={`main-content ${(useDrawer ? mobileMenuOpen : true) ? 'sidebar-open' : 'sidebar-closed'} ${!useDrawer && desktopSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <main className={`main-content scroll-shell ${(useDrawer ? mobileMenuOpen : true) ? 'sidebar-open' : 'sidebar-closed'} ${!useDrawer && desktopSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         {!useDrawer && (
           <button
             type="button"

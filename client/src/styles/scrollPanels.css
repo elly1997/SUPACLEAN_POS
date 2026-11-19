@@ -1,0 +1,101 @@
+/**
+ * Multi-panel scroll UX
+ * - Nested scroll regions hide their scrollbars until hovered / focused / active
+ * - Pointer position (hover) selects which panel scrolls
+ * - Page shell (.main-content) remains the primary scroll; nested panels are opt-in
+ */
+
+.scroll-panel {
+  min-height: 0;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* Firefox: hide until active */
+  outline: none;
+}
+
+.scroll-panel::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+/* Reveal thin scrollbar only when the cursor/focus is on this panel */
+.scroll-panel:hover,
+.scroll-panel:focus-within,
+.scroll-panel.is-scroll-active {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(142, 142, 147, 0.55) transparent;
+}
+
+.scroll-panel:hover::-webkit-scrollbar,
+.scroll-panel:focus-within::-webkit-scrollbar,
+.scroll-panel.is-scroll-active::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.scroll-panel:hover::-webkit-scrollbar-thumb,
+.scroll-panel:focus-within::-webkit-scrollbar-thumb,
+.scroll-panel.is-scroll-active::-webkit-scrollbar-thumb {
+  background: rgba(142, 142, 147, 0.45);
+  border-radius: 999px;
+}
+
+.scroll-panel:hover::-webkit-scrollbar-track,
+.scroll-panel:focus-within::-webkit-scrollbar-track,
+.scroll-panel.is-scroll-active::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Subtle active cue so cashiers know which pane owns the wheel */
+.scroll-panel.is-scroll-active {
+  box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.22);
+}
+
+[data-theme="dark"] .scroll-panel.is-scroll-active {
+  box-shadow: inset 0 0 0 1px rgba(10, 132, 255, 0.28);
+}
+
+/* Vertical list / cart panes */
+.scroll-panel--y {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* Wide tables */
+.scroll-panel--xy {
+  overflow: auto;
+}
+
+/* Primary page scroller: keep a soft thumb, not competing chrome */
+.main-content.scroll-shell {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(142, 142, 147, 0.35) transparent;
+}
+
+.main-content.scroll-shell::-webkit-scrollbar {
+  width: 8px;
+}
+
+.main-content.scroll-shell::-webkit-scrollbar-thumb {
+  background: rgba(142, 142, 147, 0.35);
+  border-radius: 999px;
+}
+
+.main-content.scroll-shell::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Sidebar nav: hide until hover */
+.sidebar-nav.scroll-panel--y {
+  overflow-y: auto;
+}
+
+/* Prefer one page scroll on phone — nested panels expand with content */
+@media (max-width: 767px) {
+  .scroll-panel--y.scroll-panel--stack-on-phone {
+    max-height: none !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+  }
+}

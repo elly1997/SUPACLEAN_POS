@@ -5,6 +5,7 @@ import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
+import useScrollPanel from '../hooks/useScrollPanel';
 import ListViewToggle from '../components/ListViewToggle';
 import SkeletonList from '../components/SkeletonList';
 import Loader from '../components/Loader';
@@ -100,6 +101,7 @@ const Orders = () => {
   const [readyQueueOrders, setReadyQueueOrders] = useState([]);
   const [readyQueueLoading, setReadyQueueLoading] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
+  const readyQueueScroll = useScrollPanel({ axis: 'y' });
 
   // F2: focus order search (customer name or phone) for quick access
   useEffect(() => {
@@ -1597,7 +1599,13 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           </span>
         </button>
         {showReadyQueue && (
-          <div style={{ marginTop: '8px' }}>
+          <div
+            className="orders-ready-queue__list scroll-panel scroll-panel--y"
+            tabIndex={0}
+            role="region"
+            aria-label="Ready queue"
+            {...readyQueueScroll}
+          >
             {readyQueueLoading ? <div className="loader-small" style={{ padding: '8px' }} /> : readyQueueOrders.length === 0 ? <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>No ready receipts at this time.</div> : (
               <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '13px' }}>
                 {readyQueueOrders.slice(0, 60).map((o) => {

@@ -21,23 +21,7 @@
   animation: pos-shell-screen-enter 0.3s cubic-bezier(0.36, 0.66, 0.04, 1);
 }
 
-.layout ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-.layout ::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.layout ::-webkit-scrollbar-thumb {
-  background: rgba(142, 142, 147, 0.3);
-  border-radius: 5px;
-}
-
-.layout ::-webkit-scrollbar-thumb:hover {
-  background: rgba(142, 142, 147, 0.5);
-}
+/* Nested layout scrollbars stay hidden until hover — see scrollPanels.css */
 
 .sidebar {
   position: fixed;

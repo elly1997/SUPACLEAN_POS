@@ -17,11 +17,40 @@ export default function useHorizontalScrollRegion() {
     );
   };
 
+  const setScrollActive = (el, on) => {
+    if (!el) return;
+    el.classList.toggle('is-scroll-active', on);
+    if (on) el.setAttribute('data-scroll-active', 'true');
+    else el.removeAttribute('data-scroll-active');
+  };
+
+  const endDrag = (e) => {
+    const el = e.currentTarget;
+    const s = dragStateRef.current;
+    if (s.pointerId != null && el.hasPointerCapture?.(s.pointerId)) {
+      el.releasePointerCapture(s.pointerId);
+    }
+    dragStateRef.current = { active: false, dragged: false, startX: 0, startLeft: 0, pointerId: null };
+    el.classList.remove('is-dragging');
+  };
+
+  const onMouseEnter = (e) => setScrollActive(e.currentTarget, true);
+  const onMouseLeave = (e) => {
+    setScrollActive(e.currentTarget, false);
+    if (dragStateRef.current.active) endDrag(e);
+  };
+  const onFocus = (e) => setScrollActive(e.currentTarget, true);
+  const onBlur = (e) => {
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setScrollActive(e.currentTarget, false);
+  };
+
   const onWheel = (e) => {
     const el = e.currentTarget;
     if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
       el.scrollLeft += e.deltaY;
       e.preventDefault();
+      e.stopPropagation();
     }
   };
 
@@ -55,22 +84,8 @@ export default function useHorizontalScrollRegion() {
     e.preventDefault();
   };
 
-  const endDrag = (e) => {
-    const el = e.currentTarget;
-    const s = dragStateRef.current;
-    if (s.pointerId != null && el.hasPointerCapture?.(s.pointerId)) {
-      el.releasePointerCapture(s.pointerId);
-    }
-    dragStateRef.current = { active: false, dragged: false, startX: 0, startLeft: 0, pointerId: null };
-    el.classList.remove('is-dragging');
-  };
-
   const onPointerUp = (e) => endDrag(e);
   const onPointerCancel = (e) => endDrag(e);
-  const onPointerLeave = (e) => {
-    // Mouse leaving while dragging should end visual drag state.
-    if (dragStateRef.current.active) endDrag(e);
-  };
 
   const onKeyDown = (e) => {
     const el = e.currentTarget;
@@ -83,6 +98,16 @@ export default function useHorizontalScrollRegion() {
     }
   };
 
-  return { onWheel, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onPointerLeave, onKeyDown };
+  return {
+    onWheel,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel,
+    onMouseEnter,
+    onMouseLeave,
+    onFocus,
+    onBlur,
+    onKeyDown,
+  };
 }
-

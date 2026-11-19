@@ -692,6 +692,12 @@
   margin: 12px 0 16px;
 }
 
+.orders-ready-queue__list.scroll-panel {
+  margin-top: 8px;
+  max-height: min(32vh, 280px);
+  padding-right: 4px;
+}
+
 .orders-ready-queue__toggle {
   width: 100%;
   justify-content: space-between;

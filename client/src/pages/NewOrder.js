@@ -6,6 +6,7 @@ import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSiz
 import { formatCustomerReceiptId, formatBranchReceiptLine } from '../utils/receiptId';
 import { playSuccessSound } from '../utils/sound';
 import { loadBrandSettings } from '../utils/brandSettings';
+import useScrollPanel from '../hooks/useScrollPanel';
 import './NewOrder.css';
 
 // Color Input Component - Defined outside to prevent recreation on each render
@@ -136,6 +137,8 @@ function pushRecent(type, id) {
 const NewOrder = () => {
   const { showToast, ToastContainer } = useToast();
   const { selectedBranchId, branch, user } = useAuth();
+  const cartItemsScroll = useScrollPanel({ axis: 'y' });
+  const customerDropdownScroll = useScrollPanel({ axis: 'y' });
   // For non-admin: use branch from auth. For admin: use selectedBranchId (branch switcher) or fallback to user's branch.
   const effectiveBranchId = user?.role === 'admin' ? selectedBranchId : (branch?.id ?? selectedBranchId);
   const [services, setServices] = useState([]);
@@ -1308,7 +1311,12 @@ Phone: ${customer.phone}
                     )}
                   </div>
                   {showCustomerDropdown && !selectedCustomer && searchTerm && searchTerm.trim() && (
-                    <div className="customer-dropdown-list" role="listbox">
+                    <div
+                      className="customer-dropdown-list scroll-panel scroll-panel--y"
+                      role="listbox"
+                      tabIndex={0}
+                      {...customerDropdownScroll}
+                    >
                       {customers.length > 0 ? (
                         customers.map(customer => (
                           <div
@@ -1639,7 +1647,13 @@ Phone: ${customer.phone}
             
             {orderItems.length > 0 ? (
               <>
-                <div className="order-items-list">
+                <div
+                  className="order-items-list scroll-panel scroll-panel--y scroll-panel--stack-on-phone"
+                  tabIndex={0}
+                  role="region"
+                  aria-label="Order items"
+                  {...cartItemsScroll}
+                >
                   {orderItems.map((item, index) => {
                     // Find service for this item (if it has a service_id)
                     const service = item.service_id ? services.find(s => s.id === item.service_id) : null;
