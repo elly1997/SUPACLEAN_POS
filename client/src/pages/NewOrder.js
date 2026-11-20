@@ -1,13 +1,20 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { getServices, getItems, searchCustomers, createCustomer, createOrderBatch, getCustomerOrders, getSettings, sendReceiptSms, validateCoupon } from '../api/api';
+import { getServices, getItems, searchCustomers, createCustomer, createOrderBatch, getCustomerOrders, getSettings, sendReceiptSms, validateCoupon, getCustomerLoyalty, redeemLoyaltyPoints } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { useBusinessDay } from '../contexts/BusinessDayContext';
 import { receiptWidthCss, receiptPadding, receiptFontSize, receiptCompactFontSize, termsQrSize, receiptBrandMargin, receiptBrandFontSize } from '../utils/receiptPrintConfig';
 import { formatCustomerReceiptId, formatBranchReceiptLine } from '../utils/receiptId';
 import { playSuccessSound } from '../utils/sound';
 import { loadBrandSettings } from '../utils/brandSettings';
+import { getBusinessTodayYmd, ymdToLocalDateTimeInput, formatBusinessDayLabel } from '../utils/businessDate';
+import LoyaltyBadge from '../components/LoyaltyBadge';
 import useScrollPanel from '../hooks/useScrollPanel';
 import './NewOrder.css';
+
+const LOYALTY_REDEEM_BLOCK = 10;
+const LOYALTY_BLOCK_VALUE = 10000;
+const LOYALTY_MAX_PERCENT = 0.1;
 
 // Color Input Component - Defined outside to prevent recreation on each render
 // Uses local state to prevent cursor jumping
@@ -136,11 +143,17 @@ function pushRecent(type, id) {
 
 const NewOrder = () => {
   const { showToast, ToastContainer } = useToast();
-  const { selectedBranchId, branch, user } = useAuth();
+  const { selectedBranchId, branch, user, hasPermission } = useAuth();
   const cartItemsScroll = useScrollPanel({ axis: 'y' });
   const customerDropdownScroll = useScrollPanel({ axis: 'y' });
   // For non-admin: use branch from auth. For admin: use selectedBranchId (branch switcher) or fallback to user's branch.
   const effectiveBranchId = user?.role === 'admin' ? selectedBranchId : (branch?.id ?? selectedBranchId);
+  const canApproveLargeRedeem = user?.role === 'admin' || user?.role === 'manager' || hasPermission?.('canManageCustomers');
+  const { workingDate, isCatchUpMode, today: businessToday } = useBusinessDay();
+  const orderDateSeed = useCallback(
+    () => ymdToLocalDateTimeInput(workingDate || getBusinessTodayYmd()),
+    [workingDate]
+  );
   const [services, setServices] = useState([]);
   const [items, setItems] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -175,8 +188,16 @@ const NewOrder = () => {
   const [appliedCoupon, setAppliedCoupon] = useState(null); // { code, discount_amount, ... }
   const [couponError, setCouponError] = useState('');
   const [validatingCoupon, setValidatingCoupon] = useState(false);
-  const [orderDateTime, setOrderDateTime] = useState(() => toLocalDateTimeInput(new Date()));
+  const [customerLoyalty, setCustomerLoyalty] = useState(null);
+  const [loyaltyPointsToRedeem, setLoyaltyPointsToRedeem] = useState('');
+  const [loyaltyError, setLoyaltyError] = useState('');
+  const [redeemingLoyalty, setRedeemingLoyalty] = useState(false);
+  const [orderDateTime, setOrderDateTime] = useState(() => ymdToLocalDateTimeInput(getBusinessTodayYmd()));
   const [manualReceiptNumber, setManualReceiptNumber] = useState('');
+
+  useEffect(() => {
+    setOrderDateTime(orderDateSeed());
+  }, [orderDateSeed]);
   const [loading, setLoading] = useState(false);
   const [showConfirmOrderModal, setShowConfirmOrderModal] = useState(false);
   const [itemSearchTerm, setItemSearchTerm] = useState('');
@@ -258,7 +279,9 @@ const NewOrder = () => {
       } else if (error.response?.status === 400) {
         showToast(error.response?.data?.error || 'Select a branch before searching customers.', 'error');
       } else if (error.message?.includes('Network Error') || error.message?.includes('ECONNREFUSED')) {
-        showToast('Cannot connect to server on port 5000. Please ensure the server is running.', 'error');
+        showToast('Cannot connect to server. Please check your connection.', 'error');
+      } else {
+        showToast(error.response?.data?.error || 'Customer search failed. Try again.', 'error');
       }
       setCustomers([]);
       setShowCustomerDropdown(false);
@@ -342,9 +365,18 @@ const NewOrder = () => {
     [totalAmount, appliedCoupon]
   );
 
+  const loyaltyDiscount = useMemo(() => {
+    const pts = parseInt(loyaltyPointsToRedeem, 10);
+    if (!Number.isFinite(pts) || pts < LOYALTY_REDEEM_BLOCK) return 0;
+    if (pts % LOYALTY_REDEEM_BLOCK !== 0) return 0;
+    const raw = Math.floor(pts / LOYALTY_REDEEM_BLOCK) * LOYALTY_BLOCK_VALUE;
+    const maxByTicket = Math.floor(totalAmount * LOYALTY_MAX_PERCENT);
+    return Math.min(totalAmount, raw, maxByTicket);
+  }, [loyaltyPointsToRedeem, totalAmount]);
+
   const discountAmount = useMemo(
-    () => Math.min(totalAmount, manualDiscount + couponDiscount),
-    [totalAmount, manualDiscount, couponDiscount]
+    () => Math.min(totalAmount, manualDiscount + couponDiscount + loyaltyDiscount),
+    [totalAmount, manualDiscount, couponDiscount, loyaltyDiscount]
   );
 
   const payableTotal = useMemo(() => Math.max(0, totalAmount - discountAmount), [totalAmount, discountAmount]);
@@ -379,6 +411,45 @@ const NewOrder = () => {
     setCouponError('');
   };
 
+  const clearLoyaltyRedeem = () => {
+    setLoyaltyPointsToRedeem('');
+    setLoyaltyError('');
+  };
+
+  const applyLoyaltyRedeemPreview = () => {
+    setLoyaltyError('');
+    const pts = parseInt(loyaltyPointsToRedeem, 10);
+    const available = customerLoyalty?.current_points || 0;
+    if (!Number.isFinite(pts) || pts < LOYALTY_REDEEM_BLOCK) {
+      setLoyaltyError(`Redeem at least ${LOYALTY_REDEEM_BLOCK} points`);
+      return;
+    }
+    if (pts % LOYALTY_REDEEM_BLOCK !== 0) {
+      setLoyaltyError(`Redeem in multiples of ${LOYALTY_REDEEM_BLOCK}`);
+      return;
+    }
+    if (pts > available) {
+      setLoyaltyError(`Only ${available} points available`);
+      return;
+    }
+    if (pts > 20 && !canApproveLargeRedeem) {
+      setLoyaltyError('Redeeming more than 20 points needs a manager');
+      return;
+    }
+    const maxByTicket = Math.floor(totalAmount * LOYALTY_MAX_PERCENT);
+    const raw = Math.floor(pts / LOYALTY_REDEEM_BLOCK) * LOYALTY_BLOCK_VALUE;
+    if (raw > maxByTicket) {
+      const maxPts = Math.floor(maxByTicket / LOYALTY_BLOCK_VALUE) * LOYALTY_REDEEM_BLOCK;
+      setLoyaltyError(
+        maxPts >= LOYALTY_REDEEM_BLOCK
+          ? `Capped at 10% of ticket — use at most ${maxPts} points`
+          : 'Order total too low for loyalty redeem (10% cap)'
+      );
+      return;
+    }
+    showToast(`Loyalty preview: TSh ${raw.toLocaleString()} off`, 'success');
+  };
+
   const handleReset = useCallback(() => {
     setSelectedCustomer(null);
     setOrderItems([]);
@@ -398,14 +469,14 @@ const NewOrder = () => {
     setTotalAmount(0);
     setReceiptDiscountType('amount');
     setReceiptDiscountValue('');
-    setOrderDateTime(toLocalDateTimeInput(new Date()));
+    setOrderDateTime(orderDateSeed());
     setManualReceiptNumber('');
     setSearchTerm('');
     setItemSearchTerm('');
     if (searchInputRef.current) {
       searchInputRef.current.focus();
     }
-  }, []);
+  }, [orderDateSeed]);
 
   // Keyboard shortcuts: Ctrl+N reset, F2 or Ctrl+F focus item search
   useEffect(() => {
@@ -468,13 +539,20 @@ const NewOrder = () => {
   }, [selectedCustomer]);
 
   useEffect(() => {
-    if (selectedCustomer) {
+    if (selectedCustomer?.id) {
       loadCustomerHistory();
       setShowCustomerDropdown(false);
+      clearLoyaltyRedeem();
+      getCustomerLoyalty(selectedCustomer.id)
+        .then((res) => setCustomerLoyalty(res.data || null))
+        .catch(() => setCustomerLoyalty(null));
     } else {
       setCustomerHistory([]);
+      setCustomerLoyalty(null);
+      clearLoyaltyRedeem();
     }
-  }, [selectedCustomer, loadCustomerHistory]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when customer id changes
+  }, [selectedCustomer?.id, loadCustomerHistory]);
 
   useEffect(() => {
     // Close dropdown when clicking outside
@@ -622,7 +700,9 @@ const NewOrder = () => {
       setSelectedCustomer(res.data);
       setShowNewCustomer(false);
       setNewCustomer({ name: '', phone: '', email: '', address: '' });
-      loadCustomers();
+      setSearchTerm(res.data?.name || res.data?.phone || '');
+      setCustomers([]);
+      setShowCustomerDropdown(false);
       showToast(
         res.data.existing
           ? (res.data.message || 'Customer with this phone already exists. Using existing customer for your order.')
@@ -660,11 +740,10 @@ const NewOrder = () => {
       showToast('Please select a valid receipt date and time', 'warning');
       return;
     }
-    const todayLocal = toLocalDateTimeInput(new Date()).slice(0, 10);
+    const todayLocal = businessToday || getBusinessTodayYmd();
     const selectedLocal = toLocalDateTimeInput(selectedOrderDate).slice(0, 10);
-    const isBackdated = selectedLocal < todayLocal;
-    if (isBackdated && !(manualReceiptNumber || '').trim()) {
-      showToast('Backdated orders require a manual receipt ID', 'warning');
+    if (selectedLocal > todayLocal) {
+      showToast('Receipt date cannot be after today', 'warning');
       return;
     }
     setShowConfirmOrderModal(true);
@@ -690,14 +769,7 @@ const NewOrder = () => {
       if (!selectedOrderDate || Number.isNaN(selectedOrderDate.getTime())) {
         throw new Error('Invalid receipt date and time selected.');
       }
-      const todayLocal = toLocalDateTimeInput(new Date()).slice(0, 10);
-      const selectedLocal = toLocalDateTimeInput(selectedOrderDate).slice(0, 10);
-      const isBackdated = selectedLocal < todayLocal;
       const trimmedManualReceipt = (manualReceiptNumber || '').trim();
-
-      if (isBackdated && !trimmedManualReceipt) {
-        throw new Error('Manual receipt ID is required for backdated orders.');
-      }
 
       // Allocate receipt number and insert all lines in one server request
       const preDiscountLineTotals = orderItems.map((item) => {
@@ -756,6 +828,38 @@ const NewOrder = () => {
       });
 
       const receipts = batchRes.data?.items || [];
+
+      const loyaltyPts = parseInt(loyaltyPointsToRedeem, 10);
+      if (
+        receipts.length > 0 &&
+        loyaltyDiscount > 0 &&
+        Number.isFinite(loyaltyPts) &&
+        loyaltyPts >= LOYALTY_REDEEM_BLOCK
+      ) {
+        try {
+          setRedeemingLoyalty(true);
+          const firstOrderId = receipts[0]?.order?.id || receipts[0]?.id;
+          await redeemLoyaltyPoints(selectedCustomer.id, loyaltyPts, firstOrderId, {
+            orderSubtotal: totalAmount,
+            managerApproved: canApproveLargeRedeem,
+          });
+          clearLoyaltyRedeem();
+          setCustomerLoyalty((prev) =>
+            prev
+              ? { ...prev, current_points: Math.max(0, (prev.current_points || 0) - loyaltyPts) }
+              : prev
+          );
+        } catch (loyaltyErr) {
+          console.error('Loyalty redeem after order failed:', loyaltyErr);
+          showToast(
+            'Order saved, but loyalty points were not deducted: ' +
+              (loyaltyErr.response?.data?.error || loyaltyErr.message),
+            'warning'
+          );
+        } finally {
+          setRedeemingLoyalty(false);
+        }
+      }
 
       if (receipts.length > 0) {
         const receiptNumberForSms = batchRes.data?.receipt_number || receipts[0].order.receipt_number;
@@ -1227,11 +1331,11 @@ Phone: ${customer.phone}
       <div className="order-header-modern">
         <div>
           <h1>New Order</h1>
-          <p className="subtitle">Create a laundry order · customer, garments, payment</p>
+          <p className="subtitle">Create a new laundry order</p>
         </div>
         <div className="header-actions">
-          <button onClick={handleReset} className="dk-btn dk-btn--secondary dk-btn--md" type="button" title="Clear form (Ctrl+N)">
-            Reset
+          <button onClick={handleReset} className="dk-btn dk-btn--secondary dk-btn--md" type="button">
+            🔄 Reset (Ctrl+N)
           </button>
         </div>
       </div>
@@ -1336,6 +1440,7 @@ Phone: ${customer.phone}
                             </div>
                             <div className="customer-dropdown-details">
                               <strong>{customer.name}</strong>
+                              <LoyaltyBadge tier={customer.tier} points={customer.current_points} />
                               <span>{customer.phone}</span>
                               {customer.branch_name && (
                                 <span className="customer-dropdown-branch">Home: {customer.branch_code || customer.branch_name}</span>
@@ -1364,6 +1469,11 @@ Phone: ${customer.phone}
                       </div>
                       <div className="customer-info-text">
                         <strong>{selectedCustomer.name}</strong>
+                        <LoyaltyBadge
+                          tier={customerLoyalty?.tier || selectedCustomer.tier}
+                          points={customerLoyalty?.current_points ?? selectedCustomer.current_points}
+                          size="md"
+                        />
                         <span>{selectedCustomer.phone}</span>
                         {selectedCustomer.is_other_branch && (
                           <span className="customer-dropdown-branch other-branch-badge" style={{ marginLeft: '8px', fontSize: '12px' }}>From another branch</span>
@@ -1793,6 +1903,12 @@ Phone: ${customer.phone}
                         <span>- TSh {couponDiscount.toLocaleString()}</span>
                       </div>
                     )}
+                    {loyaltyDiscount > 0 && (
+                      <div className="total-line">
+                        <span>Loyalty ({loyaltyPointsToRedeem} pts):</span>
+                        <span>- TSh {loyaltyDiscount.toLocaleString()}</span>
+                      </div>
+                    )}
                     <div className="total-line total-amount">
                       <span>Total Amount:</span>
                       <strong>TSh {payableTotal.toLocaleString()}</strong>
@@ -1826,7 +1942,7 @@ Phone: ${customer.phone}
                     {/* Coupon (Task 4) */}
                     <div className="form-group-modern">
                       <label>Coupon Code</label>
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      <div className="coupon-apply-row">
                         <input
                           type="text"
                           value={couponCodeInput}
@@ -1837,7 +1953,7 @@ Phone: ${customer.phone}
                         {appliedCoupon ? (
                           <button type="button" className="btn-secondary" onClick={clearCoupon}>Remove</button>
                         ) : (
-                          <button type="button" className="btn-secondary" onClick={handleApplyCoupon} disabled={validatingCoupon || !couponCodeInput.trim()}>
+                          <button type="button" className="btn-primary" onClick={handleApplyCoupon} disabled={validatingCoupon || !couponCodeInput.trim()}>
                             {validatingCoupon ? '…' : 'Apply'}
                           </button>
                         )}
@@ -1851,6 +1967,58 @@ Phone: ${customer.phone}
                         <div style={{ fontSize: '13px', color: 'var(--danger-color)', marginTop: 4 }}>⚠️ {couponError}</div>
                       )}
                     </div>
+
+                    {selectedCustomer && (
+                      <div className="form-group-modern">
+                        <label>
+                          Loyalty redeem
+                          {customerLoyalty
+                            ? ` (${customerLoyalty.current_points || 0} pts · ${customerLoyalty.tier || 'Bronze'})`
+                            : ''}
+                        </label>
+                        {customerLoyalty?.soft_perks?.length > 0 && (
+                          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: 6 }}>
+                            Soft perk: {customerLoyalty.soft_perks.map((p) => p.name).join(' · ')}
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            min="0"
+                            step="10"
+                            value={loyaltyPointsToRedeem}
+                            onChange={(e) => setLoyaltyPointsToRedeem(e.target.value)}
+                            placeholder="Multiples of 10"
+                            disabled={redeemingLoyalty || !(customerLoyalty?.current_points >= 10)}
+                          />
+                          {loyaltyDiscount > 0 ? (
+                            <button type="button" className="btn-secondary" onClick={clearLoyaltyRedeem}>
+                              Clear
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={applyLoyaltyRedeemPreview}
+                              disabled={!(customerLoyalty?.current_points >= 10)}
+                            >
+                              Apply
+                            </button>
+                          )}
+                        </div>
+                        {loyaltyDiscount > 0 && (
+                          <div style={{ fontSize: '13px', color: 'var(--success-color)', marginTop: 4 }}>
+                            Loyalty TSh {loyaltyDiscount.toLocaleString()} off (max 10% of ticket)
+                          </div>
+                        )}
+                        {loyaltyError && (
+                          <div style={{ fontSize: '13px', color: 'var(--danger-color)', marginTop: 4 }}>
+                            ⚠️ {loyaltyError}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <div className="form-group-modern">
                       <label>Payment Status</label>
@@ -1930,7 +2098,9 @@ Phone: ${customer.phone}
                         className="datetime-input"
                       />
                       <small className="form-hint">
-                        Use this when recording orders from a previous day.
+                        {isCatchUpMode
+                          ? `Catch-up: booking on ${formatBusinessDayLabel(workingDate)}. Change the day from Dashboard if needed.`
+                          : 'Set from Dashboard → Catch-up day to post onto a prior unreconciled day.'}
                       </small>
                     </div>
 
@@ -1943,7 +2113,7 @@ Phone: ${customer.phone}
                         placeholder="e.g. 145-19-03 (26)"
                       />
                       <small className="form-hint">
-                        Required for backdated entries. Leave blank for automatic ID on today&apos;s orders.
+                        Leave blank for automatic ID (including catch-up days). Enter only to match a paper receipt number.
                       </small>
                     </div>
 
@@ -1993,7 +2163,10 @@ Phone: ${customer.phone}
           <div className="confirm-order-modal">
             <h2 id="confirm-order-title">Review & confirm order</h2>
             <div className="confirm-order-summary">
-              <p><strong>Customer:</strong> {selectedCustomer?.name}</p>
+              <p style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <strong>Customer:</strong> {selectedCustomer?.name}
+                <LoyaltyBadge tier={selectedCustomer?.tier} points={selectedCustomer?.current_points} />
+              </p>
               <p><strong>Items:</strong> {orderItems.length} line{orderItems.length !== 1 ? 's' : ''}</p>
               <p><strong>Total:</strong> TSh {payableTotal.toLocaleString()}</p>
               <p><strong>Payment:</strong> {orderData.payment_status === 'not_paid' ? 'Not paid' : orderData.payment_status === 'advance' ? `Advance TSh ${(parseFloat(orderData.paid_amount) || 0).toLocaleString()}` : 'Paid in full'} ({String(orderData.payment_method || 'cash').replace('_', ' ')})</p>

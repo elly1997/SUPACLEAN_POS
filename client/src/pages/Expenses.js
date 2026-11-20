@@ -2,9 +2,10 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts, getPayrollEmployeesForAdvances, recalculateDailyCashForDate, getExpenseCategories, createExpenseCategory } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { useBusinessDay } from '../contexts/BusinessDayContext';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
-import { getBusinessTodayYmd } from '../utils/businessDate';
+import { getBusinessTodayYmd, formatBusinessDayLabel } from '../utils/businessDate';
 import './Expenses.css';
 
 const DEFAULT_EXPENSE_CATEGORIES = [
@@ -31,6 +32,7 @@ const PAYMENT_SOURCES = [
 const Expenses = () => {
   const { showToast, ToastContainer } = useToast();
   const { hasPermission, selectedBranchId } = useAuth();
+  const { workingDate, isCatchUpMode } = useBusinessDay();
   const canManageCash = hasPermission?.('canManageCash') ?? false;
   const [expenses, setExpenses] = useState([]);
   const [summary, setSummary] = useState([]);
@@ -51,6 +53,12 @@ const Expenses = () => {
   });
   const [filterDate, setFilterDate] = useState(() => getBusinessTodayYmd());
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
+
+  useEffect(() => {
+    if (!workingDate) return;
+    setFilterDate(workingDate);
+    setFormData((prev) => ({ ...prev, date: workingDate }));
+  }, [workingDate]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [payrollEmployees, setPayrollEmployees] = useState([]);
   const [savingClosing, setSavingClosing] = useState(false);
@@ -376,7 +384,12 @@ const Expenses = () => {
             onChange={(e) => setFilterDate(e.target.value)}
             className="date-filter"
           />
-          <p className="filter-date-hint">Choosing a date here loads that day’s list and sets the default <strong>Expense date</strong> when you add a new row. Daily closing uses the date in the form.</p>
+          <p className="filter-date-hint">
+            Choosing a date here loads that day’s list and sets the default <strong>Expense date</strong> when you add a new row.
+            {isCatchUpMode
+              ? ` Catch-up mode is set to ${formatBusinessDayLabel(workingDate)} from the Dashboard.`
+              : ' Daily closing uses the date in the form.'}
+          </p>
         </div>
         {canManageCash && (
           <button

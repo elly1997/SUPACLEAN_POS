@@ -5,6 +5,7 @@ const { authenticate, requireBranchAccess, requireBranchFeature } = require('../
 const { requirePermission } = require('../middleware/permissions');
 const { getEffectiveBranchId } = require('../utils/branchFilter');
 const { assertNotFutureBusinessDate } = require('../utils/businessDate');
+const { assertWritableBusinessDay } = require('../utils/reconciledDay');
 const cashManagement = require('./cashManagement');
 
 router.use(authenticate, requireBranchFeature('bank_deposits'));
@@ -86,7 +87,17 @@ router.post('/', requireBranchAccess(), requirePermission('canManageCash'), asyn
     return res.status(400).json({ error: 'Select a branch to record a bank deposit' });
   }
 
-  if (!assertNotFutureBusinessDate(String(date).trim().slice(0, 10), res, 'date')) {
+  const depositDate = String(date).trim().slice(0, 10);
+  if (!assertNotFutureBusinessDate(depositDate, res, 'date')) {
+    return;
+  }
+  if (
+    !(await assertWritableBusinessDay(depositDate, branchId, res, {
+      fieldName: 'date',
+      errorMessage:
+        'This deposit date is already reconciled. Pick an unreconciled day from the Dashboard catch-up tool, or ask an admin to unreconcile.',
+    }))
+  ) {
     return;
   }
   

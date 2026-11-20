@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   getTodayCashSummary,
+  getDailyCashSummary,
   createDailyCashSummary,
   reconcileDailyCash,
   sendDailyClosingReport,
@@ -19,11 +20,12 @@ import {
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { useBusinessDay } from '../contexts/BusinessDayContext';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
 import { receiptWidthCss } from '../utils/receiptPrintConfig';
 import { formatCustomerReceiptId } from '../utils/receiptId';
-import { getBusinessTodayYmd } from '../utils/businessDate';
+import { getBusinessTodayYmd, formatBusinessDayLabel } from '../utils/businessDate';
 import './CashManagement.css';
 
 const CLOSE_STEP_LABELS = ['Opening', 'Review', 'Deposits & Expenses', 'Reconcile'];
@@ -32,6 +34,7 @@ const CashManagement = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
   const { user, selectedBranchId, isAdmin, hasPermission } = useAuth();
+  const { workingDate, isCatchUpMode } = useBusinessDay();
   const canManageExpenses = hasPermission?.('canManageExpenses') ?? false;
   const canReconcile = hasPermission?.('canReconcile') ?? false;
   const [cashWorkspace, setCashWorkspace] = useState('close');
@@ -76,6 +79,7 @@ const CashManagement = () => {
   const [salesDetailRecalculating, setSalesDetailRecalculating] = useState(false);
   const tableScrollHandlers = useHorizontalScrollRegion();
   const today = getBusinessTodayYmd();
+  const activeDate = workingDate || today;
   const isAllBranches = isAdmin && (selectedBranchId == null || selectedBranchId === '');
   const toNum = (v) => {
     const n = Number(v);
@@ -84,7 +88,7 @@ const CashManagement = () => {
 
   useEffect(() => {
     loadData();
-  }, [selectedBranchId]);
+  }, [selectedBranchId, activeDate]);
 
   useEffect(() => {
     getActiveBankAccounts().then((res) => setActiveBankAccounts(res.data || [])).catch(() => setActiveBankAccounts([]));
@@ -100,9 +104,10 @@ const CashManagement = () => {
     setErrorMessage(null);
     setLoading(true);
     try {
+      const day = activeDate || getBusinessTodayYmd();
       const [summaryRes, depositsRes] = await Promise.all([
-        getTodayCashSummary(),
-        getBankDeposits({ start_date: today, end_date: today })
+        day === getBusinessTodayYmd() ? getTodayCashSummary() : getDailyCashSummary(day),
+        getBankDeposits({ start_date: day, end_date: day })
       ]);
       setSummary(summaryRes.data);
       setBankDeposits(depositsRes.data || []);
@@ -133,7 +138,8 @@ const CashManagement = () => {
   const loadTodayExpenses = async () => {
     setExpensesLoading(true);
     try {
-      const res = await getExpenses({ start_date: today, end_date: today, limit: 100 });
+      const day = activeDate || getBusinessTodayYmd();
+      const res = await getExpenses({ start_date: day, end_date: day, limit: 100 });
       setTodayExpenses(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
       console.error('Error loading today expenses:', err);
@@ -167,10 +173,10 @@ const CashManagement = () => {
 
 
   useEffect(() => {
-    if (closeStep === 3 && canManageExpenses && todayExpenses.length === 0) {
+    if (closeStep === 3 && canManageExpenses) {
       loadTodayExpenses();
     }
-  }, [closeStep]);
+  }, [closeStep, activeDate, canManageExpenses]);
 
   const rowDateKey = (row) => (row?.date != null ? String(row.date).slice(0, 10) : '');
 
@@ -344,7 +350,7 @@ const CashManagement = () => {
     setSaving(true);
     try {
       const res = await createDailyCashSummary({
-        date: today,
+        date: activeDate || today,
         bank_deposits: summary.bank_deposits || 0,
         notes: summary.notes || ''
       });
@@ -370,7 +376,7 @@ const CashManagement = () => {
     }
     setSavingOpening(true);
     try {
-      await saveOpeningSession(today, { opening_cash: val, notes: openingNotes });
+      await saveOpeningSession(activeDate || today, { opening_cash: val, notes: openingNotes });
       showToast('Opening session saved.', 'success');
       setOpeningNotes('');
       loadData();
@@ -438,7 +444,7 @@ const CashManagement = () => {
     setManualWhatsAppReport(null);
     try {
       const cashierName = user?.fullName || user?.username || 'Cashier';
-      const result = await reconcileDailyCash(today, { reconciled_by: cashierName });
+      const result = await reconcileDailyCash(activeDate || today, { reconciled_by: cashierName });
       const data = result?.data || result;
       applyReportDeliveryResult(data, 'Reconciled. Report sent to director.');
       loadData();
@@ -499,7 +505,7 @@ const CashManagement = () => {
     e.preventDefault();
     try {
       await createBankDeposit({
-        date: today,
+        date: activeDate || today,
         amount: depositForm.amount,
         reference_number: depositForm.reference_number || null,
         bank_account_id: (depositForm.bank_account_id && depositForm.bank_account_id !== 'other') ? Number(depositForm.bank_account_id) : null,
@@ -829,7 +835,8 @@ const CashManagement = () => {
           <h1>Cash Management</h1>
           <p className="subtitle">
             {summary.all_branches ? 'All branches (consolidated) · ' : ''}
-            Daily cash summary - {new Date(today).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            Daily cash summary - {formatBusinessDayLabel(activeDate || today)}
+            {isCatchUpMode ? ' (catch-up)' : ''}
           </p>
         </div>
         <div className="header-actions">

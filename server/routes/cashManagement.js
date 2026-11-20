@@ -11,6 +11,7 @@ const {
   deliverDirectorDailyReport,
 } = require('../utils/dailyClosingReport');
 const { notifyCashShort, notifyReconciledDay } = require('../utils/adminInbox');
+const { listWorkableBusinessDays } = require('../utils/reconciledDay');
 
 function requireAdminForForceRecalc(req, res, next) {
   const force = req.body?.force === true || req.query?.force === '1' || req.query?.force === 'true';
@@ -1130,6 +1131,25 @@ router.post('/unreconcile/:date', requireBranchAccess(), requireRole('admin'), a
   } catch (err) {
     console.error('Error unreconciling daily cash:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Workable business days for catch-up posting (orders / expenses / deposits).
+ * Includes today and prior calendar days that are not reconciled (missing summary = open).
+ */
+router.get('/workable-days', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
+  const branchId = getEffectiveBranchId(req);
+  if (branchId == null) {
+    return res.status(400).json({ error: 'Select a branch to view workable days' });
+  }
+  try {
+    const lookback = Number.parseInt(req.query.lookback, 10);
+    const payload = await listWorkableBusinessDays(branchId, Number.isFinite(lookback) ? lookback : 14);
+    return res.json(payload);
+  } catch (err) {
+    console.error('Error listing workable business days:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 

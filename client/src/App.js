@@ -2,6 +2,7 @@ import React, { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { BusinessDayProvider } from './contexts/BusinessDayContext';
 import Layout from './components/Layout';
 import LegacyLayout from './components/layout-legacy/Layout';
 import InstallPrompt from './components/InstallPrompt';
@@ -123,27 +124,29 @@ function App() {
                 path="/*"
                 element={
                   <ProtectedRoute>
-                    <AppLayout>
-                      <Routes>
-                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                        <Route path="/dashboard" element={<Dashboard />} />
-                        <Route path="/new-order" element={<NewOrder />} />
-                        <Route path="/orders" element={<Orders />} />
-                        <Route path="/customers" element={<Customers />} />
-                        <Route path="/price-list" element={<PriceList />} />
-                        <Route path="/cash-management" element={<CashManagement />} />
-                        <Route path="/expenses" element={<Expenses />} />
-                        <Route path="/reports" element={<Reports />} />
-                        <Route path="/monthly-billing" element={<MonthlyBilling />} />
-                        <Route path="/payroll" element={<Payroll />} />
-                        <Route path="/cleaning-services" element={<CleaningServices />} />
-                        <Route path="/admin/branches" element={<AdminBranches />} />
-                        <Route path="/admin/banking" element={<AdminBanking />} />
-                        <Route path="/admin/sms-marketing" element={<AdminSmsMarketing />} />
-                        <Route path="/admin/coupons" element={<AdminCoupons />} />
-                        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-                      </Routes>
-                    </AppLayout>
+                    <BusinessDayProvider>
+                      <AppLayout>
+                        <Routes>
+                          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                          <Route path="/dashboard" element={<Dashboard />} />
+                          <Route path="/new-order" element={<NewOrder />} />
+                          <Route path="/orders" element={<Orders />} />
+                          <Route path="/customers" element={<Customers />} />
+                          <Route path="/price-list" element={<PriceList />} />
+                          <Route path="/cash-management" element={<CashManagement />} />
+                          <Route path="/expenses" element={<Expenses />} />
+                          <Route path="/reports" element={<Reports />} />
+                          <Route path="/monthly-billing" element={<MonthlyBilling />} />
+                          <Route path="/payroll" element={<Payroll />} />
+                          <Route path="/cleaning-services" element={<CleaningServices />} />
+                          <Route path="/admin/branches" element={<AdminBranches />} />
+                          <Route path="/admin/banking" element={<AdminBanking />} />
+                          <Route path="/admin/sms-marketing" element={<AdminSmsMarketing />} />
+                          <Route path="/admin/coupons" element={<AdminCoupons />} />
+                          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                        </Routes>
+                      </AppLayout>
+                    </BusinessDayProvider>
                   </ProtectedRoute>
                 }
               />

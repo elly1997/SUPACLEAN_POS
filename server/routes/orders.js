@@ -47,7 +47,12 @@ const {
   storeIdempotencyResponse,
   pruneExpiredIdempotencyKeys,
 } = require('../utils/idempotency');
-const { assertNotFutureBusinessDate, getBusinessTodayYmd } = require('../utils/businessDate');
+const {
+  assertNotFutureBusinessDate,
+  getBusinessTodayYmd,
+  getBusinessYmdForInstant,
+} = require('../utils/businessDate');
+const { assertWritableBusinessDay } = require('../utils/reconciledDay');
 const { generatePlaceholderPhone, isPlaceholderPhone, normalizePhoneDigits, sanitizeImportPhone, resolveInsertId } = require('../utils/customerPhone');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
@@ -991,9 +996,9 @@ router.post('/batch', authenticate, requireBranchAccess(), requirePermission('ca
       return;
     }
     const finalOrderDateIso = parsedOrderDate.toISOString();
-    const day = String(parsedOrderDate.getDate()).padStart(2, '0');
-    const month = String(parsedOrderDate.getMonth() + 1).padStart(2, '0');
-    const dateStr = moment(parsedOrderDate).format('YYYY-MM-DD');
+    const dateStr =
+      getBusinessYmdForInstant(parsedOrderDate) || moment(parsedOrderDate).format('YYYY-MM-DD');
+    const [, month, day] = dateStr.split('-');
 
     const orderBranchId =
       req.user.role === 'admin'
@@ -1002,6 +1007,22 @@ router.post('/batch', authenticate, requireBranchAccess(), requirePermission('ca
 
     if (orderBranchId == null) {
       return res.status(400).json({ error: 'Select a branch before creating an order.' });
+    }
+
+    const acknowledgeReconciledDay =
+      req.body?.acknowledge_reconciled_day === true ||
+      req.body?.acknowledge_reconciled_day === 'true' ||
+      req.body?.acknowledge_reconciled_day === 1 ||
+      req.body?.acknowledge_reconciled_day === '1';
+    if (
+      !(await assertWritableBusinessDay(dateStr, orderBranchId, res, {
+        fieldName: 'order_date',
+        acknowledge: acknowledgeReconciledDay,
+        errorMessage:
+          'This order date is already reconciled. Pick an unreconciled day from the Dashboard catch-up tool, or ask an admin to unreconcile.',
+      }))
+    ) {
+      return;
     }
 
     const customer = await db.get('SELECT * FROM customers WHERE id = ?', [customer_id]);
@@ -1313,7 +1334,28 @@ router.post('/', authenticate, requireBranchAccess(), requirePermission('canCrea
       return;
     }
     const finalOrderDateIso = parsedOrderDate.toISOString();
-
+    const orderDateYmd =
+      getBusinessYmdForInstant(parsedOrderDate) || finalOrderDateIso.slice(0, 10);
+    const earlyBranchId =
+      req.user.role === 'admin'
+        ? branch_id || getEffectiveBranchId(req) || req.user?.branchId || null
+        : req.user?.branchId || null;
+    const acknowledgeReconciledDay =
+      req.body?.acknowledge_reconciled_day === true ||
+      req.body?.acknowledge_reconciled_day === 'true' ||
+      req.body?.acknowledge_reconciled_day === 1 ||
+      req.body?.acknowledge_reconciled_day === '1';
+    if (
+      earlyBranchId != null &&
+      !(await assertWritableBusinessDay(orderDateYmd, earlyBranchId, res, {
+        fieldName: 'order_date',
+        acknowledge: acknowledgeReconciledDay,
+        errorMessage:
+          'This order date is already reconciled. Pick an unreconciled day from the Dashboard catch-up tool, or ask an admin to unreconcile.',
+      }))
+    ) {
+      return;
+    }
 
     console.log('Order data:', { customer_id, service_id, quantity, payment_status, branch_id });
 
