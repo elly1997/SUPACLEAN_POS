@@ -6,15 +6,22 @@ const { requireAnyPermission, hasPermission } = require('../middleware/permissio
 
 router.use(authenticate);
 
-/** Frembo laundry earn rules — soft perks preferred; cash redeem capped. */
+/**
+ * Supaclean tokens (loyalty wallet unit):
+ * - Earn 1 token per TSh 20,000 spent (on collect + paid_full)
+ * - Redeem from 50 tokens; 1 token = TSh 500 (laundry discount, pickup/delivery, or partner value)
+ */
 const LOYALTY_CONFIG = {
+  unitLabel: 'token',
+  unitLabelPlural: 'tokens',
   pointsPerTSh: 1 / 20000,
   minSpendForPoint: 20000,
-  minRedeemPoints: 10,
-  pointsPerRedemption: 10,
-  redemptionValueTSh: 10000,
-  maxRedeemPercentOfSubtotal: 0.1,
-  managerRedeemPointsThreshold: 20,
+  minRedeemPoints: 50,
+  pointsPerRedemption: 1,
+  redemptionValueTSh: 500,
+  /** Discount may cover the full ticket; never more than subtotal. */
+  maxRedeemPercentOfSubtotal: 1,
+  managerRedeemPointsThreshold: 100,
   partnerEarnRate: 0.5,
   defaultBrand: 'supaclean_laundry',
   tiers: {
@@ -142,13 +149,49 @@ router.get('/customer/:customerId', async (req, res) => {
       Number(loyalty.lifetime_points) || 0,
       loyalty.tier || 'Bronze'
     );
+
+    let earnedThisMonth = 0;
+    let earnedThisYear = 0;
+    try {
+      const period = await db.get(
+        `SELECT
+           COALESCE(SUM(CASE
+             WHEN transaction_type = 'earned'
+              AND created_at >= date_trunc('month', CURRENT_TIMESTAMP)
+             THEN points ELSE 0 END), 0)::int AS earned_this_month,
+           COALESCE(SUM(CASE
+             WHEN transaction_type = 'earned'
+              AND created_at >= date_trunc('year', CURRENT_TIMESTAMP)
+             THEN points ELSE 0 END), 0)::int AS earned_this_year
+         FROM loyalty_transactions
+         WHERE customer_id = ?`,
+        [customerId]
+      );
+      earnedThisMonth = Number(period?.earned_this_month) || 0;
+      earnedThisYear = Number(period?.earned_this_year) || 0;
+    } catch (periodErr) {
+      console.warn('loyalty period totals:', periodErr.message);
+    }
+
+    const current = Number(loyalty.current_points) || 0;
+    const lifetime = Number(loyalty.lifetime_points) || 0;
     res.json({
       customer_id: parseInt(customerId, 10),
-      current_points: Number(loyalty.current_points) || 0,
-      lifetime_points: Number(loyalty.lifetime_points) || 0,
+      current_points: current,
+      lifetime_points: lifetime,
+      current_tokens: current,
+      lifetime_tokens: lifetime,
+      earned_this_month: earnedThisMonth,
+      earned_this_year: earnedThisYear,
+      token_value_tsh: LOYALTY_CONFIG.redemptionValueTSh,
+      min_redeem_tokens: LOYALTY_CONFIG.minRedeemPoints,
+      earn_rule: `1 token per TSh ${LOYALTY_CONFIG.minSpendForPoint.toLocaleString()} spent`,
+      redeem_rule: `From ${LOYALTY_CONFIG.minRedeemPoints} tokens · 1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()}`,
+      unit: LOYALTY_CONFIG.unitLabelPlural,
       tier: loyalty.tier || 'Bronze',
       next_tier,
       points_to_next_tier,
+      tokens_to_next_tier: points_to_next_tier,
       soft_perks: softPerksForTierSimple(loyalty.tier || 'Bronze'),
     });
   } catch (err) {
@@ -205,12 +248,12 @@ router.post('/redeem', requireAnyPermission('canManageOrders', 'canManageCash'),
   }
   if (points < LOYALTY_CONFIG.minRedeemPoints) {
     return res.status(400).json({
-      error: `Minimum ${LOYALTY_CONFIG.minRedeemPoints} points required to redeem (worth TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()} discount)`,
+      error: `Minimum ${LOYALTY_CONFIG.minRedeemPoints} tokens required to redeem (TSh ${(LOYALTY_CONFIG.minRedeemPoints * LOYALTY_CONFIG.redemptionValueTSh).toLocaleString()} value)`,
     });
   }
   if (points % LOYALTY_CONFIG.pointsPerRedemption !== 0) {
     return res.status(400).json({
-      error: `Redeem in multiples of ${LOYALTY_CONFIG.pointsPerRedemption} points (${LOYALTY_CONFIG.pointsPerRedemption} points = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()} discount)`,
+      error: `Redeem whole tokens only (1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()})`,
     });
   }
 
@@ -220,7 +263,7 @@ router.post('/redeem', requireAnyPermission('canManageOrders', 'canManageCash'),
     hasPermission(req.user, 'canManageCustomers');
   if (points > LOYALTY_CONFIG.managerRedeemPointsThreshold && !isManager && !managerApproved) {
     return res.status(403).json({
-      error: `Redeeming more than ${LOYALTY_CONFIG.managerRedeemPointsThreshold} points needs a manager.`,
+      error: `Redeeming more than ${LOYALTY_CONFIG.managerRedeemPointsThreshold} tokens needs a manager.`,
       code: 'manager_approval_required',
     });
   }
@@ -229,7 +272,7 @@ router.post('/redeem', requireAnyPermission('canManageOrders', 'canManageCash'),
     const loyalty = await ensureLoyaltyRow(customerId);
     if ((loyalty.current_points || 0) < points) {
       return res.status(400).json({
-        error: `Insufficient points. Current balance: ${loyalty.current_points || 0} points`,
+        error: `Insufficient tokens. Current balance: ${loyalty.current_points || 0} tokens`,
       });
     }
 
@@ -240,25 +283,23 @@ router.post('/redeem', requireAnyPermission('canManageOrders', 'canManageCash'),
     if (Number.isFinite(subtotal) && subtotal > 0) {
       const maxDiscount = Math.floor(subtotal * LOYALTY_CONFIG.maxRedeemPercentOfSubtotal);
       if (discountAmount > maxDiscount) {
-        const maxBlocks = Math.floor(maxDiscount / LOYALTY_CONFIG.redemptionValueTSh);
-        const allowedPoints = maxBlocks * LOYALTY_CONFIG.pointsPerRedemption;
+        const allowedPoints = Math.floor(maxDiscount / LOYALTY_CONFIG.redemptionValueTSh) * LOYALTY_CONFIG.pointsPerRedemption;
         if (allowedPoints < LOYALTY_CONFIG.minRedeemPoints) {
           return res.status(400).json({
-            error: `Loyalty discount cannot exceed ${LOYALTY_CONFIG.maxRedeemPercentOfSubtotal * 100}% of the order (max TSh ${maxDiscount.toLocaleString()}). Increase the order total or redeem fewer points.`,
+            error: `Order total (TSh ${maxDiscount.toLocaleString()}) is too low for the minimum ${LOYALTY_CONFIG.minRedeemPoints}-token redeem (TSh ${(LOYALTY_CONFIG.minRedeemPoints * LOYALTY_CONFIG.redemptionValueTSh).toLocaleString()}).`,
             code: 'redeem_cap',
             max_discount: maxDiscount,
           });
         }
         if (points > allowedPoints) {
           return res.status(400).json({
-            error: `At this order total you can redeem at most ${allowedPoints} points (TSh ${(allowedPoints / LOYALTY_CONFIG.pointsPerRedemption) * LOYALTY_CONFIG.redemptionValueTSh} / ${LOYALTY_CONFIG.maxRedeemPercentOfSubtotal * 100}% cap).`,
+            error: `At this order total you can redeem at most ${allowedPoints} tokens (TSh ${(allowedPoints * LOYALTY_CONFIG.redemptionValueTSh).toLocaleString()}).`,
             code: 'redeem_cap',
             max_points: allowedPoints,
-            max_discount: maxBlocks * LOYALTY_CONFIG.redemptionValueTSh,
+            max_discount: allowedPoints * LOYALTY_CONFIG.redemptionValueTSh,
           });
         }
-        discountAmount =
-          Math.floor(points / LOYALTY_CONFIG.pointsPerRedemption) * LOYALTY_CONFIG.redemptionValueTSh;
+        discountAmount = allowedPoints * LOYALTY_CONFIG.redemptionValueTSh;
       }
     }
 
@@ -268,10 +309,7 @@ router.post('/redeem', requireAnyPermission('canManageOrders', 'canManageCash'),
       [newPoints, customerId]
     );
 
-    const description =
-      points === LOYALTY_CONFIG.pointsPerRedemption
-        ? 'Points redeemed at checkout (worth 10,000 TSh)'
-        : `Points redeemed for TSh ${discountAmount.toLocaleString()} discount`;
+    const description = `Tokens redeemed for TSh ${discountAmount.toLocaleString()} value (laundry / pickup / partner)`;
 
     await insertLoyaltyTx({
       customerId,
@@ -284,9 +322,11 @@ router.post('/redeem', requireAnyPermission('canManageOrders', 'canManageCash'),
 
     res.json({
       points_redeemed: points,
+      tokens_redeemed: points,
       current_points: newPoints,
+      current_tokens: newPoints,
       discount_amount: discountAmount,
-      message: `Discount of TSh ${discountAmount.toLocaleString()} applied`,
+      message: `TSh ${discountAmount.toLocaleString()} token value applied`,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -309,12 +349,21 @@ router.get('/tiers', (req, res) => {
   res.json({
     ...LOYALTY_CONFIG.tiers,
     upgradeBonus: LOYALTY_CONFIG.upgradeBonus,
+    unit: LOYALTY_CONFIG.unitLabelPlural,
+    earn: {
+      tokensPerTSh: LOYALTY_CONFIG.pointsPerTSh,
+      minSpendForToken: LOYALTY_CONFIG.minSpendForPoint,
+      rule: `1 token per TSh ${LOYALTY_CONFIG.minSpendForPoint.toLocaleString()} spent`,
+    },
     redeem: {
       minPoints: LOYALTY_CONFIG.minRedeemPoints,
+      minTokens: LOYALTY_CONFIG.minRedeemPoints,
       pointsPerBlock: LOYALTY_CONFIG.pointsPerRedemption,
       valuePerBlockTSh: LOYALTY_CONFIG.redemptionValueTSh,
+      valuePerTokenTSh: LOYALTY_CONFIG.redemptionValueTSh,
       maxPercentOfSubtotal: LOYALTY_CONFIG.maxRedeemPercentOfSubtotal,
       managerThreshold: LOYALTY_CONFIG.managerRedeemPointsThreshold,
+      rule: `From ${LOYALTY_CONFIG.minRedeemPoints} tokens · 1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()}`,
     },
   });
 });

@@ -1340,7 +1340,7 @@ const Reports = () => {
                 )}
               </div>
               <div className="reports-info-banner">
-                <strong>Loyalty points:</strong> earned from ledger (collection). 1 pt / 20,000 TSh base · 10 pts = 10,000 TSh · cash redeem max 10% of ticket
+                <strong>Tokens:</strong> earned on collection (paid full). 1 token / TSh 20,000 · redeem from 50 tokens · 1 token = TSh 500
               </div>
               {loyaltySummary && (
                 <div className="reports-info-banner" style={{ marginTop: 8 }}>

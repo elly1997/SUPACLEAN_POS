@@ -8,14 +8,18 @@ import { formatCustomerReceiptId, formatBranchReceiptLine } from '../utils/recei
 import { playSuccessSound } from '../utils/sound';
 import { loadBrandSettings } from '../utils/brandSettings';
 import { getBusinessTodayYmd, ymdToLocalDateTimeInput, formatBusinessDayLabel } from '../utils/businessDate';
+import {
+  TOKEN_REDEEM_MIN,
+  TOKEN_VALUE_TSH,
+  TOKEN_REDEEM_STEP,
+  TOKEN_MANAGER_THRESHOLD,
+  TOKEN_MAX_PERCENT_OF_TICKET,
+  tokensToTsh,
+} from '../utils/loyaltyTokens';
 import LoyaltyBadge from '../components/LoyaltyBadge';
 import WorkingDayPicker from '../components/WorkingDayPicker';
 import useScrollPanel from '../hooks/useScrollPanel';
 import './NewOrder.css';
-
-const LOYALTY_REDEEM_BLOCK = 10;
-const LOYALTY_BLOCK_VALUE = 10000;
-const LOYALTY_MAX_PERCENT = 0.1;
 
 // Color Input Component - Defined outside to prevent recreation on each render
 // Uses local state to prevent cursor jumping
@@ -368,10 +372,10 @@ const NewOrder = () => {
 
   const loyaltyDiscount = useMemo(() => {
     const pts = parseInt(loyaltyPointsToRedeem, 10);
-    if (!Number.isFinite(pts) || pts < LOYALTY_REDEEM_BLOCK) return 0;
-    if (pts % LOYALTY_REDEEM_BLOCK !== 0) return 0;
-    const raw = Math.floor(pts / LOYALTY_REDEEM_BLOCK) * LOYALTY_BLOCK_VALUE;
-    const maxByTicket = Math.floor(totalAmount * LOYALTY_MAX_PERCENT);
+    if (!Number.isFinite(pts) || pts < TOKEN_REDEEM_MIN) return 0;
+    if (pts % TOKEN_REDEEM_STEP !== 0) return 0;
+    const raw = tokensToTsh(pts);
+    const maxByTicket = Math.floor(totalAmount * TOKEN_MAX_PERCENT_OF_TICKET);
     return Math.min(totalAmount, raw, maxByTicket);
   }, [loyaltyPointsToRedeem, totalAmount]);
 
@@ -421,34 +425,34 @@ const NewOrder = () => {
     setLoyaltyError('');
     const pts = parseInt(loyaltyPointsToRedeem, 10);
     const available = customerLoyalty?.current_points || 0;
-    if (!Number.isFinite(pts) || pts < LOYALTY_REDEEM_BLOCK) {
-      setLoyaltyError(`Redeem at least ${LOYALTY_REDEEM_BLOCK} points`);
+    if (!Number.isFinite(pts) || pts < TOKEN_REDEEM_MIN) {
+      setLoyaltyError(`Redeem at least ${TOKEN_REDEEM_MIN} tokens`);
       return;
     }
-    if (pts % LOYALTY_REDEEM_BLOCK !== 0) {
-      setLoyaltyError(`Redeem in multiples of ${LOYALTY_REDEEM_BLOCK}`);
+    if (pts % TOKEN_REDEEM_STEP !== 0) {
+      setLoyaltyError('Use whole tokens only');
       return;
     }
     if (pts > available) {
-      setLoyaltyError(`Only ${available} points available`);
+      setLoyaltyError(`Only ${available} tokens available`);
       return;
     }
-    if (pts > 20 && !canApproveLargeRedeem) {
-      setLoyaltyError('Redeeming more than 20 points needs a manager');
+    if (pts > TOKEN_MANAGER_THRESHOLD && !canApproveLargeRedeem) {
+      setLoyaltyError(`Redeeming more than ${TOKEN_MANAGER_THRESHOLD} tokens needs a manager`);
       return;
     }
-    const maxByTicket = Math.floor(totalAmount * LOYALTY_MAX_PERCENT);
-    const raw = Math.floor(pts / LOYALTY_REDEEM_BLOCK) * LOYALTY_BLOCK_VALUE;
+    const maxByTicket = Math.floor(totalAmount * TOKEN_MAX_PERCENT_OF_TICKET);
+    const raw = tokensToTsh(pts);
     if (raw > maxByTicket) {
-      const maxPts = Math.floor(maxByTicket / LOYALTY_BLOCK_VALUE) * LOYALTY_REDEEM_BLOCK;
+      const maxPts = Math.floor(maxByTicket / TOKEN_VALUE_TSH) * TOKEN_REDEEM_STEP;
       setLoyaltyError(
-        maxPts >= LOYALTY_REDEEM_BLOCK
-          ? `Capped at 10% of ticket — use at most ${maxPts} points`
-          : 'Order total too low for loyalty redeem (10% cap)'
+        maxPts >= TOKEN_REDEEM_MIN
+          ? `Order total allows at most ${maxPts} tokens`
+          : `Order total too low for ${TOKEN_REDEEM_MIN}-token redeem (TSh ${(TOKEN_REDEEM_MIN * TOKEN_VALUE_TSH).toLocaleString()})`
       );
       return;
     }
-    showToast(`Loyalty preview: TSh ${raw.toLocaleString()} off`, 'success');
+    showToast(`Token preview: TSh ${raw.toLocaleString()} value`, 'success');
   };
 
   const handleReset = useCallback(() => {
@@ -835,7 +839,7 @@ const NewOrder = () => {
         receipts.length > 0 &&
         loyaltyDiscount > 0 &&
         Number.isFinite(loyaltyPts) &&
-        loyaltyPts >= LOYALTY_REDEEM_BLOCK
+        loyaltyPts >= TOKEN_REDEEM_MIN
       ) {
         try {
           setRedeemingLoyalty(true);
@@ -847,13 +851,17 @@ const NewOrder = () => {
           clearLoyaltyRedeem();
           setCustomerLoyalty((prev) =>
             prev
-              ? { ...prev, current_points: Math.max(0, (prev.current_points || 0) - loyaltyPts) }
+              ? {
+                  ...prev,
+                  current_points: Math.max(0, (prev.current_points || 0) - loyaltyPts),
+                  current_tokens: Math.max(0, (prev.current_tokens || prev.current_points || 0) - loyaltyPts),
+                }
               : prev
           );
         } catch (loyaltyErr) {
           console.error('Loyalty redeem after order failed:', loyaltyErr);
           showToast(
-            'Order saved, but loyalty points were not deducted: ' +
+            'Order saved, but tokens were not deducted: ' +
               (loyaltyErr.response?.data?.error || loyaltyErr.message),
             'warning'
           );
@@ -1480,6 +1488,16 @@ Phone: ${customer.phone}
                           points={customerLoyalty?.current_points ?? selectedCustomer.current_points}
                           size="md"
                         />
+                        {customerLoyalty && (
+                          <div className="customer-history-compact" style={{ marginTop: 4 }}>
+                            <small>
+                              Tokens: {customerLoyalty.current_points || 0} available
+                              {' · '}this month +{customerLoyalty.earned_this_month || 0}
+                              {' · '}this year +{customerLoyalty.earned_this_year || 0}
+                              {' · '}lifetime {customerLoyalty.lifetime_points || 0}
+                            </small>
+                          </div>
+                        )}
                         <span>{selectedCustomer.phone}</span>
                         {selectedCustomer.is_other_branch && (
                           <span className="customer-dropdown-branch other-branch-badge" style={{ marginLeft: '8px', fontSize: '12px' }}>From another branch</span>
@@ -1911,7 +1929,7 @@ Phone: ${customer.phone}
                     )}
                     {loyaltyDiscount > 0 && (
                       <div className="total-line">
-                        <span>Loyalty ({loyaltyPointsToRedeem} pts):</span>
+                        <span>Tokens ({loyaltyPointsToRedeem}):</span>
                         <span>- TSh {loyaltyDiscount.toLocaleString()}</span>
                       </div>
                     )}
@@ -1977,11 +1995,17 @@ Phone: ${customer.phone}
                     {selectedCustomer && (
                       <div className="form-group-modern">
                         <label>
-                          Loyalty redeem
+                          Token redeem
                           {customerLoyalty
-                            ? ` (${customerLoyalty.current_points || 0} pts · ${customerLoyalty.tier || 'Bronze'})`
+                            ? ` (${customerLoyalty.current_points || 0} tokens · ${customerLoyalty.tier || 'Bronze'})`
                             : ''}
                         </label>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: 6 }}>
+                          From {TOKEN_REDEEM_MIN} tokens · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()}
+                          {customerLoyalty
+                            ? ` · earned this month ${customerLoyalty.earned_this_month || 0}, this year ${customerLoyalty.earned_this_year || 0}`
+                            : ''}
+                        </div>
                         {customerLoyalty?.soft_perks?.length > 0 && (
                           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: 6 }}>
                             Soft perk: {customerLoyalty.soft_perks.map((p) => p.name).join(' · ')}
@@ -1991,12 +2015,12 @@ Phone: ${customer.phone}
                           <input
                             type="number"
                             inputMode="numeric"
-                            min="0"
-                            step="10"
+                            min={TOKEN_REDEEM_MIN}
+                            step={TOKEN_REDEEM_STEP}
                             value={loyaltyPointsToRedeem}
                             onChange={(e) => setLoyaltyPointsToRedeem(e.target.value)}
-                            placeholder="Multiples of 10"
-                            disabled={redeemingLoyalty || !(customerLoyalty?.current_points >= 10)}
+                            placeholder={`Min ${TOKEN_REDEEM_MIN}`}
+                            disabled={redeemingLoyalty || !(customerLoyalty?.current_points >= TOKEN_REDEEM_MIN)}
                           />
                           {loyaltyDiscount > 0 ? (
                             <button type="button" className="btn-secondary" onClick={clearLoyaltyRedeem}>
@@ -2007,7 +2031,7 @@ Phone: ${customer.phone}
                               type="button"
                               className="btn-secondary"
                               onClick={applyLoyaltyRedeemPreview}
-                              disabled={!(customerLoyalty?.current_points >= 10)}
+                              disabled={!(customerLoyalty?.current_points >= TOKEN_REDEEM_MIN)}
                             >
                               Apply
                             </button>
@@ -2015,7 +2039,7 @@ Phone: ${customer.phone}
                         </div>
                         {loyaltyDiscount > 0 && (
                           <div style={{ fontSize: '13px', color: 'var(--success-color)', marginTop: 4 }}>
-                            Loyalty TSh {loyaltyDiscount.toLocaleString()} off (max 10% of ticket)
+                            Token value TSh {loyaltyDiscount.toLocaleString()} (laundry / pickup / partner)
                           </div>
                         )}
                         {loyaltyError && (

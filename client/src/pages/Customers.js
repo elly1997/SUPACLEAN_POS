@@ -18,6 +18,7 @@ import SkeletonList from '../components/SkeletonList';
 import Loader from '../components/Loader';
 import LoyaltyBadge from '../components/LoyaltyBadge';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
+import { TOKEN_REDEEM_MIN, TOKEN_VALUE_TSH, TOKEN_REDEEM_STEP, tokensToTsh } from '../utils/loyaltyTokens';
 import './Customers.css';
 
 const CUSTOMERS_EXPORT_COLUMNS = [
@@ -28,8 +29,8 @@ const CUSTOMERS_EXPORT_COLUMNS = [
   { key: 'email', label: 'Email' },
   { key: 'address', label: 'Address' },
   { key: 'tier', label: 'Tier' },
-  { key: 'current_points', label: 'Current Points' },
-  { key: 'lifetime_points', label: 'Lifetime Points' },
+  { key: 'current_points', label: 'Current Tokens' },
+  { key: 'lifetime_points', label: 'Lifetime Tokens' },
   { key: 'outstanding_balance', label: 'Outstanding Balance' },
   { key: 'tags', label: 'Tags' },
 ];
@@ -193,8 +194,7 @@ const Customers = () => {
     }
   };
 
-  // Task 3.3 — Redeem points
-  const openRedeem = (customerId, availablePoints) => {
+  const openRedeem = (customerId) => {
     setLoyaltyCustomerId(customerId);
     setRedeemPoints('');
     setShowRedeemModal(true);
@@ -204,25 +204,25 @@ const Customers = () => {
     e.preventDefault();
     if (!loyaltyCustomerId) return;
     const points = parseInt(redeemPoints, 10);
-    if (!points || points <= 0) {
-      showToast('Enter a valid points amount', 'error');
+    if (!points || points < TOKEN_REDEEM_MIN) {
+      showToast(`Redeem at least ${TOKEN_REDEEM_MIN} tokens`, 'error');
       return;
     }
     const available = loyaltyData[loyaltyCustomerId]?.current_points ?? 0;
     if (points > available) {
-      showToast(`Not enough points (available: ${available})`, 'error');
+      showToast(`Not enough tokens (available: ${available})`, 'error');
       return;
     }
     setRedeeming(loyaltyCustomerId);
     try {
       await redeemLoyaltyPoints(loyaltyCustomerId, points);
-      showToast(`${points} points redeemed successfully`, 'success');
+      showToast(`${points} tokens redeemed (TSh ${tokensToTsh(points).toLocaleString()})`, 'success');
       setShowRedeemModal(false);
       setRedeemPoints('');
       await fetchCustomerLoyalty(loyaltyCustomerId);
       loadCustomers(false);
     } catch (error) {
-      showToast('Error redeeming points: ' + (error.response?.data?.error || error.message), 'error');
+      showToast('Error redeeming tokens: ' + (error.response?.data?.error || error.message), 'error');
     } finally {
       setRedeeming(null);
     }
@@ -749,12 +749,12 @@ const Customers = () => {
                               🏅 Loyalty
                             </button>
                           )}
-                          {(customer.current_points || 0) >= 10 && hasPermission('canManageCustomers') && (
+                          {(customer.current_points || 0) >= TOKEN_REDEEM_MIN && hasPermission('canManageCustomers') && (
                             <button
                               className="btn-small btn-success"
                               onClick={() => openRedeem(customer.id, customer.current_points)}
                               disabled={redeeming === customer.id}
-                              title="Redeem points for discount"
+                              title="Redeem tokens"
                             >
                               🎟️ Redeem
                             </button>
@@ -806,33 +806,48 @@ const Customers = () => {
             </button>
           </div>
           <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '16px' }}>
-            <div style={{ flex: 1, minWidth: '150px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Current Points</div>
+            <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Available tokens</div>
               <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{loyaltyData[loyaltyCustomerId].current_points}</div>
             </div>
-            <div style={{ flex: 1, minWidth: '150px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Lifetime Points</div>
+            <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Earned this month</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold' }}>+{loyaltyData[loyaltyCustomerId].earned_this_month || 0}</div>
+            </div>
+            <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Earned this year</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold' }}>+{loyaltyData[loyaltyCustomerId].earned_this_year || 0}</div>
+            </div>
+            <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Lifetime tokens</div>
               <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{loyaltyData[loyaltyCustomerId].lifetime_points}</div>
             </div>
-            <div style={{ flex: 1, minWidth: '150px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+            <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Tier</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span className={`badge-tier-${(loyaltyData[loyaltyCustomerId].tier || 'bronze').toLowerCase()}`} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', textTransform: 'capitalize' }}>
                   {loyaltyData[loyaltyCustomerId].tier || 'bronze'}
                 </span>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{loyaltyData[loyaltyCustomerId].points_to_next_tier != null && loyaltyData[loyaltyCustomerId].points_to_next_tier > 0 ? `${loyaltyData[loyaltyCustomerId].points_to_next_tier} pts to next tier` : 'Top tier'}</span>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  {loyaltyData[loyaltyCustomerId].points_to_next_tier != null && loyaltyData[loyaltyCustomerId].points_to_next_tier > 0
+                    ? `${loyaltyData[loyaltyCustomerId].points_to_next_tier} tok to next`
+                    : 'Top tier'}
+                </span>
               </div>
             </div>
           </div>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: 0 }}>
+            Earn 1 token per TSh 20,000 · Redeem from {TOKEN_REDEEM_MIN} tokens · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()}
+          </p>
           <div style={{ marginBottom: '12px' }}>
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>Recent Transactions</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>Recent token activity</div>
             {(loyaltyTransactions.length > 0 ? (
               <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ textAlign: 'left', color: 'var(--text-muted)' }}>
                     <th style={{ padding: '6px 8px' }}>Date</th>
                     <th style={{ padding: '6px 8px' }}>Type</th>
-                    <th style={{ padding: '6px 8px' }}>Points</th>
+                    <th style={{ padding: '6px 8px' }}>Tokens</th>
                     <th style={{ padding: '6px 8px' }}>Description</th>
                   </tr>
                 </thead>
@@ -848,30 +863,29 @@ const Customers = () => {
                 </tbody>
               </table>
             ) : (
-              <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '8px 0' }}>No loyalty transactions yet.</div>
+              <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '8px 0' }}>No token transactions yet.</div>
             ))}
           </div>
           <button
             className="btn-small btn-success"
             onClick={() => openRedeem(loyaltyCustomerId, loyaltyData[loyaltyCustomerId].current_points)}
-            disabled={(loyaltyData[loyaltyCustomerId].current_points || 0) < 10 || redeeming === loyaltyCustomerId}
+            disabled={(loyaltyData[loyaltyCustomerId].current_points || 0) < TOKEN_REDEEM_MIN || redeeming === loyaltyCustomerId}
           >
-            {redeeming === loyaltyCustomerId ? '⏳ Redeeming…' : '🎟️ Redeem Points'}
+            {redeeming === loyaltyCustomerId ? 'Redeeming…' : 'Redeem tokens'}
           </button>
         </div>
       )}
-      {/* Task 3.3 — Redeem points modal */}
       {showRedeemModal && loyaltyCustomerId && (
         <div className="modal-overlay" onClick={() => setShowRedeemModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>🎟️ Redeem Points</h2>
+              <h2>Redeem tokens</h2>
               <button className="modal-close" onClick={() => setShowRedeemModal(false)}>×</button>
             </div>
             <form onSubmit={handleRedeemSubmit}>
               <div className="modal-body">
                 <div className="form-group">
-                  <label>Available Points</label>
+                  <label>Available tokens</label>
                   <input
                     type="number"
                     readOnly
@@ -880,28 +894,28 @@ const Customers = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Points to Redeem *</label>
+                  <label>Tokens to redeem *</label>
                   <input
                     type="number"
                     value={redeemPoints}
                     onChange={(e) => setRedeemPoints(e.target.value)}
-                    min="10"
-                    step="10"
+                    min={TOKEN_REDEEM_MIN}
+                    step={TOKEN_REDEEM_STEP}
                     required
                     autoFocus
                     className="edit-input"
                   />
                 </div>
                 <div className="form-group">
-                  <label>Discount Value</label>
+                  <label>Value (TSh)</label>
                   <input
                     type="number"
                     readOnly
-                    value={Math.floor(parseInt(redeemPoints || '0', 10) / 10) * 10000}
+                    value={tokensToTsh(parseInt(redeemPoints || '0', 10))}
                     className="edit-input"
                   />
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    10 points = TSh 10,000 discount (multiples of 10)
+                    From {TOKEN_REDEEM_MIN} tokens · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()} (laundry discount, pickup/delivery, or partner service)
                   </div>
                 </div>
               </div>
@@ -910,7 +924,7 @@ const Customers = () => {
                   Cancel
                 </button>
                 <button type="submit" className="btn-primary" disabled={redeeming === loyaltyCustomerId}>
-                  {redeeming === loyaltyCustomerId ? '⏳ Redeeming…' : 'Redeem'}
+                  {redeeming === loyaltyCustomerId ? 'Redeeming…' : 'Redeem'}
                 </button>
               </div>
             </form>

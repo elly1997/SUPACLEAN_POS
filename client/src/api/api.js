@@ -1014,7 +1014,14 @@ export const updateCoupon = (id, data) => api.put(`/coupons/${id}`, data);
 export const getCustomerLoyalty = (customerId) => api.get(`/loyalty/customer/${customerId}`);
 export const getLoyaltyTransactions = (customerId, limit = 50) => api.get(`/loyalty/customer/${customerId}/transactions`, { params: { limit } });
 export const earnLoyaltyPoints = (customerId, orderId, orderAmount) => api.post('/loyalty/earn', { customerId, orderId, orderAmount });
-export const redeemLoyaltyPoints = (customerId, points, orderId) => api.post('/loyalty/redeem', { customerId, points, orderId });
+export const redeemLoyaltyPoints = (customerId, points, orderId, opts = {}) =>
+  api.post('/loyalty/redeem', {
+    customerId,
+    points,
+    orderId,
+    orderSubtotal: opts.orderSubtotal,
+    managerApproved: opts.managerApproved,
+  });
 export const getLoyaltyRewards = () => api.get('/loyalty/rewards');
 export const getLoyaltyTiers = () => api.get('/loyalty/tiers');
 

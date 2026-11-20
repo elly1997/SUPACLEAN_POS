@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatTokenBalance } from '../utils/loyaltyTokens';
 import './LoyaltyBadge.css';
 
 const TIER_LABELS = {
@@ -10,8 +11,7 @@ const TIER_LABELS = {
 };
 
 /**
- * Compact loyalty tier badge for cashiers when a customer is pulled up.
- * Safe with missing data — defaults to Bronze / 0 pts.
+ * Compact loyalty tier badge — shows tokens (1 token / TSh 20,000 earned).
  */
 export default function LoyaltyBadge({
   tier,
@@ -24,15 +24,19 @@ export default function LoyaltyBadge({
   const tierKey = rawTier.toLowerCase();
   const label = TIER_LABELS[tierKey] || rawTier;
   const pts = Number(points);
-  const pointsLabel = Number.isFinite(pts) ? Math.max(0, Math.floor(pts)) : 0;
+  const tokensLabel = Number.isFinite(pts) ? Math.max(0, Math.floor(pts)) : 0;
 
   return (
     <span
       className={`loyalty-badge loyalty-badge--${size} loyalty-badge--${tierKey} ${className}`.trim()}
-      title={`${label} member · ${pointsLabel} points`}
+      title={`${label} · ${formatTokenBalance(tokensLabel)} (1 token = TSh 500 redeem)`}
     >
       <span className="loyalty-badge__tier">{label}</span>
-      {showPoints && <span className="loyalty-badge__points">{pointsLabel} pts</span>}
+      {showPoints && (
+        <span className="loyalty-badge__points">
+          {tokensLabel} tok
+        </span>
+      )}
     </span>
   );
 }
