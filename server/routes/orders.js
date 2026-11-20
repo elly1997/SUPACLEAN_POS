@@ -2144,7 +2144,10 @@ router.post('/upload-stock-excel', authenticate, requireBranchAccess(), requireP
       await workbook.xlsx.readFile(filePath);
     }
 
-    const worksheet = workbook.worksheets.find((ws) => ws && ws.rowCount > 0);
+    // Prefer a consolidated sheet when present (e.g. "All Records"), else first non-empty sheet.
+    const worksheet =
+      workbook.worksheets.find((ws) => ws && /all\s*records/i.test(String(ws.name || ''))) ||
+      workbook.worksheets.find((ws) => ws && ws.rowCount > 0);
     if (!worksheet) {
       fs.unlinkSync(filePath);
       return res.status(400).json({ error: 'Excel file is empty' });
@@ -2361,11 +2364,27 @@ router.post('/upload-stock-excel', authenticate, requireBranchAccess(), requireP
         'total amount',
         'AMOUNT (TZS)',
         'Amount (TZS)',
-        'AMOUNT TZS'
+        'AMOUNT TZS',
+        'Amount (TSh)',
+        'AMOUNT (TSh)',
+        'Amount (TSH)',
+        'AMOUNT (TSH)',
+        'Amount TSh',
+        'AMOUNT TSH'
       );
+      // Fallback: any header that starts with "amount" (e.g. "Amount (TSh)")
+      let amountFallback = amountRaw;
+      if (amountFallback == null) {
+        for (const [key, val] of Object.entries(row)) {
+          if (/^amount\b/i.test(String(key || '').trim()) && val != null && String(val).trim() !== '') {
+            amountFallback = val;
+            break;
+          }
+        }
+      }
       let amount = 0;
-      if (amountRaw !== undefined && amountRaw !== null && String(amountRaw).trim() !== '') {
-        const s = String(amountRaw).replace(/,/g, '').replace(/[^\d.-]/g, '');
+      if (amountFallback !== undefined && amountFallback !== null && String(amountFallback).trim() !== '') {
+        const s = String(amountFallback).replace(/,/g, '').replace(/[^\d.-]/g, '');
         amount = parseFloat(s) || 0;
       }
       const paidRaw = getVal(
@@ -2424,12 +2443,14 @@ router.post('/upload-stock-excel', authenticate, requireBranchAccess(), requireP
         paidAmount = Math.max(0, finalTotalAmount - unpaidBalance);
         paymentStatus = paidAmount >= finalTotalAmount ? 'paid_full' : (paidAmount > 0 ? 'advance' : 'not_paid');
       } else if (paidRaw != null) {
-        const paidStr = String(paidRaw).toLowerCase().trim();
+        const paidStr = String(paidRaw).toLowerCase().trim().replace(/\s+/g, ' ');
+        // Ledger shorthand: N.P / NP / N/P = not paid
         const isExplicitUnpaid =
-          /not\s*paid|unpaid|^no$|^n$|^0$|^false$/.test(paidStr) || paidStr === '';
+          /not\s*paid|unpaid|^n\.?p\.?$|^n\/p$|^np$|^no$|^n$|^0$|^false$/.test(paidStr) ||
+          paidStr === '';
         const isPaid =
           !isExplicitUnpaid &&
-          (/^(paid|yes|1|true|full)$/.test(paidStr) || paidStr === 'y');
+          (/^(paid|yes|1|true|full|paid\s*full)$/.test(paidStr) || paidStr === 'y');
         paidAmount = isPaid ? finalTotalAmount : 0;
         paymentStatus = isPaid ? 'paid_full' : 'not_paid';
       }
