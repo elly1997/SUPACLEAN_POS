@@ -11,7 +11,7 @@ const TIER_LABELS = {
 };
 
 /**
- * Compact loyalty tier badge — shows tokens (1 token / TSh 20,000 earned).
+ * Compact loyalty tier badge — shows tokens (1 token / TSh 20,000 paid cash per receipt).
  */
 export default function LoyaltyBadge({
   tier,

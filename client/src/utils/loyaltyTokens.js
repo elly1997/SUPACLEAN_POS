@@ -1,4 +1,4 @@
-/** Client mirror of server LOYALTY_CONFIG token economics. */
+/** Client mirror of server LOYALTY_CONFIG (1 token / TSh 20,000 paid cash per single receipt). */
 export const TOKEN_EARN_SPEND_TSH = 20000;
 export const TOKEN_REDEEM_MIN = 50;
 export const TOKEN_VALUE_TSH = 500;

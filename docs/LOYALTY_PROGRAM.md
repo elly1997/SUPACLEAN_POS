@@ -3,8 +3,10 @@
 Supaclean loyalty units are called **tokens**.
 
 ## Earn
-- **1 token per TSh 20,000** spent.
-- Awarded when a receipt is **collected** and **paid_full**.
+- **1 whole token per TSh 20,000 of paid cash on a single receipt** (`payment_method = cash` only — not M-Pesa/card/credit).
+- Multiples count with **no decimals**: TSh 40,000 = **2** tokens; TSh 39,999 = **1** token; remainder under 20,000 does not earn.
+- Cash is **not** pooled across receipts (e.g. TSh 15,000 + TSh 15,000 on two receipts = 0 tokens).
+- Awarded when that receipt is **collected** and **paid_full**.
 - Tier multipliers on collection: Bronze 1×, Silver 1.1×, Gold 1.25×, Platinum 1.5×.
 - Idempotent per `order_id`. Void reverses earn for that order.
 

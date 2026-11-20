@@ -829,7 +829,7 @@ const Customers = () => {
             </div>
           </div>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: 0 }}>
-            Earn 1 token / TSh 20,000 · Redeem from {TOKEN_REDEEM_MIN} · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()}
+            Earn whole tokens only: 1 / TSh 20,000 paid cash per receipt (40,000 = 2) · Redeem from {TOKEN_REDEEM_MIN} · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()}
             {' · '}Tiers: Silver 51 · Gold 86 · Platinum 136 (lifetime)
           </p>
           <div style={{ marginBottom: '12px' }}>

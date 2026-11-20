@@ -8,7 +8,9 @@ router.use(authenticate);
 
 /**
  * Supaclean tokens (loyalty wallet unit):
- * - Earn 1 token per TSh 20,000 spent (on collect + paid_full)
+ * - Earn 1 whole token per TSh 20,000 paid cash on a single receipt (not pooled across receipts)
+ * - Multiples count: TSh 40,000 = 2 tokens; remainder below 20,000 does not earn (no decimals)
+ * - Cash only (payment_method = cash); awarded on collect + paid_full
  * - Redeem from 50 tokens; 1 token = TSh 500 (laundry discount, pickup/delivery, or partner value)
  */
 const LOYALTY_CONFIG = {
@@ -166,7 +168,7 @@ router.get('/customer/:customerId', async (req, res) => {
       lifetime_tokens: lifetime,
       token_value_tsh: LOYALTY_CONFIG.redemptionValueTSh,
       min_redeem_tokens: LOYALTY_CONFIG.minRedeemPoints,
-      earn_rule: `1 token per TSh ${LOYALTY_CONFIG.minSpendForPoint.toLocaleString()} spent`,
+      earn_rule: `1 whole token per TSh ${LOYALTY_CONFIG.minSpendForPoint.toLocaleString()} paid cash on a single receipt (e.g. 40,000 = 2; no decimals)`,
       redeem_rule: `From ${LOYALTY_CONFIG.minRedeemPoints} tokens · 1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()}`,
       unit: LOYALTY_CONFIG.unitLabelPlural,
       tier,
@@ -334,7 +336,10 @@ router.get('/tiers', (req, res) => {
     earn: {
       tokensPerTSh: LOYALTY_CONFIG.pointsPerTSh,
       minSpendForToken: LOYALTY_CONFIG.minSpendForPoint,
-      rule: `1 token per TSh ${LOYALTY_CONFIG.minSpendForPoint.toLocaleString()} spent`,
+      rule: `1 whole token per TSh ${LOYALTY_CONFIG.minSpendForPoint.toLocaleString()} paid cash on a single receipt (e.g. 40,000 = 2; no decimals)`,
+      basis: 'paid_cash',
+      scope: 'single_receipt',
+      wholeTokensOnly: true,
     },
     redeem: {
       minPoints: LOYALTY_CONFIG.minRedeemPoints,
@@ -440,8 +445,56 @@ router.post('/partner-grant', requireRole('admin'), async (req, res) => {
 });
 
 /**
- * Award points on collection. Idempotent per order_id.
- * Fetch loyalty BEFORE applying tier multiplier (fixes prior TDZ bug).
+ * Sum cash payments for one receipt's order line(s).
+ * Tokens earn only on paid cash for that receipt — never pooled across receipts.
+ */
+async function sumPaidCashForOrders(orderIds, receiptNumber = null) {
+  const ids = (orderIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return 0;
+
+  const placeholders = ids.map(() => '?').join(',');
+  const receiptClause = receiptNumber ? ' AND UPPER(o.receipt_number) = UPPER(?)' : '';
+  const receiptParams = receiptNumber ? [receiptNumber] : [];
+
+  try {
+    const fromTx = await db.get(
+      `SELECT COALESCE(SUM(t.amount), 0) AS total
+       FROM transactions t
+       JOIN orders o ON o.id = t.order_id
+       WHERE t.order_id IN (${placeholders})
+         AND t.transaction_type = 'payment_received'
+         AND COALESCE(t.is_voided, FALSE) = FALSE
+         AND LOWER(REPLACE(COALESCE(t.payment_method, 'cash'), ' ', '_')) = 'cash'
+         ${receiptClause}`,
+      [...ids, ...receiptParams]
+    );
+    const txTotal = Number(fromTx?.total) || 0;
+    if (txTotal > 0) return txTotal;
+  } catch (err) {
+    console.warn('sumPaidCashForOrders transactions:', err.message);
+  }
+
+  try {
+    const fromOrders = await db.get(
+      `SELECT COALESCE(SUM(paid_amount), 0) AS total
+       FROM orders o
+       WHERE o.id IN (${placeholders})
+         AND COALESCE(o.is_voided, FALSE) = FALSE
+         AND LOWER(REPLACE(COALESCE(o.payment_method, 'cash'), ' ', '_')) = 'cash'
+         ${receiptClause}`,
+      [...ids, ...receiptParams]
+    );
+    return Number(fromOrders?.total) || 0;
+  } catch (err) {
+    console.warn('sumPaidCashForOrders orders fallback:', err.message);
+    return 0;
+  }
+}
+
+/**
+ * Award tokens on collection for one receipt only. Idempotent per order_id.
+ * Earn base = floor(that_receipt_paid_cash / 20000) — whole tokens only, no decimals, no cross-receipt carry.
+ * Fetch loyalty BEFORE tier multiplier.
  */
 async function awardPointsOnCollection(customerId, orderId, orderAmount, options = {}) {
   if (!customerId) {
@@ -450,6 +503,11 @@ async function awardPointsOnCollection(customerId, orderId, orderAmount, options
 
   const brand = options.brand || LOYALTY_CONFIG.defaultBrand;
   const earnSource = options.earnSource || LOYALTY_CONFIG.defaultBrand;
+  const orderIds = Array.isArray(options.orderIds) && options.orderIds.length
+    ? options.orderIds
+    : orderId
+      ? [orderId]
+      : [];
 
   try {
     if (orderId) {
@@ -472,12 +530,23 @@ async function awardPointsOnCollection(customerId, orderId, orderAmount, options
     }
 
     let loyalty = await ensureLoyaltyRow(customerId);
-    const basePointsEarned = Math.floor(Number(orderAmount) / LOYALTY_CONFIG.minSpendForPoint);
+
+    // Earn from this receipt's paid cash only — never from order total or other receipts.
+    let cashPaid = Number(options.cashPaid);
+    if (!Number.isFinite(cashPaid) || cashPaid < 0) {
+      cashPaid = await sumPaidCashForOrders(orderIds, options.receiptNumber || null);
+    }
+    if (!Number.isFinite(cashPaid) || cashPaid < 0) {
+      cashPaid = 0;
+    }
+
+    const basePointsEarned = Math.floor(cashPaid / LOYALTY_CONFIG.minSpendForPoint);
     if (basePointsEarned <= 0 && !options.allowZero) {
       return {
         points_earned: 0,
         skipped: true,
-        reason: 'below_min_spend',
+        reason: cashPaid > 0 ? 'below_min_spend' : 'no_paid_cash',
+        cash_paid: cashPaid,
         current_points: loyalty.current_points,
         tier: loyalty.tier,
       };
@@ -489,6 +558,7 @@ async function awardPointsOnCollection(customerId, orderId, orderAmount, options
     if (pointsEarned <= 0) {
       return {
         points_earned: 0,
+        cash_paid: cashPaid,
         current_points: loyalty.current_points,
         tier: loyalty.tier,
       };
@@ -518,7 +588,7 @@ async function awardPointsOnCollection(customerId, orderId, orderAmount, options
       orderId: orderId || null,
       transactionType: 'earned',
       points: pointsEarned,
-      description: 'Points earned for order collection',
+      description: `Tokens earned from TSh ${Math.round(cashPaid).toLocaleString()} paid cash`,
       balanceAfter: newCurrentPoints - (tierUpgradeBonus || 0),
       brand,
       earnSource,
@@ -539,6 +609,7 @@ async function awardPointsOnCollection(customerId, orderId, orderAmount, options
 
     return {
       points_earned: pointsEarned,
+      cash_paid: cashPaid,
       current_points: newCurrentPoints,
       lifetime_points: newLifetimePoints,
       tier: newTier,
@@ -553,6 +624,7 @@ async function awardPointsOnCollection(customerId, orderId, orderAmount, options
 
 module.exports = router;
 module.exports.awardPointsOnCollection = awardPointsOnCollection;
+module.exports.sumPaidCashForOrders = sumPaidCashForOrders;
 module.exports.LOYALTY_CONFIG = LOYALTY_CONFIG;
 module.exports.calculateTier = calculateTier;
 module.exports.SOFT_PERKS = SOFT_PERKS;

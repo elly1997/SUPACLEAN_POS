@@ -170,23 +170,40 @@ async function applyReceiptPaymentAtomic({
     const allocations = buildPerOrderPaidAllocations(orders, newReceiptPaid);
     const auditAction = collect ? 'collected' : 'payment_received';
 
+    // Only stamp payment_method when money moves this turn. Collect with payAmount=0
+    // must keep the method already on the line (loyalty earns on paid cash only).
+    const methodToStore = payAmount > 0 ? paymentMethod : null;
+
     for (const alloc of allocations) {
       const oldOrder = orders.find((o) => Number(o.id) === Number(alloc.id));
+      const resolvedMethod = methodToStore || oldOrder?.payment_method || paymentMethod || 'cash';
       if (collect) {
-        await client.query(
-          `UPDATE orders
-           SET status = 'collected',
-               collected_date = CURRENT_TIMESTAMP,
-               paid_amount = $1,
-               payment_status = $2,
-               payment_method = $3
-           WHERE id = $4`,
-          [alloc.paid_amount, alloc.payment_status, paymentMethod, alloc.id]
-        );
+        if (methodToStore) {
+          await client.query(
+            `UPDATE orders
+             SET status = 'collected',
+                 collected_date = CURRENT_TIMESTAMP,
+                 paid_amount = $1,
+                 payment_status = $2,
+                 payment_method = $3
+             WHERE id = $4`,
+            [alloc.paid_amount, alloc.payment_status, resolvedMethod, alloc.id]
+          );
+        } else {
+          await client.query(
+            `UPDATE orders
+             SET status = 'collected',
+                 collected_date = CURRENT_TIMESTAMP,
+                 paid_amount = $1,
+                 payment_status = $2
+             WHERE id = $3`,
+            [alloc.paid_amount, alloc.payment_status, alloc.id]
+          );
+        }
       } else {
         await client.query(
           `UPDATE orders SET paid_amount = $1, payment_status = $2, payment_method = $3 WHERE id = $4`,
-          [alloc.paid_amount, alloc.payment_status, paymentMethod, alloc.id]
+          [alloc.paid_amount, alloc.payment_status, resolvedMethod, alloc.id]
         );
       }
 
@@ -198,7 +215,7 @@ async function applyReceiptPaymentAtomic({
         old_paid_amount: parseFloat(oldOrder?.paid_amount) || 0,
         new_paid_amount: alloc.paid_amount,
         old_payment_method: oldOrder?.payment_method,
-        new_payment_method: paymentMethod,
+        new_payment_method: resolvedMethod,
         changed_by: changedBy,
         notes:
           notes ||

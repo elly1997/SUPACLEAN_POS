@@ -53,7 +53,7 @@ Higher tiers unlock **service and partner perks** first. Cash discounts at laund
 
 | Rule | Specification |
 |------|----------------|
-| Earn (laundry) | 1 point per **20,000 TSh** on **collected + paid_full** receipt total |
+| Earn (laundry) | Whole tokens: 1 per **20,000 TSh paid cash on a single receipt** (40,000 = 2; no decimals; not pooled) on **collected + paid_full** |
 | Tier thresholds | Bronze 0 / Silver 500 / Gold 2,000 / Platinum **7,500** lifetime points |
 | Tier earn boost | Bronze 1×, Silver **1.1×**, Gold **1.25×**, Platinum **1.5×** |
 | Upgrade bonus (one-time) | Silver +25, Gold +50, Platinum +100 |

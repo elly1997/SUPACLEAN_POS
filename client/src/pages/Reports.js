@@ -1340,7 +1340,7 @@ const Reports = () => {
                 )}
               </div>
               <div className="reports-info-banner">
-                <strong>Tokens:</strong> earned on collection (paid full). 1 token / TSh 20,000 · redeem from 50 tokens · 1 token = TSh 500
+                <strong>Tokens:</strong> earned on collection (paid full). Whole tokens only: 1 / TSh 20,000 paid cash per receipt (40,000 = 2) · redeem from 50 · 1 token = TSh 500
               </div>
               {loyaltySummary && (
                 <div className="reports-info-banner" style={{ marginTop: 8 }}>

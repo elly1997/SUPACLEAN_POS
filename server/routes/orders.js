@@ -1887,18 +1887,21 @@ router.post('/collect/:receiptNumber', authenticate, requireBranchFeature('colle
     if (collectPaidFull && receiptTotal > 0 && firstOrder.customer_id) {
       try {
         const { awardPointsOnCollection } = require('./loyalty');
+        // One receipt only — all lines share this receipt_number; cash is not pooled across receipts.
+        const orderIds = (txResult.data.orders || []).map((o) => o.id).filter(Boolean);
         const loyaltyResult = await awardPointsOnCollection(
           firstOrder.customer_id,
           firstOrder.id,
-          receiptTotal
+          receiptTotal,
+          { orderIds, receiptNumber }
         );
         if (loyaltyResult?.skipped) {
           console.warn(
-            `WARN: Loyalty award skipped (${loyaltyResult.reason}) customer ${firstOrder.customer_id} order ${firstOrder.id}`
+            `WARN: Loyalty award skipped (${loyaltyResult.reason}) customer ${firstOrder.customer_id} order ${firstOrder.id} cash_paid=${loyaltyResult.cash_paid ?? '?'}`
           );
         } else {
           console.log(
-            `OK:  Loyalty points awarded: ${loyaltyResult?.points_earned ?? 0} points to customer ${firstOrder.customer_id}`
+            `OK:  Loyalty tokens awarded: ${loyaltyResult?.points_earned ?? 0} from TSh ${loyaltyResult?.cash_paid ?? 0} paid cash to customer ${firstOrder.customer_id}`
           );
         }
       } catch (err) {
