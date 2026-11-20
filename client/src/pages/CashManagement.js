@@ -26,6 +26,7 @@ import Loader from '../components/Loader';
 import { receiptWidthCss } from '../utils/receiptPrintConfig';
 import { formatCustomerReceiptId } from '../utils/receiptId';
 import { getBusinessTodayYmd, formatBusinessDayLabel } from '../utils/businessDate';
+import WorkingDayPicker from '../components/WorkingDayPicker';
 import './CashManagement.css';
 
 const CLOSE_STEP_LABELS = ['Opening', 'Review', 'Deposits & Expenses', 'Reconcile'];
@@ -835,11 +836,12 @@ const CashManagement = () => {
           <h1>Cash Management</h1>
           <p className="subtitle">
             {summary.all_branches ? 'All branches (consolidated) · ' : ''}
-            Daily cash summary - {formatBusinessDayLabel(activeDate || today)}
-            {isCatchUpMode ? ' (catch-up)' : ''}
+            Daily cash summary — {formatBusinessDayLabel(activeDate || today)}
+            {isCatchUpMode ? ' · prior day' : ''}
           </p>
         </div>
         <div className="header-actions">
+          <WorkingDayPicker id="cash-working-day" />
           <button onClick={handleTestReceiptPrint} className="dk-btn dk-btn--secondary dk-btn--md" type="button" title="Open print dialog to test PDA/thermal printer">
             🖨️ Test receipt print
           </button>
@@ -853,12 +855,12 @@ const CashManagement = () => {
           )}
           {!summary.all_branches && summaryReconciled && canReconcile && (
             <button
-              onClick={() => handleSendToDirector(today)}
+              onClick={() => handleSendToDirector(activeDate || today)}
               className="dk-btn dk-btn--primary dk-btn--md"
               type="button"
-              disabled={sendingReportDate === today}
+              disabled={sendingReportDate === (activeDate || today)}
             >
-              {sendingReportDate === today ? 'Sending…' : '📤 Send to director'}
+              {sendingReportDate === (activeDate || today) ? 'Sending…' : '📤 Send to director'}
             </button>
           )}
         </div>

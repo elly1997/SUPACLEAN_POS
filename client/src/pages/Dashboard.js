@@ -3,12 +3,10 @@ import { useNavigate, Link } from 'react-router-dom';
 import { getOrders, updateOrderStatus, getCollectionQueue, getOrderDashboardStats, getTodayCashSummary, getCashSummaryRange, getUnreconciledClosings, getAdminInboxCounts } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
-import { useBusinessDay } from '../contexts/BusinessDayContext';
 import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
 import Loader from '../components/Loader';
 import { formatReceiptForDisplay } from '../utils/receiptId';
-import { formatBusinessDayLabel } from '../utils/businessDate';
 import useScrollPanel from '../hooks/useScrollPanel';
 import './Dashboard.css';
 
@@ -18,29 +16,13 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const { showToast, ToastContainer } = useToast();
   const { selectedBranchId, user, hasPermission, branch } = useAuth();
-  const {
-    workingDate,
-    setWorkingDate,
-    clearWorkingDate,
-    isCatchUpMode,
-    workableDays,
-    loadingWorkable,
-    refreshWorkableDays,
-    today: businessToday,
-  } = useBusinessDay();
   const readyQueueScroll = useScrollPanel({ axis: 'y' });
   const pendingQueueScroll = useScrollPanel({ axis: 'y' });
   const isCashier = user?.role === 'cashier';
   const isAdmin = user?.role === 'admin';
   const canManageCash = hasPermission?.('canManageCash') ?? false;
   const canManageOrders = hasPermission?.('canManageOrders') ?? false;
-  const canCreateOrders = hasPermission?.('canCreateOrders') ?? false;
   const canViewReports = hasPermission?.('canViewReports') ?? false;
-  const canUseCatchUp = canManageCash || canCreateOrders;
-  const priorWorkableDays = useMemo(
-    () => (workableDays || []).filter((d) => d.date !== businessToday),
-    [workableDays, businessToday]
-  );
   const isManager = canManageCash || canManageOrders || canViewReports;
   const isOwnerView = isAdmin || user?.role === 'manager';
   const [listView, setListView] = useListViewPreference();
@@ -312,79 +294,6 @@ const Dashboard = () => {
           </button>
         </div>
       </div>
-
-      {canUseCatchUp && (
-        <section className="dk-catchup-panel" aria-label="Catch-up unreconciled day">
-          <div className="dk-catchup-panel__head">
-            <h2 className="dk-catchup-panel__title">Catch-up day</h2>
-            <p className="dk-catchup-panel__sub">
-              Record orders, expenses, and bank deposits on a prior day that is still unreconciled, then finish cash closing for that day.
-            </p>
-          </div>
-          <div className="dk-catchup-panel__controls">
-            <label htmlFor="dashboard-catchup-day" className="dk-catchup-panel__label">
-              Working day
-            </label>
-            <select
-              id="dashboard-catchup-day"
-              className="dk-catchup-panel__select"
-              value={workingDate}
-              disabled={loadingWorkable}
-              onChange={(e) => setWorkingDate(e.target.value)}
-              onFocus={() => refreshWorkableDays()}
-            >
-              <option value={businessToday}>Today — {formatBusinessDayLabel(businessToday)}</option>
-              {priorWorkableDays.map((d) => (
-                <option key={d.date} value={d.date}>
-                  {formatBusinessDayLabel(d.date)}
-                  {d.has_summary ? ' · summary started' : ' · not started'}
-                </option>
-              ))}
-            </select>
-            <div className="dk-catchup-panel__actions">
-              {isCatchUpMode && (
-                <button type="button" className="dk-btn dk-btn--secondary dk-btn--md" onClick={clearWorkingDate}>
-                  Use today
-                </button>
-              )}
-              <button
-                type="button"
-                className="dk-btn dk-btn--primary dk-btn--md"
-                onClick={() => navigate('/new-order')}
-                disabled={!canCreateOrders}
-              >
-                {isCatchUpMode ? `New order for ${formatBusinessDayLabel(workingDate)}` : 'New order'}
-              </button>
-              {canManageCash && (
-                <button
-                  type="button"
-                  className="dk-btn dk-btn--secondary dk-btn--md"
-                  onClick={() => navigate('/cash-management')}
-                >
-                  Cash / deposits
-                </button>
-              )}
-              {(hasPermission?.('canManageExpenses') ?? false) && (
-                <button
-                  type="button"
-                  className="dk-btn dk-btn--secondary dk-btn--md"
-                  onClick={() => navigate('/expenses')}
-                >
-                  Expenses
-                </button>
-              )}
-            </div>
-          </div>
-          {isCatchUpMode && (
-            <p className="dk-catchup-panel__active" role="status">
-              Active catch-up: <strong>{formatBusinessDayLabel(workingDate)}</strong>. Receipts auto-number for that day.
-            </p>
-          )}
-          {!loadingWorkable && priorWorkableDays.length === 0 && (
-            <p className="dk-catchup-panel__empty">No prior unreconciled days in the last 2 weeks.</p>
-          )}
-        </section>
-      )}
 
       {isManager && (() => {
         const pendingCount = orderStats?.pending_receipts ?? groupedPending.length;

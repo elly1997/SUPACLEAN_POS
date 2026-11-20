@@ -6,6 +6,7 @@ import { useBusinessDay } from '../contexts/BusinessDayContext';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
 import { getBusinessTodayYmd, formatBusinessDayLabel } from '../utils/businessDate';
+import WorkingDayPicker from '../components/WorkingDayPicker';
 import './Expenses.css';
 
 const DEFAULT_EXPENSE_CATEGORIES = [
@@ -355,15 +356,22 @@ const Expenses = () => {
       <div className="page-header">
         <div>
           <h1>📝 Expenses</h1>
-          <p className="subtitle">Track daily business expenses. Branch managers can add custom categories for their branch below the category field.</p>
+          <p className="subtitle">
+            {isCatchUpMode
+              ? `Posting on ${formatBusinessDayLabel(workingDate)}`
+              : 'Track daily business expenses'}
+          </p>
         </div>
-        <button
-          onClick={handleToggleAddForm}
-          className={`dk-btn dk-btn--md ${showForm ? 'dk-btn--secondary' : 'dk-btn--primary'}`}
-          type="button"
-        >
-          {showForm ? 'Cancel' : '+ Add Expense'}
-        </button>
+        <div className="header-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <WorkingDayPicker id="expenses-working-day" />
+          <button
+            onClick={handleToggleAddForm}
+            className={`dk-btn dk-btn--md ${showForm ? 'dk-btn--secondary' : 'dk-btn--primary'}`}
+            type="button"
+          >
+            {showForm ? 'Cancel' : '+ Add Expense'}
+          </button>
+        </div>
       </div>
 
       {lastSyncedAt && (

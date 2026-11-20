@@ -54,7 +54,7 @@ export function BusinessDayProvider({ children }) {
     }
     setLoadingWorkable(true);
     try {
-      const res = await getWorkableBusinessDays({ lookback: 14 });
+      const res = await getWorkableBusinessDays({ lookback: 45 });
       const days = Array.isArray(res.data?.days) ? res.data.days : [];
       setWorkableDays(days);
       return days;

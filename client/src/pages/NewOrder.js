@@ -9,6 +9,7 @@ import { playSuccessSound } from '../utils/sound';
 import { loadBrandSettings } from '../utils/brandSettings';
 import { getBusinessTodayYmd, ymdToLocalDateTimeInput, formatBusinessDayLabel } from '../utils/businessDate';
 import LoyaltyBadge from '../components/LoyaltyBadge';
+import WorkingDayPicker from '../components/WorkingDayPicker';
 import useScrollPanel from '../hooks/useScrollPanel';
 import './NewOrder.css';
 
@@ -1331,9 +1332,14 @@ Phone: ${customer.phone}
       <div className="order-header-modern">
         <div>
           <h1>New Order</h1>
-          <p className="subtitle">Create a new laundry order</p>
+          <p className="subtitle">
+            {isCatchUpMode
+              ? `Booking on ${formatBusinessDayLabel(workingDate)}`
+              : 'Create a new laundry order'}
+          </p>
         </div>
         <div className="header-actions">
+          <WorkingDayPicker id="new-order-working-day" />
           <button onClick={handleReset} className="dk-btn dk-btn--secondary dk-btn--md" type="button">
             🔄 Reset (Ctrl+N)
           </button>
@@ -2098,9 +2104,7 @@ Phone: ${customer.phone}
                         className="datetime-input"
                       />
                       <small className="form-hint">
-                        {isCatchUpMode
-                          ? `Catch-up: booking on ${formatBusinessDayLabel(workingDate)}. Change the day from Dashboard if needed.`
-                          : 'Set from Dashboard → Catch-up day to post onto a prior unreconciled day.'}
+                        Follows Working day above. Change it to post onto an unreconciled prior day.
                       </small>
                     </div>
 

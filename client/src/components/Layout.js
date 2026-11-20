@@ -4,8 +4,6 @@ import api from '../api/api';
 import { getBranches } from '../api/api';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useBusinessDay } from '../contexts/BusinessDayContext';
-import { formatBusinessDayLabel } from '../utils/businessDate';
 import OfflineIndicator from './OfflineIndicator';
 import AdminNotificationCenter from './AdminNotificationCenter';
 import { isSoundEnabled, setSoundEnabled } from '../utils/sound';
@@ -32,7 +30,6 @@ const Layout = ({ children }) => {
   const [soundOn, setSoundOn] = useState(() => isSoundEnabled());
   const { theme, toggleTheme } = useTheme();
   const { user, branch, logout, isAdmin, hasPermission, selectedBranchId, setSelectedBranch } = useAuth();
-  const { isCatchUpMode, workingDate, clearWorkingDate } = useBusinessDay();
   // On back online, OfflineIndicator runs sync; we do not re-verify session here (avoids logout on 401 on Collection/Branches etc.)
   const handleBackOnline = useCallback(() => {}, []);
   const branchId = branch?.id ?? user?.branchId;
@@ -365,25 +362,6 @@ const Layout = ({ children }) => {
           </button>
         )}
         {isAdmin && <AdminNotificationCenter />}
-        {isCatchUpMode && (
-          <div className="working-day-banner" role="status">
-            <div className="working-day-banner__text">
-              Catch-up mode: posting to <strong>{formatBusinessDayLabel(workingDate)}</strong>
-              <span className="working-day-banner__hint">
-                {' '}
-                — new orders, expenses, and bank deposits use this unreconciled day.
-              </span>
-            </div>
-            <div className="working-day-banner__actions">
-              <button type="button" className="working-day-banner__btn" onClick={() => navigate('/dashboard')}>
-                Change day
-              </button>
-              <button type="button" className="working-day-banner__btn working-day-banner__btn--primary" onClick={clearWorkingDate}>
-                Back to today
-              </button>
-            </div>
-          </div>
-        )}
         <div key={location.pathname} className="content-wrapper pos-shell-screen-enter">
           {children}
         </div>
