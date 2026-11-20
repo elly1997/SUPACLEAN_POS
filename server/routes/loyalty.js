@@ -24,16 +24,17 @@ const LOYALTY_CONFIG = {
   managerRedeemPointsThreshold: 100,
   partnerEarnRate: 0.5,
   defaultBrand: 'supaclean_laundry',
+  // Lifetime tokens: Bronze → Silver at 51, Gold at 86 (+35), Platinum at 136 (+50).
   tiers: {
     Bronze: { minPoints: 0, multiplier: 1 },
-    Silver: { minPoints: 500, multiplier: 1.1 },
-    Gold: { minPoints: 2000, multiplier: 1.25 },
-    Platinum: { minPoints: 7500, multiplier: 1.5 },
+    Silver: { minPoints: 51, multiplier: 1.1 },
+    Gold: { minPoints: 86, multiplier: 1.25 },
+    Platinum: { minPoints: 136, multiplier: 1.5 },
   },
   upgradeBonus: {
-    Silver: 25,
-    Gold: 50,
-    Platinum: 100,
+    Silver: 5,
+    Gold: 10,
+    Platinum: 15,
   },
 };
 
@@ -144,55 +145,35 @@ async function insertLoyaltyTx({
 router.get('/customer/:customerId', async (req, res) => {
   const { customerId } = req.params;
   try {
-    const loyalty = await ensureLoyaltyRow(customerId);
-    const { next_tier, points_to_next_tier } = nextTierInfo(
-      Number(loyalty.lifetime_points) || 0,
-      loyalty.tier || 'Bronze'
-    );
-
-    let earnedThisMonth = 0;
-    let earnedThisYear = 0;
-    try {
-      const period = await db.get(
-        `SELECT
-           COALESCE(SUM(CASE
-             WHEN transaction_type = 'earned'
-              AND created_at >= date_trunc('month', CURRENT_TIMESTAMP)
-             THEN points ELSE 0 END), 0)::int AS earned_this_month,
-           COALESCE(SUM(CASE
-             WHEN transaction_type = 'earned'
-              AND created_at >= date_trunc('year', CURRENT_TIMESTAMP)
-             THEN points ELSE 0 END), 0)::int AS earned_this_year
-         FROM loyalty_transactions
-         WHERE customer_id = ?`,
-        [customerId]
-      );
-      earnedThisMonth = Number(period?.earned_this_month) || 0;
-      earnedThisYear = Number(period?.earned_this_year) || 0;
-    } catch (periodErr) {
-      console.warn('loyalty period totals:', periodErr.message);
-    }
-
+    let loyalty = await ensureLoyaltyRow(customerId);
     const current = Number(loyalty.current_points) || 0;
     const lifetime = Number(loyalty.lifetime_points) || 0;
+    const tier = calculateTier(lifetime);
+    if (tier !== (loyalty.tier || 'Bronze')) {
+      await db.run(
+        'UPDATE loyalty_points SET tier = ?, updated_at = CURRENT_TIMESTAMP WHERE customer_id = ?',
+        [tier, customerId]
+      );
+      loyalty = { ...loyalty, tier };
+    }
+    const { next_tier, points_to_next_tier } = nextTierInfo(lifetime, tier);
+
     res.json({
       customer_id: parseInt(customerId, 10),
       current_points: current,
       lifetime_points: lifetime,
       current_tokens: current,
       lifetime_tokens: lifetime,
-      earned_this_month: earnedThisMonth,
-      earned_this_year: earnedThisYear,
       token_value_tsh: LOYALTY_CONFIG.redemptionValueTSh,
       min_redeem_tokens: LOYALTY_CONFIG.minRedeemPoints,
       earn_rule: `1 token per TSh ${LOYALTY_CONFIG.minSpendForPoint.toLocaleString()} spent`,
       redeem_rule: `From ${LOYALTY_CONFIG.minRedeemPoints} tokens · 1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()}`,
       unit: LOYALTY_CONFIG.unitLabelPlural,
-      tier: loyalty.tier || 'Bronze',
+      tier,
       next_tier,
       points_to_next_tier,
       tokens_to_next_tier: points_to_next_tier,
-      soft_perks: softPerksForTierSimple(loyalty.tier || 'Bronze'),
+      soft_perks: softPerksForTierSimple(tier),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

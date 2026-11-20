@@ -1492,9 +1492,10 @@ Phone: ${customer.phone}
                           <div className="customer-history-compact" style={{ marginTop: 4 }}>
                             <small>
                               Tokens: {customerLoyalty.current_points || 0} available
-                              {' · '}this month +{customerLoyalty.earned_this_month || 0}
-                              {' · '}this year +{customerLoyalty.earned_this_year || 0}
                               {' · '}lifetime {customerLoyalty.lifetime_points || 0}
+                              {customerLoyalty.next_tier && customerLoyalty.tokens_to_next_tier > 0
+                                ? ` · ${customerLoyalty.tokens_to_next_tier} to ${customerLoyalty.next_tier}`
+                                : ''}
                             </small>
                           </div>
                         )}
@@ -2002,9 +2003,6 @@ Phone: ${customer.phone}
                         </label>
                         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: 6 }}>
                           From {TOKEN_REDEEM_MIN} tokens · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()}
-                          {customerLoyalty
-                            ? ` · earned this month ${customerLoyalty.earned_this_month || 0}, this year ${customerLoyalty.earned_this_year || 0}`
-                            : ''}
                         </div>
                         {customerLoyalty?.soft_perks?.length > 0 && (
                           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: 6 }}>

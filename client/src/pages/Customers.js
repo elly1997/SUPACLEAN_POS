@@ -811,14 +811,6 @@ const Customers = () => {
               <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{loyaltyData[loyaltyCustomerId].current_points}</div>
             </div>
             <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Earned this month</div>
-              <div style={{ fontSize: '24px', fontWeight: 'bold' }}>+{loyaltyData[loyaltyCustomerId].earned_this_month || 0}</div>
-            </div>
-            <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Earned this year</div>
-              <div style={{ fontSize: '24px', fontWeight: 'bold' }}>+{loyaltyData[loyaltyCustomerId].earned_this_year || 0}</div>
-            </div>
-            <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Lifetime tokens</div>
               <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{loyaltyData[loyaltyCustomerId].lifetime_points}</div>
             </div>
@@ -830,14 +822,15 @@ const Customers = () => {
                 </span>
                 <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                   {loyaltyData[loyaltyCustomerId].points_to_next_tier != null && loyaltyData[loyaltyCustomerId].points_to_next_tier > 0
-                    ? `${loyaltyData[loyaltyCustomerId].points_to_next_tier} tok to next`
+                    ? `${loyaltyData[loyaltyCustomerId].points_to_next_tier} tok to ${loyaltyData[loyaltyCustomerId].next_tier || 'next'}`
                     : 'Top tier'}
                 </span>
               </div>
             </div>
           </div>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: 0 }}>
-            Earn 1 token per TSh 20,000 · Redeem from {TOKEN_REDEEM_MIN} tokens · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()}
+            Earn 1 token / TSh 20,000 · Redeem from {TOKEN_REDEEM_MIN} · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()}
+            {' · '}Tiers: Silver 51 · Gold 86 · Platinum 136 (lifetime)
           </p>
           <div style={{ marginBottom: '12px' }}>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>Recent token activity</div>
