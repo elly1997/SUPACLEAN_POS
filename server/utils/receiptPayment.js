@@ -144,7 +144,10 @@ async function applyReceiptPaymentAtomic({
 
     let newReceiptPaid = receiptPaid;
     let transactionId = null;
-    let receiptPaymentStatus = firstOrder.payment_status;
+    // When collecting an already-paid receipt (payAmount = 0), still treat as paid_full
+    // so loyalty awards run. Do not trust only the first line's prior payment_status.
+    let receiptPaymentStatus =
+      newReceiptPaid >= receiptTotal - tol ? 'paid_full' : firstOrder.payment_status;
 
     if (payAmount > 0) {
       newReceiptPaid = roundMoney(receiptPaid + payAmount);

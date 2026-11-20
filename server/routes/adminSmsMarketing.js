@@ -160,19 +160,76 @@ router.put('/templates/:id', async (req, res) => {
   }
 });
 
+router.get('/campaigns', async (req, res) => {
+  try {
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '30', 10) || 30));
+    const rows = await db.all(
+      `SELECT id, name, template_id, audience_tags, audience_all, recipient_count,
+              sent_count, suppressed_count, skipped_duplicate_count, failed_count,
+              status, dry_run, created_by, created_at, updated_at
+       FROM sms_marketing_campaigns
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [limit]
+    );
+    res.json(rows || []);
+  } catch (err) {
+    console.error('SMS campaigns list error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/frembo-templates', (req, res) => {
+  res.json([
+    {
+      name: 'Frembo — points balance',
+      message:
+        'Hi {{name}}, you have {{points}} SUPACLEAN loyalty points ({{tier}}). Book a wash or ask about free pickup if Gold+. — Frembo Enterprises',
+    },
+    {
+      name: 'Frembo — dormant 60 days',
+      message:
+        'Hi {{name}}, we miss you at SUPACLEAN. Your points still wait. Reply or visit for laundry + free pickup if Gold+. Car wash in Moshono too!',
+    },
+    {
+      name: 'Frembo — car wash Moshono',
+      message:
+        'Hi {{name}}, SUPACLEAN Car wash & detailing is in Moshono. Platinum members get seasonal vouchers. Ask at the till. — Frembo',
+    },
+    {
+      name: 'Frembo — Giftopia Groove',
+      message:
+        'Hi {{name}}, gift season at Giftopia Groove — mention your SUPACLEAN {{tier}} tier for wrap offers. — Frembo Enterprises',
+    },
+    {
+      name: 'Frembo — Homes intro',
+      message:
+        'Hi {{name}}, explore Frembo Homes & serviced apartments. Top laundry members get tour intros — ask staff. — Frembo Enterprises',
+    },
+    {
+      name: 'Frembo — Supafundi',
+      message:
+        'Hi {{name}}, hardware needs? Supafundi welcomes SUPACLEAN loyal customers. Ask for a partner intro at the till.',
+    },
+  ]);
+});
+
 // Marketing send
 router.post('/send', async (req, res) => {
   try {
     const templateId = req.body?.template_id;
     const tags = normalizeAudienceTags(req.body?.tags || req.body?.tag);
     const audienceAll = !!req.body?.audience_all;
+    const segment = String(req.body?.segment || '').trim().toLowerCase(); // dormant_30|dormant_60|dormant_90|gold|platinum|near_tier|high_balance
     const dryRun = req.body?.dry_run === true || req.body?.dry_run === 'true';
     const limit = Math.min(500, Math.max(1, parseInt(req.body?.limit || '200', 10) || 200));
     const campaignName = String(req.body?.name || 'SMS marketing campaign').trim();
 
     if (!templateId) return res.status(400).json({ error: 'template_id is required' });
-    if (!audienceAll && tags.length === 0) {
-      return res.status(400).json({ error: 'Provide either { audience_all: true } or { tags: [...] }' });
+    if (!audienceAll && tags.length === 0 && !segment) {
+      return res.status(400).json({
+        error: 'Provide audience_all, tags, or a loyalty segment (dormant_30/60/90, gold, platinum, near_tier, high_balance)',
+      });
     }
 
     const template = await db.get(
@@ -187,7 +244,8 @@ router.post('/send', async (req, res) => {
     }
 
     const createdBy = req.user?.fullName || req.user?.username || 'Admin';
-    const audienceTagsString = tags.length > 0 ? tags.join(',') : null;
+    const audienceTagsString =
+      tags.length > 0 ? tags.join(',') : segment ? `segment:${segment}` : null;
 
     const campaignInsert = await db.run(
       `INSERT INTO sms_marketing_campaigns
@@ -208,22 +266,53 @@ router.post('/send', async (req, res) => {
 
     // Eligible recipients (customer opt-out + valid phone).
     let query = `
-      SELECT id, name, phone
-      FROM customers
-      WHERE sms_notifications_enabled != 0
-        AND phone IS NOT NULL
-        AND TRIM(phone) <> ''
-        AND phone NOT LIKE 'NO-PHONE:%'
+      SELECT c.id, c.name, c.phone,
+             COALESCE(lp.current_points, 0) AS current_points,
+             COALESCE(lp.lifetime_points, 0) AS lifetime_points,
+             COALESCE(lp.tier, 'Bronze') AS tier
+      FROM customers c
+      LEFT JOIN loyalty_points lp ON lp.customer_id = c.id
+      WHERE COALESCE(c.sms_notifications_enabled, 1) != 0
+        AND c.phone IS NOT NULL
+        AND TRIM(c.phone) <> ''
+        AND c.phone NOT LIKE 'NO-PHONE:%'
     `;
     const params = [];
 
     if (!audienceAll && tags.length > 0) {
-      const tagClauses = tags.map(() => 'LOWER(COALESCE(tags, \'\')) LIKE ?').join(' OR ');
+      const tagClauses = tags.map(() => 'LOWER(COALESCE(c.tags, \'\')) LIKE ?').join(' OR ');
       query += ` AND (${tagClauses})`;
       tags.forEach((t) => params.push(`%${String(t).toLowerCase()}%`));
     }
 
-    query += ` ORDER BY id ASC LIMIT ?`;
+    if (segment === 'gold') {
+      query += ` AND COALESCE(lp.tier, 'Bronze') = 'Gold'`;
+    } else if (segment === 'platinum') {
+      query += ` AND COALESCE(lp.tier, 'Bronze') = 'Platinum'`;
+    } else if (segment === 'high_balance') {
+      query += ` AND COALESCE(lp.current_points, 0) >= 20`;
+    } else if (segment === 'near_tier') {
+      query += ` AND (
+        (COALESCE(lp.lifetime_points, 0) >= 450 AND COALESCE(lp.lifetime_points, 0) < 500)
+        OR (COALESCE(lp.lifetime_points, 0) >= 1800 AND COALESCE(lp.lifetime_points, 0) < 2000)
+        OR (COALESCE(lp.lifetime_points, 0) >= 6750 AND COALESCE(lp.lifetime_points, 0) < 7500)
+      )`;
+    } else if (segment === 'dormant_30' || segment === 'dormant_60' || segment === 'dormant_90') {
+      const days = segment === 'dormant_30' ? 30 : segment === 'dormant_60' ? 60 : 90;
+      query += `
+        AND EXISTS (
+          SELECT 1 FROM orders o
+          WHERE o.customer_id = c.id AND COALESCE(o.is_voided, FALSE) = FALSE
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM orders o2
+          WHERE o2.customer_id = c.id
+            AND COALESCE(o2.is_voided, FALSE) = FALSE
+            AND COALESCE(o2.collected_date, o2.order_date) >= (CURRENT_TIMESTAMP - INTERVAL '${days} days')
+        )`;
+    }
+
+    query += ` ORDER BY c.id ASC LIMIT ?`;
     params.push(limit);
 
     const recipients = await db.all(query, params);
@@ -262,6 +351,9 @@ router.post('/send', async (req, res) => {
       const message = applyTemplateVars(template.message, {
         name: customer.name,
         customer_name: customer.name,
+        points: customer.current_points ?? 0,
+        tier: customer.tier || 'Bronze',
+        lifetime_points: customer.lifetime_points ?? 0,
       });
 
       const result = await sendSMS(phone, message, {

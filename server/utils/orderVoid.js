@@ -8,10 +8,10 @@ const { logPaymentChange } = require('./paymentTransactions');
 const { toSqlDateString } = require('./businessDate');
 
 const LOYALTY_TIERS = {
-  Platinum: { minPoints: 5000 },
+  Platinum: { minPoints: 7500 },
   Gold: { minPoints: 2000 },
   Silver: { minPoints: 500 },
-  Bronze: { minPoints: 0 }
+  Bronze: { minPoints: 0 },
 };
 
 function calculateTier(lifetimePoints) {

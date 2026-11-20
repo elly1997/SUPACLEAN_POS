@@ -1,6 +1,7 @@
 import React from 'react';
 import { formatReceiptForDisplay } from '../utils/receiptId';
 import { getReceiptTotals, formatReceiptMoney } from '../utils/receiptTotals';
+import LoyaltyBadge from './LoyaltyBadge';
 import './ReceiptDetailPanel.css';
 
 /**
@@ -97,7 +98,10 @@ export default function ReceiptDetailPanel({
             <tr>
               <td>Name</td>
               <td>
-                <strong>{order.customer_name || '—'}</strong>
+                <strong style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {order.customer_name || '—'}
+                  <LoyaltyBadge tier={order.tier} points={order.current_points} />
+                </strong>
               </td>
             </tr>
             <tr>

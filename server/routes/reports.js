@@ -98,19 +98,37 @@ router.get('/customers', requireBranchAccess(), async (req, res) => {
   const branchJoinClause = branchFilter.clause ? ' ' + branchFilter.clause.replace(/\?/g, () => `$${nextParam}`) : '';
   if (branchFilter.params?.length) params.push(...branchFilter.params);
 
+  const safeYear = String(year || '').replace(/\D/g, '').slice(0, 4);
+  const safeMonth = String(month || '').replace(/\D/g, '').padStart(2, '0').slice(0, 2);
+  const monthFilterLt =
+    safeMonth && safeYear && safeMonth !== '00'
+      ? `AND lt.created_at IS NOT NULL AND TO_CHAR(lt.created_at, 'YYYY-MM') = '${safeYear}-${safeMonth}'`
+      : safeYear
+        ? `AND lt.created_at IS NOT NULL AND TO_CHAR(lt.created_at, 'YYYY') = '${safeYear}'`
+        : '';
+
   const query = `
     SELECT 
       c.id,
       c.name,
       c.phone,
       COUNT(o.id) as total_orders,
-      SUM(o.total_amount) as total_spent,
+      COALESCE(SUM(o.total_amount), 0) as total_spent,
       MAX(o.order_date) as last_order_date,
-      SUM(CASE 
-        WHEN o.status = 'collected' AND o.payment_status = 'paid_full' THEN 
-          CAST(o.total_amount / 20000 AS INTEGER)
-        ELSE 0 
-      END) as monthly_points_earned,
+      COALESCE((
+        SELECT SUM(CASE WHEN lt.points > 0 THEN lt.points ELSE 0 END)
+        FROM loyalty_transactions lt
+        WHERE lt.customer_id = c.id
+          AND lt.transaction_type = 'earned'
+          ${monthFilterLt}
+      ), 0) as monthly_points_earned,
+      COALESCE((
+        SELECT SUM(CASE WHEN lt.points < 0 THEN ABS(lt.points) ELSE 0 END)
+        FROM loyalty_transactions lt
+        WHERE lt.customer_id = c.id
+          AND lt.transaction_type IN ('redeemed', 'reversed')
+          ${monthFilterLt}
+      ), 0) as monthly_points_redeemed,
       COALESCE(lp.current_points, 0) as current_points,
       COALESCE(lp.lifetime_points, 0) as lifetime_points,
       COALESCE(lp.tier, 'Bronze') as tier
@@ -118,18 +136,34 @@ router.get('/customers', requireBranchAccess(), async (req, res) => {
     LEFT JOIN orders o ON c.id = o.customer_id ${dateFilter}${branchJoinClause}
     LEFT JOIN loyalty_points lp ON c.id = lp.customer_id
     GROUP BY c.id, c.name, c.phone, lp.current_points, lp.lifetime_points, lp.tier
-    HAVING COUNT(o.id) > 0 OR SUM(CASE 
-      WHEN o.status = 'collected' AND o.payment_status = 'paid_full' THEN 
-        CAST(o.total_amount / 20000 AS INTEGER)
-      ELSE 0 
-    END) > 0
+    HAVING COUNT(o.id) > 0
+       OR COALESCE((
+            SELECT SUM(CASE WHEN lt.points > 0 THEN lt.points ELSE 0 END)
+            FROM loyalty_transactions lt
+            WHERE lt.customer_id = c.id AND lt.transaction_type = 'earned' ${monthFilterLt}
+          ), 0) > 0
     ORDER BY monthly_points_earned DESC, total_spent DESC
     LIMIT 50
   `;
 
   try {
     const rows = await db.all(query, params);
-    res.json(rows || []);
+    const summary = await db.get(
+      `SELECT
+         COALESCE(SUM(lp.current_points), 0) AS liability_points,
+         COALESCE(SUM(lp.current_points), 0) * 1000 AS liability_tsh_estimate,
+         COUNT(*) FILTER (WHERE COALESCE(lp.current_points, 0) > 0) AS customers_with_balance
+       FROM loyalty_points lp`
+    ).catch(() => null);
+    res.json({
+      customers: rows || [],
+      summary: {
+        liability_points: Number(summary?.liability_points) || 0,
+        liability_tsh_estimate: Number(summary?.liability_tsh_estimate) || 0,
+        customers_with_balance: Number(summary?.customers_with_balance) || 0,
+        note: 'liability_tsh_estimate assumes 10 pts = 10,000 TSh (1,000 TSh per point)',
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -159,24 +193,36 @@ router.get('/loyalty/monthly', requireBranchAccess(), async (req, res) => {
         c.name,
         c.phone,
         COUNT(DISTINCT o.id) as orders_count,
-        SUM(o.total_amount) as total_spent,
-        SUM(CASE 
-          WHEN o.status = 'collected' AND o.payment_status = 'paid_full' THEN 
-            CAST(o.total_amount / 20000 AS INTEGER)
-          ELSE 0 
-        END) as points_earned,
+        COALESCE(SUM(o.total_amount), 0) as total_spent,
+        COALESCE((
+          SELECT SUM(CASE WHEN lt.points > 0 THEN lt.points ELSE 0 END)
+          FROM loyalty_transactions lt
+          WHERE lt.customer_id = c.id
+            AND lt.transaction_type = 'earned'
+            AND TO_CHAR(lt.created_at, 'YYYY-MM') = $1
+        ), 0) as points_earned,
+        COALESCE((
+          SELECT SUM(CASE WHEN lt.points < 0 THEN ABS(lt.points) ELSE 0 END)
+          FROM loyalty_transactions lt
+          WHERE lt.customer_id = c.id
+            AND lt.transaction_type IN ('redeemed', 'reversed')
+            AND TO_CHAR(lt.created_at, 'YYYY-MM') = $1
+        ), 0) as points_redeemed,
         COALESCE(lp.current_points, 0) as current_points,
+        COALESCE(lp.lifetime_points, 0) as lifetime_points,
         COALESCE(lp.tier, 'Bronze') as tier
       FROM customers c
       INNER JOIN orders o ON c.id = o.customer_id
       LEFT JOIN loyalty_points lp ON c.id = lp.customer_id
       WHERE ${whereClause}
-      GROUP BY c.id, c.name, c.phone, lp.current_points, lp.tier
-      HAVING SUM(CASE 
-        WHEN o.status = 'collected' AND o.payment_status = 'paid_full' THEN 
-          CAST(o.total_amount / 20000 AS INTEGER)
-        ELSE 0 
-      END) > 0
+      GROUP BY c.id, c.name, c.phone, lp.current_points, lp.lifetime_points, lp.tier
+      HAVING COALESCE((
+          SELECT SUM(CASE WHEN lt.points > 0 THEN lt.points ELSE 0 END)
+          FROM loyalty_transactions lt
+          WHERE lt.customer_id = c.id
+            AND lt.transaction_type = 'earned'
+            AND TO_CHAR(lt.created_at, 'YYYY-MM') = $1
+        ), 0) > 0
       ORDER BY points_earned DESC, total_spent DESC
       LIMIT 50
     `;

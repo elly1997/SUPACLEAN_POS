@@ -126,6 +126,15 @@ const Reports = () => {
   const [salesReport, setSalesReport] = useState([]);
   const [serviceReport, setServiceReport] = useState([]);
   const [customerReport, setCustomerReport] = useState([]);
+  const [loyaltySummary, setLoyaltySummary] = useState(null);
+
+  const normalizeCustomerReport = (payload) => {
+    if (Array.isArray(payload)) return { customers: payload, summary: null };
+    if (payload && Array.isArray(payload.customers)) {
+      return { customers: payload.customers, summary: payload.summary || null };
+    }
+    return { customers: [], summary: null };
+  };
   const [dateRange, setDateRange] = useState(() => {
     const start = searchParams.get('start');
     const end = searchParams.get('end');
@@ -281,7 +290,9 @@ const Reports = () => {
         setServiceReport(res.data || []);
       } else if (tab === 'customers') {
         const res = await getCustomerReport({ month: customerFilter.month, year: customerFilter.year });
-        setCustomerReport(res.data || []);
+        const { customers, summary } = normalizeCustomerReport(res.data);
+        setCustomerReport(customers);
+        setLoyaltySummary(summary);
       }
       setLoadedTabs((prev) => ({ ...prev, [tab]: true }));
     } catch (error) {
@@ -328,7 +339,9 @@ const Reports = () => {
     setTabLoading(true);
     try {
       const res = await getCustomerReport({ month: customerFilter.month, year: customerFilter.year });
-      setCustomerReport(res.data || []);
+      const { customers, summary } = normalizeCustomerReport(res.data);
+      setCustomerReport(customers);
+      setLoyaltySummary(summary);
       setLoadedTabs((prev) => ({ ...prev, customers: true }));
       if (res.fromCache && res.syncedAt) setLastSyncedAt(res.syncedAt); else setLastSyncedAt(null);
     } catch (error) {
@@ -1327,8 +1340,17 @@ const Reports = () => {
                 )}
               </div>
               <div className="reports-info-banner">
-                <strong>Loyalty points:</strong> 1 point per 20,000 TSh spent. 10 points = 10,000 TSh discount
+                <strong>Loyalty points:</strong> earned from ledger (collection). 1 pt / 20,000 TSh base · 10 pts = 10,000 TSh · cash redeem max 10% of ticket
               </div>
+              {loyaltySummary && (
+                <div className="reports-info-banner" style={{ marginTop: 8 }}>
+                  <strong>Liability:</strong> {Number(loyaltySummary.liability_points || 0).toLocaleString()} pts
+                  {' ≈ '}
+                  TSh {Number(loyaltySummary.liability_tsh_estimate || 0).toLocaleString()}
+                  {' · '}
+                  {Number(loyaltySummary.customers_with_balance || 0).toLocaleString()} customers with balance
+                </div>
+              )}
               <div className="table-wrapper interactive-scroll-region" tabIndex={0} role="region" aria-label="Customer report table" {...tableScrollHandlers}>
                 {hasCustomerData ? (
                   <table className="reports-table-pro reports-table-pro--compact" aria-label="Top customers loyalty">
@@ -1356,7 +1378,8 @@ const Reports = () => {
                           <td className="num">{formatTSh(customer.total_spent)}</td>
                           <td>
                             <div className="points-cell">
-                              <span className="points-display points-monthly">{customer.monthly_points_earned ?? 0} this month</span>
+                              <span className="points-display points-monthly">{customer.monthly_points_earned ?? 0} earned</span>
+                              <span className="points-display points-current">{customer.monthly_points_redeemed ?? 0} redeemed</span>
                               <span className="points-display points-current">{customer.current_points ?? 0} available</span>
                               <span className="points-lifetime">{customer.lifetime_points ?? 0} lifetime</span>
                             </div>

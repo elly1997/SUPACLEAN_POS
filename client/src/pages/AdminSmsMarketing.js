@@ -37,12 +37,17 @@ const AdminSmsMarketing = () => {
 
   const [campaignName, setCampaignName] = useState('');
   const [templateId, setTemplateId] = useState('');
-  const [audienceAll, setAudienceAll] = useState(true);
+  const [audienceMode, setAudienceMode] = useState('all'); // all | tags | segment
   const [tagsCsv, setTagsCsv] = useState('');
+  const [loyaltySegment, setLoyaltySegment] = useState('dormant_60');
   const [dryRun, setDryRun] = useState(true);
   const [limit, setLimit] = useState(200);
   const [sending, setSending] = useState(false);
   const [lastSendResult, setLastSendResult] = useState(null);
+  const [campaigns, setCampaigns] = useState([]);
+  const [fremboPack, setFremboPack] = useState([]);
+
+  const audienceAll = audienceMode === 'all';
 
   const activeTemplates = useMemo(
     () => (templates || []).filter(isTemplateActive),
@@ -55,13 +60,17 @@ const AdminSmsMarketing = () => {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [statusRes, templatesRes] = await Promise.all([
+      const [statusRes, templatesRes, campaignsRes, fremboRes] = await Promise.all([
         api.get('/admin/sms-marketing/status'),
         api.get('/admin/sms-marketing/templates'),
+        api.get('/admin/sms-marketing/campaigns').catch(() => ({ data: [] })),
+        api.get('/admin/sms-marketing/frembo-templates').catch(() => ({ data: [] })),
       ]);
       setSmsSendingEnabled(formatBool(statusRes?.data?.smsSendingEnabled));
       const list = Array.isArray(templatesRes?.data) ? templatesRes.data : [];
       setTemplates(list);
+      setCampaigns(Array.isArray(campaignsRes?.data) ? campaignsRes.data : []);
+      setFremboPack(Array.isArray(fremboRes?.data) ? fremboRes.data : []);
 
       const firstActive = list.find(isTemplateActive);
       setTemplateId((current) => current || (firstActive?.id ? String(firstActive.id) : ''));
@@ -187,8 +196,12 @@ const AdminSmsMarketing = () => {
       showToast('Create and activate a template first', 'warning');
       return;
     }
-    if (!audienceAll && !tagsCsv.trim()) {
-      showToast('Enter at least one customer tag, or choose all customers', 'warning');
+    if (audienceMode === 'tags' && !tagsCsv.trim()) {
+      showToast('Enter at least one customer tag, or choose all / loyalty segment', 'warning');
+      return;
+    }
+    if (audienceMode === 'segment' && !loyaltySegment) {
+      showToast('Choose a loyalty segment', 'warning');
       return;
     }
     if (!smsSendingEnabled && !dryRun) {
@@ -213,8 +226,9 @@ const AdminSmsMarketing = () => {
       const payload = {
         name: campaignName.trim() || 'SMS marketing campaign',
         template_id: templateId,
-        audience_all: audienceAll,
-        tags,
+        audience_all: audienceMode === 'all',
+        tags: audienceMode === 'tags' ? tags : [],
+        segment: audienceMode === 'segment' ? loyaltySegment : undefined,
         dry_run: dryRun,
         limit: Number(limit) || 200,
       };
@@ -222,6 +236,7 @@ const AdminSmsMarketing = () => {
       const res = await api.post('/admin/sms-marketing/send', payload);
       setLastSendResult(res?.data || null);
       showToast(dryRun ? 'Preview complete — no messages sent' : 'Campaign finished');
+      await loadAll();
     } catch (err) {
       console.error(err);
       showToast(err?.response?.data?.error || err.message || 'Campaign send failed', 'warning');
@@ -431,8 +446,8 @@ const AdminSmsMarketing = () => {
                   <input
                     type="radio"
                     name="sms-audience"
-                    checked={audienceAll}
-                    onChange={() => setAudienceAll(true)}
+                    checked={audienceMode === 'all'}
+                    onChange={() => setAudienceMode('all')}
                   />
                   <span>All customers with SMS enabled</span>
                 </label>
@@ -440,10 +455,19 @@ const AdminSmsMarketing = () => {
                   <input
                     type="radio"
                     name="sms-audience"
-                    checked={!audienceAll}
-                    onChange={() => setAudienceAll(false)}
+                    checked={audienceMode === 'tags'}
+                    onChange={() => setAudienceMode('tags')}
                   />
-                  <span>Only customers with these tags</span>
+                  <span>Customer tags</span>
+                </label>
+                <label className="sms-radio">
+                  <input
+                    type="radio"
+                    name="sms-audience"
+                    checked={audienceMode === 'segment'}
+                    onChange={() => setAudienceMode('segment')}
+                  />
+                  <span>Loyalty / dormancy segment</span>
                 </label>
               </div>
             </div>
@@ -454,10 +478,27 @@ const AdminSmsMarketing = () => {
                 type="text"
                 value={tagsCsv}
                 onChange={(e) => setTagsCsv(e.target.value)}
-                placeholder="VIP, Regular"
-                disabled={audienceAll}
+                placeholder="carwash-interest, giftopia, pickup"
+                disabled={audienceMode !== 'tags'}
               />
-              <p className="form-hint">Separate tags with commas. Used only when “tags” is selected.</p>
+              <p className="form-hint">Comma-separated. Examples: carwash-interest, homes-interest, supafundi, giftopia, pickup</p>
+            </div>
+            <div className="form-group">
+              <label htmlFor="sms-loyalty-segment">Loyalty segment</label>
+              <select
+                id="sms-loyalty-segment"
+                value={loyaltySegment}
+                onChange={(e) => setLoyaltySegment(e.target.value)}
+                disabled={audienceMode !== 'segment'}
+              >
+                <option value="dormant_30">Dormant 30 days</option>
+                <option value="dormant_60">Dormant 60 days</option>
+                <option value="dormant_90">Dormant 90 days</option>
+                <option value="near_tier">Near tier upgrade</option>
+                <option value="gold">Gold members</option>
+                <option value="platinum">Platinum members</option>
+                <option value="high_balance">High balance (≥20 pts unused)</option>
+              </select>
             </div>
             <div className="form-group">
               <label htmlFor="sms-campaign-limit">Maximum recipients</label>
@@ -533,6 +574,71 @@ const AdminSmsMarketing = () => {
           </div>
         </SurfaceCard>
       )}
+
+      {fremboPack.length > 0 && (
+        <SurfaceCard title="Frembo template pack">
+          <p className="form-hint">
+            Copy into a new template. Placeholders: {'{{name}}'}, {'{{points}}'}, {'{{tier}}'}.
+          </p>
+          <ul className="sms-template-list">
+            {fremboPack.map((tpl) => (
+              <li key={tpl.name} className="sms-template-item">
+                <div className="sms-template-meta">
+                  <div className="sms-template-title">
+                    <strong>{tpl.name}</strong>
+                  </div>
+                  <p className="sms-template-preview">{tpl.message}</p>
+                </div>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setEditingTemplateId(null);
+                    setTemplateName(tpl.name);
+                    setTemplateMessage(tpl.message);
+                    setTemplateIsActive(true);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                >
+                  Use
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </SurfaceCard>
+      )}
+
+      <SurfaceCard title="Recent campaigns">
+        {campaigns.length === 0 ? (
+          <EmptyState title="No campaigns yet" description="Send or preview a campaign to see history here." />
+        ) : (
+          <div className="table-wrapper">
+            <table className="reports-table-pro reports-table-pro--compact">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Audience</th>
+                  <th>Status</th>
+                  <th>Matched</th>
+                  <th>Sent</th>
+                  <th>When</th>
+                </tr>
+              </thead>
+              <tbody>
+                {campaigns.map((c) => (
+                  <tr key={c.id}>
+                    <td>{c.name}</td>
+                    <td>{c.audience_all ? 'All' : c.audience_tags || '—'}</td>
+                    <td>{c.status}{c.dry_run ? ' (dry)' : ''}</td>
+                    <td>{c.recipient_count ?? 0}</td>
+                    <td>{c.sent_count ?? 0}</td>
+                    <td>{c.created_at ? new Date(c.created_at).toLocaleString() : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SurfaceCard>
     </div>
   );
 };

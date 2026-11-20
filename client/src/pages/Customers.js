@@ -16,6 +16,7 @@ import { useListViewPreference } from '../hooks/useListViewPreference';
 import ListViewToggle from '../components/ListViewToggle';
 import SkeletonList from '../components/SkeletonList';
 import Loader from '../components/Loader';
+import LoyaltyBadge from '../components/LoyaltyBadge';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
 import './Customers.css';
 
@@ -495,6 +496,7 @@ const Customers = () => {
                     <div className="customers-list-card-header">
                       <div className="customer-avatar-table">{(customer.name || '?').charAt(0).toUpperCase()}</div>
                       <strong>{customer.name}</strong>
+                      <LoyaltyBadge tier={customer.tier} points={customer.current_points} />
                     </div>
                     <div className="customers-list-card-body">
                       <p>{customer.phone}</p>
@@ -641,11 +643,8 @@ const Customers = () => {
                           <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>-</span>
                         )}
                       </td>
-                      <td style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px' }}>
-                        <span className={`badge-tier-${(customer.tier || 'bronze').toLowerCase()}`} style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '10px', textTransform: 'capitalize' }}>
-                          {customer.tier || 'Bronze'}
-                        </span>
-                        <span style={{ color: 'var(--text-muted)' }}>{customer.current_points || 0} pts</span>
+                      <td>
+                        <LoyaltyBadge tier={customer.tier} points={customer.current_points} />
                       </td>
                       <td>
                         {(() => {
