@@ -994,7 +994,7 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
     }
   };
 
-  // Group orders by receipt number
+  // Group orders by receipt number (newest receipts first)
   const groupOrdersByReceipt = (ordersList) => {
     const grouped = {};
     ordersList.forEach(order => {
@@ -1021,35 +1021,56 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           order_ids: []
         };
       }
-      grouped[receiptNum].items.push(order);
-      grouped[receiptNum].total_amount += parseFloat(order.total_amount) || 0;
-      grouped[receiptNum].paid_amount += parseFloat(order.paid_amount) || 0;
-      grouped[receiptNum].order_ids.push(order.id);
+      const g = grouped[receiptNum];
+      if (order.order_date && (!g.order_date || new Date(order.order_date) > new Date(g.order_date))) {
+        g.order_date = order.order_date;
+      }
+      if (
+        order.estimated_collection_date &&
+        (!g.estimated_collection_date ||
+          new Date(order.estimated_collection_date) > new Date(g.estimated_collection_date))
+      ) {
+        g.estimated_collection_date = order.estimated_collection_date;
+      }
+      g.items.push(order);
+      g.total_amount += parseFloat(order.total_amount) || 0;
+      g.paid_amount += parseFloat(order.paid_amount) || 0;
+      g.order_ids.push(order.id);
       if (order.is_voided) {
-        grouped[receiptNum].is_voided = true;
+        g.is_voided = true;
       }
       if (order.archived_at) {
-        grouped[receiptNum].is_archived = true;
-        grouped[receiptNum].archived_at = order.archived_at;
+        g.is_archived = true;
+        g.archived_at = order.archived_at;
       }
 
       // Determine overall status (if all ready, show ready; if any pending, show pending; etc.)
-      const statuses = grouped[receiptNum].items.map(o => o.status);
-      if (grouped[receiptNum].is_archived) {
-        grouped[receiptNum].status = 'archived';
-      } else if (grouped[receiptNum].is_voided || statuses.every(s => s === 'voided')) {
-        grouped[receiptNum].status = 'voided';
+      const statuses = g.items.map(o => o.status);
+      if (g.is_archived) {
+        g.status = 'archived';
+      } else if (g.is_voided || statuses.every(s => s === 'voided')) {
+        g.status = 'voided';
       } else if (statuses.every(s => s === 'ready')) {
-        grouped[receiptNum].status = 'ready';
+        g.status = 'ready';
       } else if (statuses.some(s => s === 'pending')) {
-        grouped[receiptNum].status = 'pending';
+        g.status = 'pending';
       } else if (statuses.some(s => s === 'processing')) {
-        grouped[receiptNum].status = 'processing';
+        g.status = 'processing';
       } else if (statuses.every(s => s === 'collected')) {
-        grouped[receiptNum].status = 'collected';
+        g.status = 'collected';
       }
     });
-    return Object.values(grouped);
+    return Object.values(grouped).sort((a, b) => {
+      const orderA = a.order_date ? new Date(a.order_date).getTime() : 0;
+      const orderB = b.order_date ? new Date(b.order_date).getTime() : 0;
+      if (orderB !== orderA) return orderB - orderA;
+      const estA = a.estimated_collection_date ? new Date(a.estimated_collection_date).getTime() : 0;
+      const estB = b.estimated_collection_date ? new Date(b.estimated_collection_date).getTime() : 0;
+      if (estB !== estA) return estB - estA;
+      const idA = Math.max(0, ...(a.order_ids || []).map((n) => Number(n) || 0));
+      const idB = Math.max(0, ...(b.order_ids || []).map((n) => Number(n) || 0));
+      return idB - idA;
+    });
   };
 
   const loadReceiptDetail = useCallback(async (receiptNumber, fallbackItems = []) => {

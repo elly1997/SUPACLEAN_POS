@@ -250,7 +250,8 @@ router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
     query += ` AND o.status = 'ready' AND o.estimated_collection_date IS NOT NULL AND o.estimated_collection_date < CURRENT_TIMESTAMP`;
   }
 
-  query += ' ORDER BY o.order_date DESC';
+  // Newest first: order_date, then est. collection, then id (stable for same-day stock uploads).
+  query += ' ORDER BY o.order_date DESC NULLS LAST, o.estimated_collection_date DESC NULLS LAST, o.id DESC';
 
   // Pagination (default 50 for fast first load, max 500)
   const limit = Math.min(parseInt(limitParam, 10) || 50, 500);
