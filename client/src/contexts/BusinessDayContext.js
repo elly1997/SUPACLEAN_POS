@@ -47,23 +47,24 @@ export function BusinessDayProvider({ children }) {
     setWorkingDate(today);
   }, [setWorkingDate, today]);
 
-  const refreshWorkableDays = useCallback(async () => {
+  const refreshWorkableDays = useCallback(async (opts = {}) => {
+    const silent = opts.silent === true;
     if (!canLoadWorkable) {
       setWorkableDays([{ date: today, is_today: true, has_summary: false, is_reconciled: false }]);
       return [];
     }
-    setLoadingWorkable(true);
+    if (!silent) setLoadingWorkable(true);
     try {
-      const res = await getWorkableBusinessDays({ lookback: 45 });
+      const res = await getWorkableBusinessDays({ lookback: 60 });
       const days = Array.isArray(res.data?.days) ? res.data.days : [];
       setWorkableDays(days);
       return days;
     } catch (err) {
-      console.warn('workable-days load failed', err?.message || err);
+      console.warn('workable-days load failed', err?.response?.data?.error || err?.message || err);
       setWorkableDays([{ date: today, is_today: true, has_summary: false, is_reconciled: false }]);
       return [];
     } finally {
-      setLoadingWorkable(false);
+      if (!silent) setLoadingWorkable(false);
     }
   }, [canLoadWorkable, today]);
 

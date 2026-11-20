@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireRole } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/permissions');
+const { requirePermission, requireAnyPermission } = require('../middleware/permissions');
 const { getEffectiveBranchId } = require('../utils/branchFilter');
 const { sqlOperatingExpensesOnly } = require('../utils/operatingExpenses');
 const { getBusinessTodayYmd, assertNotFutureBusinessDate, toSqlDateString } = require('../utils/businessDate');
@@ -1138,20 +1138,25 @@ router.post('/unreconcile/:date', requireBranchAccess(), requireRole('admin'), a
  * Workable business days for catch-up posting (orders / expenses / deposits).
  * Includes today and prior calendar days that are not reconciled (missing summary = open).
  */
-router.get('/workable-days', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {
-  const branchId = getEffectiveBranchId(req);
-  if (branchId == null) {
-    return res.status(400).json({ error: 'Select a branch to view workable days' });
+router.get(
+  '/workable-days',
+  requireBranchAccess(),
+  requireAnyPermission('canManageCash', 'canCreateOrders'),
+  async (req, res) => {
+    const branchId = getEffectiveBranchId(req);
+    if (branchId == null) {
+      return res.status(400).json({ error: 'Select a branch to view workable days' });
+    }
+    try {
+      const lookback = Number.parseInt(req.query.lookback, 10);
+      const payload = await listWorkableBusinessDays(branchId, Number.isFinite(lookback) ? lookback : 45);
+      return res.json(payload);
+    } catch (err) {
+      console.error('Error listing workable business days:', err);
+      return res.status(500).json({ error: err.message });
+    }
   }
-  try {
-    const lookback = Number.parseInt(req.query.lookback, 10);
-    const payload = await listWorkableBusinessDays(branchId, Number.isFinite(lookback) ? lookback : 14);
-    return res.json(payload);
-  } catch (err) {
-    console.error('Error listing workable business days:', err);
-    return res.status(500).json({ error: err.message });
-  }
-});
+);
 
 // List daily closings that were saved but not yet reconciled
 router.get('/unreconciled', requireBranchAccess(), requirePermission('canManageCash'), async (req, res) => {

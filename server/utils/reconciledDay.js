@@ -47,35 +47,57 @@ function addDaysYmd(ymd, deltaDays) {
 }
 
 /**
- * Calendar days from (today - lookback) .. today that are still writable (not reconciled).
- * Days with no daily_cash_summaries row count as unreconciled.
+ * Workable days for a branch:
+ * - today (always, unless somehow reconciled — then omitted)
+ * - every unreconciled daily_cash_summaries row for the branch
+ * - recent calendar days with no summary (still open for catch-up)
  */
-async function listWorkableBusinessDays(branchId, lookbackDays = 14) {
+async function listWorkableBusinessDays(branchId, lookbackDays = 45) {
   const today = getBusinessTodayYmd();
-  const lookback = Math.min(Math.max(Number(lookbackDays) || 14, 1), 60);
+  const lookback = Math.min(Math.max(Number(lookbackDays) || 45, 1), 90);
   const start = addDaysYmd(today, -lookback);
 
-  const rows =
-    branchId == null || branchId === ''
-      ? []
-      : await db.all(
-          `SELECT date::text AS date, is_reconciled
-           FROM daily_cash_summaries
-           WHERE branch_id = ?
-             AND date >= ?::date
-             AND date <= ?::date`,
-          [branchId, start, today]
-        ).catch(() => []);
+  if (branchId == null || branchId === '') {
+    return { today, lookback_days: lookback, days: [{ date: today, is_today: true, has_summary: false, is_reconciled: false }] };
+  }
+
+  const [rangeRows, openRows] = await Promise.all([
+    db.all(
+      `SELECT date::text AS date, is_reconciled
+       FROM daily_cash_summaries
+       WHERE branch_id = ?
+         AND date >= ?::date
+         AND date <= ?::date`,
+      [branchId, start, today]
+    ).catch(() => []),
+    db.all(
+      `SELECT date::text AS date, is_reconciled
+       FROM daily_cash_summaries
+       WHERE branch_id = ?
+         AND COALESCE(is_reconciled, FALSE) = FALSE
+         AND date <= ?::date
+       ORDER BY date DESC
+       LIMIT 120`,
+      [branchId, today]
+    ).catch(() => []),
+  ]);
 
   const byDate = new Map();
-  for (const row of rows || []) {
+  for (const row of [...(rangeRows || []), ...(openRows || [])]) {
     const key = toSqlDateString(row.date);
-    if (key) byDate.set(key, row);
+    if (!key || key > today) continue;
+    byDate.set(key, row);
+  }
+
+  // Ensure recent calendar days exist as candidates (missing summary = open).
+  for (let i = 0; i <= lookback; i++) {
+    const date = addDaysYmd(today, -i);
+    if (!byDate.has(date)) byDate.set(date, null);
   }
 
   const days = [];
-  for (let i = 0; i <= lookback; i++) {
-    const date = addDaysYmd(today, -i);
+  const sorted = [...byDate.keys()].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  for (const date of sorted) {
     const row = byDate.get(date);
     const reconciled = !!(row && isReconciledFlag(row.is_reconciled));
     if (reconciled) continue;
