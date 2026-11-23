@@ -839,7 +839,7 @@ const AdminBranches = () => {
           <div className="settings-card">
             <h3>Daily Closing Report – Director WhatsApp</h3>
             <p className="settings-description">
-              When a branch reconciles the day in Cash Management, the Daily Closing Report is sent to this number via WhatsApp.
+              When a branch reconciles the day, a short cashflow summary is sent here via WhatsApp (opening, sales, M-Pesa, expenses, bank deposits, closing cash).
             </p>
             <div className="form-group">
               <label>Director WhatsApp number</label>

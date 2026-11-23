@@ -1,6 +1,6 @@
 /**
- * SUPACLEAN daily closing report — WhatsApp text for director.
- * Each branch sends its own independent report.
+ * SUPACLEAN daily closing report — short WhatsApp summary for the director.
+ * One independent message per branch (keep it scannable across many branches).
  */
 const db = require('../database/query');
 
@@ -13,92 +13,69 @@ function isReconciledFlag(value) {
   return value === true || value === 1 || value === '1' || value === 'true' || value === 't';
 }
 
+function fmtMoney(n) {
+  return `TZS ${Number(n).toLocaleString()}`;
+}
+
+/**
+ * Compact director report: opening, sales/revenue, M-Pesa, expenses,
+ * bank deposits, credit collections, closing cash.
+ */
 function buildDailyClosingReportText(row, branchName, cashierName, ymd, brand = null) {
   const businessName = (brand && brand.business_name) || 'SUPACLEAN';
   const opening = num(row.opening_balance);
   const openingDeclared = row.opening_cash_declared != null ? num(row.opening_cash_declared) : opening;
-  const openingVariance = num(row.opening_variance);
   const cashSales = num(row.cash_sales);
-  const bookSales = num(row.book_sales);
+  const bookSales = num(row.book_sales); // cash credit collections / prior-day collections
   const cardSales = num(row.card_sales);
   const mobileSales = num(row.mobile_money_sales);
-  // Credit sales = NOT PAID (full amount) + advance remaining AR for this day.
+  const bankPaymentsIn = num(row.bank_payments); // bank / bank_transfer received
   const creditSales = num(row.credit_sales);
-  // Total sales = how today's orders were settled (cash/digital/credit). Collections stay separate.
-  const totalSales = cashSales + mobileSales + cardSales + creditSales;
+  // Sales booked today (settlement mix). Collections stay separate.
+  const totalSales = cashSales + mobileSales + cardSales + bankPaymentsIn + creditSales;
   const expensesCash = num(row.expenses_from_cash);
   const expensesBank = num(row.expenses_from_bank);
   const expensesMpesa = num(row.expenses_from_mpesa);
   const totalExpenses = expensesCash + expensesBank + expensesMpesa;
   const bankDepositsDay = num(row.bank_deposits);
   const cashOutDrawer = expensesCash + bankDepositsDay;
-  const expectedCash = opening + cashSales + bookSales - cashOutDrawer;
-  const actualCash = openingDeclared + cashSales + bookSales - cashOutDrawer;
+  // Closing cash uses declared opening (what the till session started with).
+  const closingCash = openingDeclared + cashSales + bookSales - cashOutDrawer;
+
   const dateFormatted = new Date(`${ymd}T12:00:00`).toLocaleDateString('en-GB', {
-    weekday: 'long',
+    weekday: 'short',
     day: 'numeric',
-    month: 'long',
+    month: 'short',
     year: 'numeric',
   });
-  const revenue = totalSales;
-  const discounts = 0;
-  const costOfGoods = 0;
-  const grossProfit = revenue - discounts - costOfGoods;
-  const operatingExpenses = totalExpenses;
-  const netProfit = grossProfit - operatingExpenses;
-  const fmt = (n) => Number(n).toLocaleString();
 
-  return [
+  const branchLine = branchName ? String(branchName).trim() : 'Branch';
+  const lines = [
     `*${businessName}*`,
-    '*Daily Closing Report*',
+    `*${branchLine}* · ${dateFormatted}`,
     '━━━━━━━━━━━━━━━━',
-    `DATE:  ${dateFormatted}`,
-    `USER:  Cashier: ${cashierName || 'Cashier'}`,
+    '*Opening*',
+    `Expected: ${fmtMoney(opening)}`,
+    `Declared: ${fmtMoney(openingDeclared)}`,
     '',
-    'AMOUNT:  *OPENING CASH*',
-    `Expected (Prev Closing): TZS ${fmt(opening)}`,
-    `Declared (Session Start): TZS ${fmt(openingDeclared)}`,
-    `Variance: ${openingVariance < 0 ? '-' : '+'}TZS ${fmt(Math.abs(openingVariance))}`,
+    '*Sales & revenue*',
+    `Cash sales: ${fmtMoney(cashSales)}`,
+    `M-Pesa: ${fmtMoney(mobileSales)}`,
+    `Card: ${fmtMoney(cardSales)}`,
+    `Bank transfers: ${fmtMoney(bankPaymentsIn)}`,
+    `Credit sales: ${fmtMoney(creditSales)}`,
+    `Credit collections: ${fmtMoney(bookSales)}`,
+    `*Total sales: ${fmtMoney(totalSales)}*`,
     '',
-    'CHART:  *SALES BREAKDOWN*',
-    `• Cash Sales: TZS ${fmt(cashSales)}`,
-    `• M-Pesa: TZS ${fmt(mobileSales)}`,
-    `• Bank: TZS ${fmt(cardSales)}`,
-    `• Credit Sales: TZS ${fmt(creditSales)}`,
-    `*Total Sales: TZS ${fmt(totalSales)}*`,
+    '*Outflows*',
+    `Expenses: ${fmtMoney(totalExpenses)}`,
+    `Bank deposits: ${fmtMoney(bankDepositsDay)}`,
     '',
-    'IMPORT:  *CREDIT COLLECTIONS*',
-    `Received Today: TZS ${fmt(bookSales)}`,
-    '',
-    'EXPORT:  *OUTFLOWS*',
-    `• Operating expenses: TZS ${fmt(totalExpenses)}`,
-    `• Bank deposits (cash to bank, not P&L): TZS ${fmt(bankDepositsDay)}`,
-    `• Stock Purchases: TZS 0`,
-    '',
-    'REPORT:  *PROFIT & LOSS*',
-    `• Revenue: TZS ${fmt(revenue)}`,
-    `• Less Discounts: (TZS ${fmt(discounts)})`,
-    `• Cost of Goods: (TZS ${fmt(costOfGoods)})`,
-    `• *Gross Profit: TZS ${fmt(grossProfit)}*`,
-    `• Operating Expenses: (TZS ${fmt(operatingExpenses)})`,
-    `*AMOUNT:  NET PROFIT: TZS ${fmt(netProfit)}*`,
-    '',
-    'ℹ️ Opening cash variance is for reconciliation only (not extra P&L). A short may be an unrecorded expense or deposit—book the expense on this date (Expenses → adjust reconciled day) or record deposits under Cash Management.',
-    '',
-    'CASH:  *CASH POSITION*',
-    `Opening (Expected): TZS ${fmt(opening)}`,
-    `Opening (Declared): TZS ${fmt(openingDeclared)}`,
-    `+ Cash Sales: TZS ${fmt(cashSales)}`,
-    `+ Collections: TZS ${fmt(bookSales)}`,
-    `- Cash expenses: TZS ${fmt(expensesCash)}`,
-    `- Bank deposits: TZS ${fmt(bankDepositsDay)}`,
-    `*Expected Cash: TZS ${fmt(expectedCash)}*`,
-    `*Actual Cash: TZS ${fmt(actualCash)}*`,
+    `*Closing cash: ${fmtMoney(closingCash)}*`,
     '━━━━━━━━━━━━━━━━',
-    branchName ? ` ${branchName}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  ];
+
+  return lines.join('\n');
 }
 
 async function getDirectorWhatsAppNumber() {
