@@ -250,17 +250,73 @@ router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
     query += ` AND o.status = 'ready' AND o.estimated_collection_date IS NOT NULL AND o.estimated_collection_date < CURRENT_TIMESTAMP`;
   }
 
-  // Newest first: order_date, then est. collection, then id (stable for same-day stock uploads).
-  query += ' ORDER BY o.order_date DESC NULLS LAST, o.estimated_collection_date DESC NULLS LAST, o.id DESC';
-
-  // Pagination (default 50 for fast first load, max 500)
+  // Paginate by RECEIPT (not line). Line-based LIMIT split multi-item receipts across
+  // pages so the list showed e.g. Balance 10,000 while full details showed 82,000 due.
   const limit = Math.min(parseInt(limitParam, 10) || 50, 500);
   const offset = offsetParam !== undefined ? parseInt(offsetParam, 10) : (page ? (Math.max(1, parseInt(page, 10)) - 1) * limit : 0);
-  query += ' LIMIT ? OFFSET ?';
-  params.push(limit, offset);
+
+  // `query` is SELECT ... WHERE 1=1 <filters> (no ORDER/LIMIT yet)
+  const whereStart = query.toUpperCase().lastIndexOf('WHERE 1=1');
+  const filterSql = whereStart >= 0 ? query.slice(whereStart) : 'WHERE 1=1';
 
   try {
-    const rows = await db.all(query, params);
+    const receiptKeys = await db.all(
+      `SELECT UPPER(TRIM(o.receipt_number)) AS receipt_key
+       FROM orders o
+       JOIN services s ON o.service_id = s.id
+       JOIN customers c ON o.customer_id = c.id
+       LEFT JOIN branches b ON o.branch_id = b.id
+       LEFT JOIN loyalty_points lp ON lp.customer_id = c.id
+       ${filterSql}
+       GROUP BY UPPER(TRIM(o.receipt_number))
+       ORDER BY MAX(o.order_date) DESC NULLS LAST, MAX(o.id) DESC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
+
+    const keys = receiptKeys.map((r) => r.receipt_key).filter(Boolean);
+    if (!keys.length) {
+      res.set('X-Orders-Has-More', '0');
+      res.set('X-Orders-Page-Receipts', '0');
+      return res.json([]);
+    }
+
+    const keyPlaceholders = keys.map(() => '?').join(', ');
+    const hasMore = receiptKeys.length === limit;
+
+    // Load EVERY line for those receipts so paid/total sums are complete,
+    // even when the tab filter only matched some lines (e.g. pending vs ready).
+    let lineExtra = '';
+    if (archivedOnly) {
+      lineExtra += ' AND o.archived_at IS NOT NULL';
+    } else {
+      lineExtra += ` ${sqlUnarchivedOrdersOnly('o')}`;
+      if (status === 'voided') {
+        lineExtra += ' AND COALESCE(o.is_voided, FALSE) = TRUE';
+      } else if (include_voided !== 'true') {
+        lineExtra += ` ${sqlActiveOrdersOnly('o')}`;
+      }
+    }
+
+    const rows = await db.all(
+      `SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
+              b.name as branch_name,
+              b.code as branch_code,
+              COALESCE(lp.current_points, 0) AS current_points,
+              COALESCE(lp.tier, 'Bronze') AS tier
+       FROM orders o
+       JOIN services s ON o.service_id = s.id
+       JOIN customers c ON o.customer_id = c.id
+       LEFT JOIN branches b ON o.branch_id = b.id
+       LEFT JOIN loyalty_points lp ON lp.customer_id = c.id
+       WHERE UPPER(TRIM(o.receipt_number)) IN (${keyPlaceholders})
+         ${lineExtra}
+         ${branchFilter.clause}
+       ORDER BY o.order_date DESC NULLS LAST, o.estimated_collection_date DESC NULLS LAST, o.id DESC`,
+      [...keys, ...branchFilter.params]
+    );
+    res.set('X-Orders-Has-More', hasMore ? '1' : '0');
+    res.set('X-Orders-Page-Receipts', String(keys.length));
     res.json(rows);
   } catch (err) {
     console.error('Error fetching orders:', err);
@@ -406,35 +462,76 @@ router.get('/collection-queue', authenticate, requireBranchAccess(), async (req,
         receiptGroups[receiptNum].push(order);
       });
 
-      // Create grouped receipt entries with totals
-      const groupedReceipts = Object.keys(receiptGroups).map(receiptNum => {
-        const items = receiptGroups[receiptNum];
-        const firstItem = items[0];
+      // Cap to requested receipt count first, then reload FULL receipt lines
+      // (all statuses) so paid/total/balance match the details page — ready-only
+      // rows used to understate advances and multi-item totals.
+      const sortedKeys = Object.keys(receiptGroups).sort((a, b) => {
+        const aItems = receiptGroups[a];
+        const bItems = receiptGroups[b];
+        const aOver = aItems.some((o) => o.is_overdue) ? 1 : 0;
+        const bOver = bItems.some((o) => o.is_overdue) ? 1 : 0;
+        if (aOver !== bOver) return bOver - aOver;
+        const aDate = aItems[0].estimated_collection_date || aItems[0].ready_date;
+        const bDate = bItems[0].estimated_collection_date || bItems[0].ready_date;
+        return new Date(aDate) - new Date(bDate);
+      });
+      const pageKeys = sortedKeys.slice(0, parseInt(limit, 10));
+      if (!pageKeys.length) return [];
 
-        // Calculate totals across all items
+      const keyPlaceholders = pageKeys.map(() => '?').join(', ');
+      const fullLines = await db.all(
+        `SELECT o.*, s.name as service_name, c.name as customer_name, c.phone as customer_phone,
+                b.name as branch_name, b.code as branch_code,
+                COALESCE(lp.current_points, 0) AS current_points,
+                COALESCE(lp.tier, 'Bronze') AS tier,
+                CASE
+                  WHEN o.estimated_collection_date IS NOT NULL AND o.estimated_collection_date < CURRENT_TIMESTAMP
+                  THEN 1 ELSE 0
+                END as is_overdue,
+                CASE
+                  WHEN o.estimated_collection_date IS NOT NULL THEN
+                    CAST(EXTRACT(EPOCH FROM (NOW() - o.estimated_collection_date)) / 3600 AS INTEGER)
+                  ELSE NULL
+                END as hours_overdue
+         FROM orders o
+         JOIN services s ON o.service_id = s.id
+         JOIN customers c ON o.customer_id = c.id
+         LEFT JOIN branches b ON o.branch_id = b.id
+         LEFT JOIN loyalty_points lp ON lp.customer_id = c.id
+         WHERE UPPER(TRIM(o.receipt_number)) IN (${keyPlaceholders})
+           ${sqlActiveOrdersOnly('o')}
+           ${sqlUnarchivedOrdersOnly('o')}
+           ${branchFilter.clause}
+         ORDER BY o.id`,
+        [...pageKeys.map((k) => String(k).toUpperCase().trim()), ...branchFilter.params]
+      );
+
+      const fullGroups = {};
+      fullLines.forEach((order) => {
+        const key = String(order.receipt_number || '').toUpperCase().trim();
+        if (!fullGroups[key]) fullGroups[key] = [];
+        fullGroups[key].push(order);
+      });
+
+      const groupedReceipts = pageKeys.map((receiptNum) => {
+        const key = String(receiptNum).toUpperCase().trim();
+        const items = fullGroups[key] || receiptGroups[receiptNum] || [];
+        const firstItem = items[0] || receiptGroups[receiptNum][0];
         const receiptTotal = items.reduce((sum, o) => sum + (parseFloat(o.total_amount) || 0), 0);
         const receiptPaid = items.reduce((sum, o) => sum + (parseFloat(o.paid_amount) || 0), 0);
-
         return {
           ...firstItem,
-          receipt_number: receiptNum,
+          receipt_number: firstItem.receipt_number || receiptNum,
           total_amount: receiptTotal,
           paid_amount: receiptPaid,
           receipt_item_count: items.length,
-          is_overdue: firstItem.is_overdue,
+          is_overdue: items.some((o) => o.is_overdue) ? 1 : 0,
           hours_overdue: firstItem.hours_overdue,
-          all_items: items // Include all items for reference
+          all_items: items,
         };
       });
 
-      groupedReceipts.sort((a, b) => {
-        if (a.is_overdue !== b.is_overdue) return b.is_overdue - a.is_overdue;
-        const aDate = a.estimated_collection_date || a.ready_date;
-        const bDate = b.estimated_collection_date || b.ready_date;
-        return new Date(aDate) - new Date(bDate);
-      });
-
-      return groupedReceipts.slice(0, parseInt(limit, 10));
+      return groupedReceipts;
     });
     res.json(limited);
   } catch (err) {

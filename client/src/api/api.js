@@ -336,7 +336,14 @@ export async function getOrders(params = {}) {
   try {
     const res = await api.get('/orders', { params });
     await setSyncCache(key, res.data || []);
-    return res;
+    const hasMoreHeader = res.headers?.['x-orders-has-more'];
+    const hasMore =
+      hasMoreHeader === '1' || hasMoreHeader === 'true'
+        ? true
+        : hasMoreHeader === '0' || hasMoreHeader === 'false'
+          ? false
+          : Array.isArray(res.data) && res.data.length >= (parseInt(params.limit, 10) || 50);
+    return { ...res, hasMore };
   } catch (err) {
     if (isNetworkError(err)) {
       try {

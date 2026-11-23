@@ -64,7 +64,11 @@ app.use(cors((req, callback) => {
   // Allow the deployment's own origin (browser sends Origin on same-origin POST/PUT/DELETE)
   // in addition to the explicitly configured CLIENT_URL / RENDER_EXTERNAL_URL values.
   if (allowedOrigins.includes(normalized) || isSelfOrigin) {
-    return callback(null, { origin: true, credentials: true });
+    return callback(null, {
+      origin: true,
+      credentials: true,
+      exposedHeaders: ['X-Orders-Has-More', 'X-Orders-Page-Receipts'],
+    });
   }
 
   return callback(new Error(`CORS blocked for origin: ${origin}`));

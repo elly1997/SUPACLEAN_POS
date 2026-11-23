@@ -241,9 +241,21 @@ const Orders = () => {
 
       const res = await getOrders(params);
       const data = res.data || [];
-      if (append) setOrders(prev => [...prev, ...data]);
-      else setOrders(data);
-      setHasMore(data.length === ORDERS_PAGE_SIZE);
+      if (append) {
+        // Deduplicate by line id — receipt-based pages never overlap, but
+        // offline/cache merges can.
+        setOrders((prev) => {
+          const seen = new Set(prev.map((o) => o.id));
+          return [...prev, ...data.filter((o) => o.id != null && !seen.has(o.id))];
+        });
+      } else {
+        setOrders(data);
+      }
+      setHasMore(
+        typeof res.hasMore === 'boolean'
+          ? res.hasMore
+          : data.length >= ORDERS_PAGE_SIZE
+      );
       if (res.fromCache && res.syncedAt) setLastSyncedAt(res.syncedAt); else setLastSyncedAt(null);
       if (!append) loadPendingVoids();
     } catch (error) {

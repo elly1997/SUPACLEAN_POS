@@ -370,6 +370,9 @@ router.get('/', async (req, res) => {
   if (useLight) {
     const whereConditions = [];
     const params = [];
+    // Outstanding is scoped to the active branch when set (all-branch admins see all).
+    const outstandingBranchSql =
+      effectiveBranchId != null ? ' AND o.branch_id = ?' : '';
     if (effectiveBranchId != null) {
       whereConditions.push('(c.primary_branch_id = ? OR c.id IN (SELECT DISTINCT customer_id FROM orders WHERE branch_id = ?))');
       params.push(effectiveBranchId, effectiveBranchId);
@@ -379,6 +382,8 @@ router.get('/', async (req, res) => {
       params.push(`%${search}%`, `%${search}%`);
     }
     const whereClause = whereConditions.length > 0 ? ' WHERE ' + whereConditions.join(' AND ') : '';
+    // Subquery ? binds before WHERE ? in the SQL text.
+    const outstandingParams = effectiveBranchId != null ? [effectiveBranchId] : [];
     try {
       const rows = await db.all(
         `SELECT c.*,
@@ -386,18 +391,28 @@ router.get('/', async (req, res) => {
                 b.name AS branch_name,
                 COALESCE(lp.current_points, 0) AS current_points,
                 COALESCE(lp.lifetime_points, 0) AS lifetime_points,
-                COALESCE(lp.tier, 'Bronze') AS tier
+                COALESCE(lp.tier, 'Bronze') AS tier,
+                COALESCE((
+                  SELECT SUM(GREATEST(COALESCE(o.total_amount, 0) - COALESCE(o.paid_amount, 0), 0))
+                  FROM orders o
+                  WHERE o.customer_id = c.id
+                    AND o.status != 'collected'
+                    AND COALESCE(o.is_voided, FALSE) = FALSE
+                    AND o.archived_at IS NULL
+                    AND (COALESCE(o.total_amount, 0) - COALESCE(o.paid_amount, 0)) > 0
+                    ${outstandingBranchSql}
+                ), 0) AS outstanding_balance
          FROM customers c
          LEFT JOIN branches b ON b.id = c.primary_branch_id
          LEFT JOIN loyalty_points lp ON c.id = lp.customer_id
          ${whereClause} ORDER BY c.created_at DESC LIMIT ? OFFSET ?`,
-        [...params, limit, offset]
+        [...outstandingParams, ...params, limit, offset]
       );
       const formattedRows = (rows || []).map(row => ({
         ...row,
         tags: row.tags || null,
         sms_notifications_enabled: row.sms_notifications_enabled !== undefined ? row.sms_notifications_enabled : 1,
-        outstanding_balance: 0,
+        outstanding_balance: parseFloat(row.outstanding_balance || 0),
         current_points: parseInt(row.current_points || 0),
         lifetime_points: parseInt(row.lifetime_points || 0),
         tier: row.tier || 'Bronze',
@@ -428,6 +443,7 @@ router.get('/', async (req, res) => {
              WHEN o.id IS NOT NULL 
              AND o.status != 'collected' 
              AND COALESCE(o.is_voided, FALSE) = FALSE
+             AND o.archived_at IS NULL
              AND (o.total_amount - COALESCE(o.paid_amount, 0)) > 0
              AND ${branchCondition}
              THEN (o.total_amount - o.paid_amount) 
@@ -438,6 +454,7 @@ router.get('/', async (req, res) => {
     LEFT JOIN orders o ON c.id = o.customer_id 
       AND o.status != 'collected' 
       AND COALESCE(o.is_voided, FALSE) = FALSE
+      AND o.archived_at IS NULL
       AND (o.total_amount - COALESCE(o.paid_amount, 0)) > 0
       ${branchFilter.clause}
   `;
