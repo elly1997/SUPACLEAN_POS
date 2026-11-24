@@ -45,6 +45,10 @@ const CUSTOMERS_EXPORT_COLUMNS = [
 const Customers = () => {
   const { showToast, ToastContainer } = useToast();
   const { branch, hasPermission, selectedBranchId } = useAuth();
+  // Redeeming tokens is a front-desk action: same roles the server accepts on POST /loyalty/redeem
+  // (cashiers, managers, admins, processors). No manager sign-off is required.
+  const canRedeemTokens =
+    hasPermission('canManageOrders') || hasPermission('canManageCash') || hasPermission('canManageCustomers');
   const [listView, setListView] = useListViewPreference();
   const [customers, setCustomers] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -759,7 +763,7 @@ const Customers = () => {
                               ✏️ Edit
                             </button>
                           )}
-                          {hasPermission('canManageCustomers') && (
+                          {canRedeemTokens && (
                             <button
                               className="btn-small btn-info"
                               onClick={() => fetchCustomerLoyalty(customer.id)}
@@ -769,7 +773,7 @@ const Customers = () => {
                               🏅 Loyalty
                             </button>
                           )}
-                          {(customer.current_points || 0) >= TOKEN_REDEEM_MIN && hasPermission('canManageCustomers') && (
+                          {(customer.current_points || 0) >= TOKEN_REDEEM_MIN && canRedeemTokens && (
                             <button
                               className="btn-small btn-success"
                               onClick={() => openRedeem(customer.id, customer.current_points)}
