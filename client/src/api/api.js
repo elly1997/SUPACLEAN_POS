@@ -1027,7 +1027,6 @@ export const redeemLoyaltyPoints = (customerId, points, orderId, opts = {}) =>
     points,
     orderId,
     orderSubtotal: opts.orderSubtotal,
-    managerApproved: opts.managerApproved,
   });
 /**
  * Redeem tokens against a TSh value the cashier/manager specifies.

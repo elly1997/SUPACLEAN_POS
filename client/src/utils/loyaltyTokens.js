@@ -3,7 +3,6 @@ export const TOKEN_EARN_SPEND_TSH = 20000;
 export const TOKEN_REDEEM_MIN = 1;
 export const TOKEN_VALUE_TSH = 500;
 export const TOKEN_REDEEM_STEP = 1;
-export const TOKEN_MANAGER_THRESHOLD = 100;
 /** Discount may cover the full ticket; never more than subtotal. */
 export const TOKEN_MAX_PERCENT_OF_TICKET = 1;
 

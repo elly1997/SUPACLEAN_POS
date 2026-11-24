@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database/query');
 const { authenticate, requireRole } = require('../middleware/auth');
-const { requireAnyPermission, hasPermission } = require('../middleware/permissions');
+const { requireAnyPermission } = require('../middleware/permissions');
 const { getYearTokens, currentYearEat } = require('../utils/loyaltyYear');
 
 router.use(authenticate);
@@ -26,7 +26,6 @@ const LOYALTY_CONFIG = {
   redemptionValueTSh: 500,
   /** Discount may cover the full ticket; never more than subtotal. */
   maxRedeemPercentOfSubtotal: 1,
-  managerRedeemPointsThreshold: 100,
   partnerEarnRate: 0.5,
   defaultBrand: 'supaclean_laundry',
   // Lifetime tokens: Bronze → Silver at 51, Gold at 86 (+35), Platinum at 136 (+50).
@@ -270,7 +269,6 @@ router.post('/redeem', requireAnyPermission('canManageOrders', 'canManageCash'),
     note,
     orderId,
     orderSubtotal,
-    managerApproved,
     dryRun,
   } = req.body;
 
@@ -335,17 +333,6 @@ router.post('/redeem', requireAnyPermission('canManageOrders', 'canManageCash'),
         tokens_needed: tokensNeeded,
         tokens_available: available,
         max_value_tsh: maxAffordableValue,
-      });
-    }
-
-    const isManager =
-      req.user?.role === 'admin' ||
-      req.user?.role === 'manager' ||
-      hasPermission(req.user, 'canManageCustomers');
-    if (tokensNeeded > LOYALTY_CONFIG.managerRedeemPointsThreshold && !isManager && !managerApproved) {
-      return res.status(403).json({
-        error: `Redeeming more than ${LOYALTY_CONFIG.managerRedeemPointsThreshold} tokens needs a manager.`,
-        code: 'manager_approval_required',
       });
     }
 
@@ -442,7 +429,6 @@ router.get('/tiers', (req, res) => {
       valuePerBlockTSh: LOYALTY_CONFIG.redemptionValueTSh,
       valuePerTokenTSh: LOYALTY_CONFIG.redemptionValueTSh,
       maxPercentOfSubtotal: LOYALTY_CONFIG.maxRedeemPercentOfSubtotal,
-      managerThreshold: LOYALTY_CONFIG.managerRedeemPointsThreshold,
       rule: `Any whole number of tokens · 1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()} · tokens reset to 0 on 1 Jan`,
     },
   });

@@ -10,7 +10,6 @@ import { loadBrandSettings } from '../utils/brandSettings';
 import { getBusinessTodayYmd, ymdToLocalDateTimeInput, formatBusinessDayLabel } from '../utils/businessDate';
 import {
   TOKEN_VALUE_TSH,
-  TOKEN_MANAGER_THRESHOLD,
   REDEEM_PURPOSES,
   redeemPurposeInfo,
   checkTokenCover,
@@ -153,7 +152,6 @@ const NewOrder = () => {
   const customerDropdownScroll = useScrollPanel({ axis: 'y' });
   // For non-admin: use branch from auth. For admin: use selectedBranchId (branch switcher) or fallback to user's branch.
   const effectiveBranchId = user?.role === 'admin' ? selectedBranchId : (branch?.id ?? selectedBranchId);
-  const canApproveLargeRedeem = user?.role === 'admin' || user?.role === 'manager' || hasPermission?.('canManageCustomers');
   const { workingDate, isCatchUpMode, today: businessToday } = useBusinessDay();
   const orderDateSeed = useCallback(
     () => ymdToLocalDateTimeInput(workingDate || getBusinessTodayYmd()),
@@ -454,10 +452,6 @@ const NewOrder = () => {
     const cover = checkTokenCover(value, customerLoyalty?.current_points || 0);
     if (!cover.ok) {
       setLoyaltyError(cover.error);
-      return;
-    }
-    if (cover.tokensNeeded > TOKEN_MANAGER_THRESHOLD && !canApproveLargeRedeem) {
-      setLoyaltyError(`Redeeming more than ${TOKEN_MANAGER_THRESHOLD} tokens needs a manager`);
       return;
     }
     if (redeemPurpose !== 'discount' && !redeemNote.trim()) {
@@ -799,7 +793,6 @@ const NewOrder = () => {
               valueTSh: redeemValueTsh,
               note: appliedRedeem.note || undefined,
               orderSubtotal: totalAmount,
-              managerApproved: canApproveLargeRedeem,
             }
           : null;
       if (redeemPayloadBase) {
