@@ -8,7 +8,7 @@ import {
   sendBalanceReminder,
   getCustomerLoyalty,
   getLoyaltyTransactions,
-  redeemLoyaltyPoints,
+  redeemLoyaltyTokens,
 } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
@@ -18,7 +18,13 @@ import SkeletonList from '../components/SkeletonList';
 import Loader from '../components/Loader';
 import LoyaltyBadge from '../components/LoyaltyBadge';
 import { exportToPDF, exportToExcel } from '../utils/exportUtils';
-import { TOKEN_REDEEM_MIN, TOKEN_VALUE_TSH, TOKEN_REDEEM_STEP, tokensToTsh } from '../utils/loyaltyTokens';
+import {
+  TOKEN_REDEEM_MIN,
+  TOKEN_VALUE_TSH,
+  REDEEM_PURPOSES,
+  redeemPurposeInfo,
+  checkTokenCover,
+} from '../utils/loyaltyTokens';
 import './Customers.css';
 
 const CUSTOMERS_EXPORT_COLUMNS = [
@@ -69,7 +75,9 @@ const Customers = () => {
   const [loyaltyTransactions, setLoyaltyTransactions] = useState([]); // for the open customer
   const [loyaltyCustomerId, setLoyaltyCustomerId] = useState(null); // customer whose detail is open
   const [showRedeemModal, setShowRedeemModal] = useState(false);
-  const [redeemPoints, setRedeemPoints] = useState('');
+  const [redeemPurpose, setRedeemPurpose] = useState('delivery');
+  const [redeemValue, setRedeemValue] = useState('');
+  const [redeemNote, setRedeemNote] = useState('');
   const [redeeming, setRedeeming] = useState(null);
 
   const CUSTOMERS_PAGE_SIZE = 50;
@@ -197,29 +205,32 @@ const Customers = () => {
 
   const openRedeem = (customerId) => {
     setLoyaltyCustomerId(customerId);
-    setRedeemPoints('');
+    setRedeemValue('');
+    setRedeemNote('');
     setShowRedeemModal(true);
   };
 
   const handleRedeemSubmit = async (e) => {
     e.preventDefault();
     if (!loyaltyCustomerId) return;
-    const points = parseInt(redeemPoints, 10);
-    if (!points || points < TOKEN_REDEEM_MIN) {
-      showToast(`Redeem at least ${TOKEN_REDEEM_MIN} tokens`, 'error');
-      return;
-    }
-    const available = loyaltyData[loyaltyCustomerId]?.current_points ?? 0;
-    if (points > available) {
-      showToast(`Not enough tokens (available: ${available})`, 'error');
+    const value = Math.round(parseFloat(redeemValue) || 0);
+    const cover = checkTokenCover(value, loyaltyData[loyaltyCustomerId]?.current_points ?? 0);
+    if (!cover.ok) {
+      showToast(cover.error, 'error');
       return;
     }
     setRedeeming(loyaltyCustomerId);
     try {
-      await redeemLoyaltyPoints(loyaltyCustomerId, points);
-      showToast(`${points} tokens redeemed (TSh ${tokensToTsh(points).toLocaleString()})`, 'success');
+      const res = await redeemLoyaltyTokens({
+        customerId: loyaltyCustomerId,
+        purpose: redeemPurpose,
+        valueTSh: value,
+        note: redeemNote.trim() || undefined,
+      });
+      showToast(res.data?.message || `${cover.tokensNeeded} tokens redeemed (TSh ${value.toLocaleString()})`, 'success');
       setShowRedeemModal(false);
-      setRedeemPoints('');
+      setRedeemValue('');
+      setRedeemNote('');
       await fetchCustomerLoyalty(loyaltyCustomerId);
       loadCustomers(false);
     } catch (error) {
@@ -845,7 +856,7 @@ const Customers = () => {
             </div>
           </div>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: 0 }}>
-            Earn whole tokens only: 1 / TSh 20,000 paid cash per receipt (40,000 = 2) · Redeem from {TOKEN_REDEEM_MIN} · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()}
+            Earn whole tokens only: 1 / TSh 20,000 paid cash per receipt (40,000 = 2) · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()} · Tokens reset to 0 on 1 Jan{loyaltyData[loyaltyCustomerId]?.resets_on ? ` (${loyaltyData[loyaltyCustomerId].resets_on})` : ''}
             {' · '}Tiers: Silver 51 · Gold 86 · Platinum 136 (lifetime)
           </p>
           <div style={{ marginBottom: '12px' }}>
@@ -903,29 +914,53 @@ const Customers = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Tokens to redeem *</label>
+                  <label>Redeem for *</label>
+                  <select
+                    value={redeemPurpose}
+                    onChange={(e) => setRedeemPurpose(e.target.value)}
+                    className="edit-input"
+                  >
+                    {REDEEM_PURPOSES.filter((p) => p.key !== 'discount').map((p) => (
+                      <option key={p.key} value={p.key}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>{redeemPurposeInfo(redeemPurpose).valueLabel} *</label>
                   <input
                     type="number"
-                    value={redeemPoints}
-                    onChange={(e) => setRedeemPoints(e.target.value)}
-                    min={TOKEN_REDEEM_MIN}
-                    step={TOKEN_REDEEM_STEP}
+                    value={redeemValue}
+                    onChange={(e) => setRedeemValue(e.target.value)}
+                    min="1"
+                    step="1"
                     required
                     autoFocus
                     className="edit-input"
                   />
                 </div>
                 <div className="form-group">
-                  <label>Value (TSh)</label>
+                  <label>Note</label>
                   <input
-                    type="number"
-                    readOnly
-                    value={tokensToTsh(parseInt(redeemPoints || '0', 10))}
+                    type="text"
+                    value={redeemNote}
+                    onChange={(e) => setRedeemNote(e.target.value)}
+                    maxLength={120}
+                    placeholder={redeemPurpose === 'delivery' ? 'e.g. Delivery to Njiro' : 'e.g. Blanket cleaning'}
                     className="edit-input"
                   />
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    From {TOKEN_REDEEM_MIN} tokens · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()} (laundry discount, pickup/delivery, or partner service)
-                  </div>
+                  {(() => {
+                    const value = Math.round(parseFloat(redeemValue) || 0);
+                    const cover = value > 0 ? checkTokenCover(value, loyaltyData[loyaltyCustomerId]?.current_points ?? 0) : null;
+                    return (
+                      <div style={{ fontSize: '12px', marginTop: '4px', color: cover ? (cover.ok ? 'var(--success-color)' : 'var(--danger-color)') : 'var(--text-muted)' }}>
+                        {cover
+                          ? (cover.ok
+                            ? `Needs ${cover.tokensNeeded} token${cover.tokensNeeded === 1 ? '' : 's'} — ${cover.available - cover.tokensNeeded} left after`
+                            : cover.error)
+                          : `1 token = TSh ${TOKEN_VALUE_TSH.toLocaleString()} · min ${TOKEN_REDEEM_MIN} token`}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
               <div className="modal-footer">

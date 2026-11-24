@@ -135,6 +135,9 @@ if (shouldRunSchemaEnsure()) {
   console.log('Skipping boot-time schema ensure on this runtime (set RUN_SCHEMA_ENSURE=1 to run it).');
 }
 
+// New calendar year → all token wallets reset to 0 (first request of the year triggers it).
+app.use('/api', require('./utils/loyaltyRollover').loyaltyRolloverMiddleware);
+
 try {
   app.use('/api/auth', require('./routes/auth'));
   app.use('/api/branches', require('./routes/branches'));

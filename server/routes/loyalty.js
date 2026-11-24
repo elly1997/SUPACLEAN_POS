@@ -12,14 +12,16 @@ router.use(authenticate);
  * - Earn 1 whole token per TSh 20,000 paid cash on a single receipt (not pooled across receipts)
  * - Multiples count: TSh 40,000 = 2 tokens; remainder below 20,000 does not earn (no decimals)
  * - Cash only (payment_method = cash); awarded on collect + paid_full
- * - Redeem from 50 tokens; 1 token = TSh 500 (laundry discount, pickup/delivery, or partner value)
+ * - Redeem any whole number of tokens; 1 token = TSh 500. The cashier/manager states the value
+ *   (receipt discount, pickup/delivery cost, or another service's price) and the wallet must cover it.
+ * - Every wallet resets to 0 tokens (and Bronze) on 1 Jan — see utils/loyaltyRollover.js
  */
 const LOYALTY_CONFIG = {
   unitLabel: 'token',
   unitLabelPlural: 'tokens',
   pointsPerTSh: 1 / 20000,
   minSpendForPoint: 20000,
-  minRedeemPoints: 50,
+  minRedeemPoints: 1,
   pointsPerRedemption: 1,
   redemptionValueTSh: 500,
   /** Discount may cover the full ticket; never more than subtotal. */
@@ -123,7 +125,20 @@ async function insertLoyaltyTx({
   balanceAfter,
   brand = LOYALTY_CONFIG.defaultBrand,
   earnSource = LOYALTY_CONFIG.defaultBrand,
+  redeemPurpose = null,
+  valueTsh = null,
 }) {
+  try {
+    await db.run(
+      `INSERT INTO loyalty_transactions
+       (customer_id, order_id, transaction_type, points, description, balance_after, brand, earn_source, redeem_purpose, value_tsh)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [customerId, orderId, transactionType, points, description, balanceAfter, brand, earnSource, redeemPurpose, valueTsh]
+    );
+    return;
+  } catch (err) {
+    if (!/column|redeem_purpose|value_tsh/i.test(String(err.message || ''))) throw err;
+  }
   try {
     await db.run(
       `INSERT INTO loyalty_transactions ${insertTxColumns()}
@@ -170,10 +185,12 @@ router.get('/customer/:customerId', async (req, res) => {
       lifetime_tokens: lifetime,
       year_tokens: yearTokens,
       year: currentYearEat(),
+      resets_on: `${currentYearEat() + 1}-01-01`,
+      redeem_purposes: REDEEM_PURPOSES,
       token_value_tsh: LOYALTY_CONFIG.redemptionValueTSh,
       min_redeem_tokens: LOYALTY_CONFIG.minRedeemPoints,
       earn_rule: `1 whole token per TSh ${LOYALTY_CONFIG.minSpendForPoint.toLocaleString()} paid cash on a single receipt (e.g. 40,000 = 2; no decimals)`,
-      redeem_rule: `From ${LOYALTY_CONFIG.minRedeemPoints} tokens · 1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()}`,
+      redeem_rule: `Any whole number of tokens · 1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()} · tokens reset to 0 on 1 Jan`,
       unit: LOYALTY_CONFIG.unitLabelPlural,
       tier,
       next_tier,
@@ -227,93 +244,166 @@ router.post('/earn', requireAnyPermission('canManageOrders', 'canManageCash'), a
   }
 });
 
+const REDEEM_PURPOSES = {
+  discount: 'Discount on receipt',
+  delivery: 'Free pickup / delivery',
+  service: 'Other service (e.g. blanket cleaning)',
+};
+
+/**
+ * Redeem tokens. The cashier/manager states the VALUE (TSh) being covered — a discount, the
+ * pickup/delivery cost, or the price of another service — and we check the wallet can cover it.
+ *   tokens needed = ceil(value / 500)
+ * purpose:
+ *   discount — receipt is discounted by `valueTSh` (value is capped at the receipt subtotal)
+ *   service  — receipt line for that service is covered (discounted) by `valueTSh`
+ *   delivery — pickup/delivery cost is waived; nothing is deducted from the receipt
+ * Legacy callers may send `points` instead of `valueTSh` (value = points x 500).
+ * `dryRun: true` validates everything and returns the quote without touching the wallet.
+ */
 router.post('/redeem', requireAnyPermission('canManageOrders', 'canManageCash'), async (req, res) => {
-  const { customerId, points, orderId, orderSubtotal, managerApproved } = req.body;
+  const {
+    customerId,
+    points,
+    valueTSh,
+    purpose: purposeIn,
+    note,
+    orderId,
+    orderSubtotal,
+    managerApproved,
+    dryRun,
+  } = req.body;
 
-  if (!customerId || !points || points <= 0) {
-    return res.status(400).json({ error: 'Customer ID and valid points amount are required' });
+  const purpose = String(purposeIn || 'discount').toLowerCase();
+  if (!REDEEM_PURPOSES[purpose]) {
+    return res.status(400).json({ error: `Unknown redeem purpose. Use: ${Object.keys(REDEEM_PURPOSES).join(', ')}` });
   }
-  if (points < LOYALTY_CONFIG.minRedeemPoints) {
-    return res.status(400).json({
-      error: `Minimum ${LOYALTY_CONFIG.minRedeemPoints} tokens required to redeem (TSh ${(LOYALTY_CONFIG.minRedeemPoints * LOYALTY_CONFIG.redemptionValueTSh).toLocaleString()} value)`,
-    });
-  }
-  if (points % LOYALTY_CONFIG.pointsPerRedemption !== 0) {
-    return res.status(400).json({
-      error: `Redeem whole tokens only (1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()})`,
-    });
+  if (!customerId) {
+    return res.status(400).json({ error: 'Customer ID is required' });
   }
 
-  const isManager =
-    req.user?.role === 'admin' ||
-    req.user?.role === 'manager' ||
-    hasPermission(req.user, 'canManageCustomers');
-  if (points > LOYALTY_CONFIG.managerRedeemPointsThreshold && !isManager && !managerApproved) {
-    return res.status(403).json({
-      error: `Redeeming more than ${LOYALTY_CONFIG.managerRedeemPointsThreshold} tokens needs a manager.`,
-      code: 'manager_approval_required',
+  const unit = LOYALTY_CONFIG.redemptionValueTSh;
+  let value = Number(valueTSh);
+  if (!Number.isFinite(value) || value <= 0) {
+    const pts = Number(points);
+    value = Number.isFinite(pts) && pts > 0 ? Math.floor(pts) * unit : 0;
+  }
+  value = Math.round(value);
+  if (value <= 0) {
+    return res.status(400).json({
+      error:
+        purpose === 'delivery'
+          ? 'Enter the pickup/delivery cost (TSh) to redeem tokens against.'
+          : purpose === 'service'
+            ? 'Enter the service price (TSh) to cover with tokens.'
+            : 'Enter the discount amount (TSh).',
     });
   }
 
   try {
     const loyalty = await ensureLoyaltyRow(customerId);
-    if ((loyalty.current_points || 0) < points) {
-      return res.status(400).json({
-        error: `Insufficient tokens. Current balance: ${loyalty.current_points || 0} tokens`,
-      });
-    }
+    const available = Math.max(0, Math.floor(Number(loyalty.current_points) || 0));
 
-    let discountAmount =
-      Math.floor(points / LOYALTY_CONFIG.pointsPerRedemption) * LOYALTY_CONFIG.redemptionValueTSh;
-
+    // Receipt-based purposes can never cover more than the receipt itself.
     const subtotal = Number(orderSubtotal);
-    if (Number.isFinite(subtotal) && subtotal > 0) {
-      const maxDiscount = Math.floor(subtotal * LOYALTY_CONFIG.maxRedeemPercentOfSubtotal);
-      if (discountAmount > maxDiscount) {
-        const allowedPoints = Math.floor(maxDiscount / LOYALTY_CONFIG.redemptionValueTSh) * LOYALTY_CONFIG.pointsPerRedemption;
-        if (allowedPoints < LOYALTY_CONFIG.minRedeemPoints) {
-          return res.status(400).json({
-            error: `Order total (TSh ${maxDiscount.toLocaleString()}) is too low for the minimum ${LOYALTY_CONFIG.minRedeemPoints}-token redeem (TSh ${(LOYALTY_CONFIG.minRedeemPoints * LOYALTY_CONFIG.redemptionValueTSh).toLocaleString()}).`,
-            code: 'redeem_cap',
-            max_discount: maxDiscount,
-          });
-        }
-        if (points > allowedPoints) {
-          return res.status(400).json({
-            error: `At this order total you can redeem at most ${allowedPoints} tokens (TSh ${(allowedPoints * LOYALTY_CONFIG.redemptionValueTSh).toLocaleString()}).`,
-            code: 'redeem_cap',
-            max_points: allowedPoints,
-            max_discount: allowedPoints * LOYALTY_CONFIG.redemptionValueTSh,
-          });
-        }
-        discountAmount = allowedPoints * LOYALTY_CONFIG.redemptionValueTSh;
+    if (purpose !== 'delivery' && Number.isFinite(subtotal) && subtotal > 0) {
+      const maxValue = Math.floor(subtotal * LOYALTY_CONFIG.maxRedeemPercentOfSubtotal);
+      if (value > maxValue) {
+        return res.status(400).json({
+          error: `Receipt total is TSh ${maxValue.toLocaleString()} — a TSh ${value.toLocaleString()} ${purpose === 'service' ? 'service cover' : 'discount'} is too high.`,
+          code: 'redeem_cap',
+          max_value_tsh: maxValue,
+        });
       }
     }
 
-    const newPoints = loyalty.current_points - points;
-    await db.run(
-      'UPDATE loyalty_points SET current_points = ?, updated_at = CURRENT_TIMESTAMP WHERE customer_id = ?',
-      [newPoints, customerId]
-    );
+    const tokensNeeded = Math.ceil(value / unit);
+    const maxAffordableValue = available * unit;
 
-    const description = `Tokens redeemed for TSh ${discountAmount.toLocaleString()} value (laundry / pickup / partner)`;
+    if (tokensNeeded < LOYALTY_CONFIG.minRedeemPoints) {
+      return res.status(400).json({
+        error: `Minimum ${LOYALTY_CONFIG.minRedeemPoints} token(s) (TSh ${(LOYALTY_CONFIG.minRedeemPoints * unit).toLocaleString()}) per redemption.`,
+      });
+    }
+
+    if (tokensNeeded > available) {
+      const label =
+        purpose === 'delivery' ? 'the pickup/delivery cost' : purpose === 'service' ? 'this service' : 'this discount';
+      return res.status(400).json({
+        error: `Not enough tokens for ${label}: TSh ${value.toLocaleString()} needs ${tokensNeeded} token(s) but the customer has ${available} (worth TSh ${maxAffordableValue.toLocaleString()}).`,
+        code: 'insufficient_tokens',
+        tokens_needed: tokensNeeded,
+        tokens_available: available,
+        max_value_tsh: maxAffordableValue,
+      });
+    }
+
+    const isManager =
+      req.user?.role === 'admin' ||
+      req.user?.role === 'manager' ||
+      hasPermission(req.user, 'canManageCustomers');
+    if (tokensNeeded > LOYALTY_CONFIG.managerRedeemPointsThreshold && !isManager && !managerApproved) {
+      return res.status(403).json({
+        error: `Redeeming more than ${LOYALTY_CONFIG.managerRedeemPointsThreshold} tokens needs a manager.`,
+        code: 'manager_approval_required',
+      });
+    }
+
+    const receiptDiscount = purpose === 'delivery' ? 0 : value;
+    const quote = {
+      purpose,
+      value_tsh: value,
+      tokens_needed: tokensNeeded,
+      tokens_available: available,
+      tokens_after: available - tokensNeeded,
+      receipt_discount: receiptDiscount,
+    };
+
+    if (dryRun) {
+      return res.json({ ok: true, dry_run: true, ...quote });
+    }
+
+    // Atomic deduction: only succeeds if the wallet still covers it (no double-spend race).
+    const updated = await db.get(
+      `UPDATE loyalty_points
+       SET current_points = current_points - ?, updated_at = CURRENT_TIMESTAMP
+       WHERE customer_id = ? AND current_points >= ?
+       RETURNING current_points`,
+      [tokensNeeded, customerId, tokensNeeded]
+    );
+    if (!updated) {
+      return res.status(409).json({
+        error: 'Tokens changed while redeeming — refresh and try again.',
+        code: 'insufficient_tokens',
+      });
+    }
+    const newPoints = Number(updated.current_points) || 0;
+
+    const noteText = note ? String(note).trim().slice(0, 120) : '';
+    const description = `${REDEEM_PURPOSES[purpose]}: ${tokensNeeded} token(s) for TSh ${value.toLocaleString()}${noteText ? ` — ${noteText}` : ''}`;
 
     await insertLoyaltyTx({
       customerId,
       orderId: orderId || null,
       transactionType: 'redeemed',
-      points: -points,
+      points: -tokensNeeded,
       description,
       balanceAfter: newPoints,
+      redeemPurpose: purpose,
+      valueTsh: value,
     });
 
     res.json({
-      points_redeemed: points,
-      tokens_redeemed: points,
+      ...quote,
+      points_redeemed: tokensNeeded,
+      tokens_redeemed: tokensNeeded,
       current_points: newPoints,
       current_tokens: newPoints,
-      discount_amount: discountAmount,
-      message: `TSh ${discountAmount.toLocaleString()} token value applied`,
+      discount_amount: receiptDiscount,
+      message:
+        purpose === 'delivery'
+          ? `Free pickup/delivery (TSh ${value.toLocaleString()}) covered with ${tokensNeeded} token(s)`
+          : `TSh ${value.toLocaleString()} ${purpose === 'service' ? 'service cover' : 'discount'} applied with ${tokensNeeded} token(s)`,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -353,7 +443,7 @@ router.get('/tiers', (req, res) => {
       valuePerTokenTSh: LOYALTY_CONFIG.redemptionValueTSh,
       maxPercentOfSubtotal: LOYALTY_CONFIG.maxRedeemPercentOfSubtotal,
       managerThreshold: LOYALTY_CONFIG.managerRedeemPointsThreshold,
-      rule: `From ${LOYALTY_CONFIG.minRedeemPoints} tokens · 1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()}`,
+      rule: `Any whole number of tokens · 1 token = TSh ${LOYALTY_CONFIG.redemptionValueTSh.toLocaleString()} · tokens reset to 0 on 1 Jan`,
     },
   });
 });

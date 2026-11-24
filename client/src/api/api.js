@@ -1029,6 +1029,13 @@ export const redeemLoyaltyPoints = (customerId, points, orderId, opts = {}) =>
     orderSubtotal: opts.orderSubtotal,
     managerApproved: opts.managerApproved,
   });
+/**
+ * Redeem tokens against a TSh value the cashier/manager specifies.
+ * payload: { customerId, purpose: 'discount'|'delivery'|'service', valueTSh, note?, orderId?,
+ *            orderSubtotal?, managerApproved?, dryRun? }
+ * dryRun validates (balance, receipt cap, manager rule) without deducting.
+ */
+export const redeemLoyaltyTokens = (payload) => api.post('/loyalty/redeem', payload);
 export const getLoyaltyRewards = () => api.get('/loyalty/rewards');
 export const getLoyaltyTiers = () => api.get('/loyalty/tiers');
 

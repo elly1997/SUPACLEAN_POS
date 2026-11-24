@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { getServices, getItems, searchCustomers, createCustomer, createOrderBatch, getCustomerOrders, getSettings, sendReceiptSms, validateCoupon, getCustomerLoyalty, redeemLoyaltyPoints } from '../api/api';
+import { getServices, getItems, searchCustomers, createCustomer, createOrderBatch, getCustomerOrders, getSettings, sendReceiptSms, validateCoupon, getCustomerLoyalty, redeemLoyaltyTokens } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useBusinessDay } from '../contexts/BusinessDayContext';
@@ -9,12 +9,12 @@ import { playSuccessSound } from '../utils/sound';
 import { loadBrandSettings } from '../utils/brandSettings';
 import { getBusinessTodayYmd, ymdToLocalDateTimeInput, formatBusinessDayLabel } from '../utils/businessDate';
 import {
-  TOKEN_REDEEM_MIN,
   TOKEN_VALUE_TSH,
-  TOKEN_REDEEM_STEP,
   TOKEN_MANAGER_THRESHOLD,
-  TOKEN_MAX_PERCENT_OF_TICKET,
-  tokensToTsh,
+  REDEEM_PURPOSES,
+  redeemPurposeInfo,
+  checkTokenCover,
+  tshToTokens,
 } from '../utils/loyaltyTokens';
 import LoyaltyBadge from '../components/LoyaltyBadge';
 import WorkingDayPicker from '../components/WorkingDayPicker';
@@ -194,7 +194,11 @@ const NewOrder = () => {
   const [couponError, setCouponError] = useState('');
   const [validatingCoupon, setValidatingCoupon] = useState(false);
   const [customerLoyalty, setCustomerLoyalty] = useState(null);
-  const [loyaltyPointsToRedeem, setLoyaltyPointsToRedeem] = useState('');
+  // Token redemption: cashier/manager states the TSh value (discount / delivery cost / service price)
+  const [redeemPurpose, setRedeemPurpose] = useState('discount');
+  const [redeemValue, setRedeemValue] = useState('');
+  const [redeemNote, setRedeemNote] = useState('');
+  const [appliedRedeem, setAppliedRedeem] = useState(null); // { purpose, valueTsh, note }
   const [loyaltyError, setLoyaltyError] = useState('');
   const [redeemingLoyalty, setRedeemingLoyalty] = useState(false);
   const [orderDateTime, setOrderDateTime] = useState(() => ymdToLocalDateTimeInput(getBusinessTodayYmd()));
@@ -370,14 +374,19 @@ const NewOrder = () => {
     [totalAmount, appliedCoupon]
   );
 
+  // Receipt discount from tokens (discount / service purposes only). Never more than what is
+  // still unpaid after manual + coupon discounts, so tokens are not wasted.
   const loyaltyDiscount = useMemo(() => {
-    const pts = parseInt(loyaltyPointsToRedeem, 10);
-    if (!Number.isFinite(pts) || pts < TOKEN_REDEEM_MIN) return 0;
-    if (pts % TOKEN_REDEEM_STEP !== 0) return 0;
-    const raw = tokensToTsh(pts);
-    const maxByTicket = Math.floor(totalAmount * TOKEN_MAX_PERCENT_OF_TICKET);
-    return Math.min(totalAmount, raw, maxByTicket);
-  }, [loyaltyPointsToRedeem, totalAmount]);
+    if (!appliedRedeem || !redeemPurposeInfo(appliedRedeem.purpose).onReceipt) return 0;
+    const room = Math.max(0, totalAmount - manualDiscount - couponDiscount);
+    return Math.max(0, Math.min(appliedRedeem.valueTsh, room));
+  }, [appliedRedeem, totalAmount, manualDiscount, couponDiscount]);
+
+  // TSh value actually being covered by tokens on this receipt (delivery = full stated cost).
+  const redeemValueTsh = useMemo(() => {
+    if (!appliedRedeem) return 0;
+    return redeemPurposeInfo(appliedRedeem.purpose).onReceipt ? loyaltyDiscount : appliedRedeem.valueTsh;
+  }, [appliedRedeem, loyaltyDiscount]);
 
   const discountAmount = useMemo(
     () => Math.min(totalAmount, manualDiscount + couponDiscount + loyaltyDiscount),
@@ -417,42 +426,46 @@ const NewOrder = () => {
   };
 
   const clearLoyaltyRedeem = () => {
-    setLoyaltyPointsToRedeem('');
+    setAppliedRedeem(null);
+    setRedeemValue('');
+    setRedeemNote('');
     setLoyaltyError('');
   };
 
+  // Live check of the typed value against the customer's token wallet.
+  const redeemCheck = useMemo(() => {
+    const value = Math.round(parseFloat(redeemValue) || 0);
+    if (value <= 0) return null;
+    return { value, ...checkTokenCover(value, customerLoyalty?.current_points || 0) };
+  }, [redeemValue, customerLoyalty?.current_points]);
+
   const applyLoyaltyRedeemPreview = () => {
     setLoyaltyError('');
-    const pts = parseInt(loyaltyPointsToRedeem, 10);
-    const available = customerLoyalty?.current_points || 0;
-    if (!Number.isFinite(pts) || pts < TOKEN_REDEEM_MIN) {
-      setLoyaltyError(`Redeem at least ${TOKEN_REDEEM_MIN} tokens`);
+    const value = Math.round(parseFloat(redeemValue) || 0);
+    const info = redeemPurposeInfo(redeemPurpose);
+    if (value <= 0) {
+      setLoyaltyError(`Enter ${info.valueLabel.toLowerCase()}`);
       return;
     }
-    if (pts % TOKEN_REDEEM_STEP !== 0) {
-      setLoyaltyError('Use whole tokens only');
+    if (info.onReceipt && value > totalAmount) {
+      setLoyaltyError(`Receipt total is TSh ${totalAmount.toLocaleString()} — cannot cover TSh ${value.toLocaleString()}`);
       return;
     }
-    if (pts > available) {
-      setLoyaltyError(`Only ${available} tokens available`);
+    const cover = checkTokenCover(value, customerLoyalty?.current_points || 0);
+    if (!cover.ok) {
+      setLoyaltyError(cover.error);
       return;
     }
-    if (pts > TOKEN_MANAGER_THRESHOLD && !canApproveLargeRedeem) {
+    if (cover.tokensNeeded > TOKEN_MANAGER_THRESHOLD && !canApproveLargeRedeem) {
       setLoyaltyError(`Redeeming more than ${TOKEN_MANAGER_THRESHOLD} tokens needs a manager`);
       return;
     }
-    const maxByTicket = Math.floor(totalAmount * TOKEN_MAX_PERCENT_OF_TICKET);
-    const raw = tokensToTsh(pts);
-    if (raw > maxByTicket) {
-      const maxPts = Math.floor(maxByTicket / TOKEN_VALUE_TSH) * TOKEN_REDEEM_STEP;
-      setLoyaltyError(
-        maxPts >= TOKEN_REDEEM_MIN
-          ? `Order total allows at most ${maxPts} tokens`
-          : `Order total too low for ${TOKEN_REDEEM_MIN}-token redeem (TSh ${(TOKEN_REDEEM_MIN * TOKEN_VALUE_TSH).toLocaleString()})`
-      );
+    if (redeemPurpose !== 'discount' && !redeemNote.trim()) {
+      setLoyaltyError(redeemPurpose === 'delivery' ? 'Add a note (e.g. pickup from Njiro)' : 'Name the service (e.g. Blanket cleaning)');
       return;
     }
-    showToast(`Token preview: TSh ${raw.toLocaleString()} value`, 'success');
+    setAppliedRedeem({ purpose: redeemPurpose, valueTsh: value, note: redeemNote.trim() });
+    showToast(`${cover.tokensNeeded} token${cover.tokensNeeded === 1 ? '' : 's'} will cover TSh ${value.toLocaleString()}`, 'success');
   };
 
   const handleReset = useCallback(() => {
@@ -776,6 +789,29 @@ const NewOrder = () => {
       }
       const trimmedManualReceipt = (manualReceiptNumber || '').trim();
 
+      // Validate the token redemption BEFORE saving anything (balance, receipt cap, manager rule),
+      // so a discount is never printed for tokens the customer cannot cover.
+      const redeemPayloadBase =
+        appliedRedeem && redeemValueTsh > 0
+          ? {
+              customerId: selectedCustomer.id,
+              purpose: appliedRedeem.purpose,
+              valueTSh: redeemValueTsh,
+              note: appliedRedeem.note || undefined,
+              orderSubtotal: totalAmount,
+              managerApproved: canApproveLargeRedeem,
+            }
+          : null;
+      if (redeemPayloadBase) {
+        try {
+          await redeemLoyaltyTokens({ ...redeemPayloadBase, dryRun: true });
+        } catch (redeemErr) {
+          throw new Error(
+            'Token redemption not allowed: ' + (redeemErr.response?.data?.error || redeemErr.message)
+          );
+        }
+      }
+
       // Allocate receipt number and insert all lines in one server request
       const preDiscountLineTotals = orderItems.map((item) => {
         const service = services.find((s) => s.id === item.service_id);
@@ -834,27 +870,21 @@ const NewOrder = () => {
 
       const receipts = batchRes.data?.items || [];
 
-      const loyaltyPts = parseInt(loyaltyPointsToRedeem, 10);
-      if (
-        receipts.length > 0 &&
-        loyaltyDiscount > 0 &&
-        Number.isFinite(loyaltyPts) &&
-        loyaltyPts >= TOKEN_REDEEM_MIN
-      ) {
+      let redeemResult = null;
+      if (receipts.length > 0 && redeemPayloadBase) {
         try {
           setRedeemingLoyalty(true);
           const firstOrderId = receipts[0]?.order?.id || receipts[0]?.id;
-          await redeemLoyaltyPoints(selectedCustomer.id, loyaltyPts, firstOrderId, {
-            orderSubtotal: totalAmount,
-            managerApproved: canApproveLargeRedeem,
-          });
+          const redeemRes = await redeemLoyaltyTokens({ ...redeemPayloadBase, orderId: firstOrderId });
+          redeemResult = redeemRes.data || null;
           clearLoyaltyRedeem();
+          const used = Number(redeemResult?.tokens_redeemed) || 0;
           setCustomerLoyalty((prev) =>
             prev
               ? {
                   ...prev,
-                  current_points: Math.max(0, (prev.current_points || 0) - loyaltyPts),
-                  current_tokens: Math.max(0, (prev.current_tokens || prev.current_points || 0) - loyaltyPts),
+                  current_points: Math.max(0, (prev.current_points || 0) - used),
+                  current_tokens: Math.max(0, (prev.current_tokens || prev.current_points || 0) - used),
                 }
               : prev
           );
@@ -883,7 +913,7 @@ const NewOrder = () => {
         // Always use consolidated receipt format for consistency (single or multiple items)
         try {
           const brand = await loadBrandSettings().catch(() => null);
-          const combinedReceipt = await combineReceipts(receipts, selectedCustomer, payableTotal, orderData, discountAmount, brand, appliedCoupon?.code || appliedCoupon?.coupon?.code || null);
+          const combinedReceipt = await combineReceipts(receipts, selectedCustomer, payableTotal, orderData, discountAmount, brand, appliedCoupon?.code || appliedCoupon?.coupon?.code || null, redeemResult);
           
           if (!combinedReceipt || !combinedReceipt.text || String(combinedReceipt.text).trim().length === 0) {
             console.error('Receipt text is empty:', combinedReceipt);
@@ -928,7 +958,7 @@ const NewOrder = () => {
 
   const RECEIPT_COMPACT_THRESHOLD = 12;
 
-  const combineReceipts = async (receipts, customer, total, paymentData, discount = 0, brand = null, couponCode = null) => {
+  const combineReceipts = async (receipts, customer, total, paymentData, discount = 0, brand = null, couponCode = null, tokenRedeem = null) => {
     const businessName = (brand && brand.business_name) || 'SUPACLEAN';
     const tagline = (brand && brand.business_tagline) || 'Laundry & Dry Cleaning';
     const footerLine = (brand && brand.receipt_footer) || 'Thank you for choosing SUPACLEAN!';
@@ -1001,6 +1031,18 @@ Phone: ${customer.phone}
     let footerText = `${sep}\n`;
     if ((Number(discount) || 0) > 0) {
       footerText += `DISCOUNT: -TSh ${Number(discount).toLocaleString()}${couponCode ? ` (Coupon: ${couponCode})` : ''}\n`;
+    }
+    if (tokenRedeem && Number(tokenRedeem.tokens_redeemed) > 0) {
+      const t = Number(tokenRedeem.tokens_redeemed);
+      const v = Number(tokenRedeem.value_tsh) || 0;
+      const what =
+        tokenRedeem.purpose === 'delivery'
+          ? 'Free pickup/delivery'
+          : tokenRedeem.purpose === 'service'
+            ? 'Service covered'
+            : 'Discount';
+      footerText += `TOKENS USED: ${t} (TSh ${v.toLocaleString()}) - ${what}\n`;
+      footerText += `TOKENS LEFT: ${Number(tokenRedeem.current_points) || 0}\n`;
     }
     footerText += `TOTAL: TSh ${finalTotal.toLocaleString()}\n`;
     if (paymentData.payment_status === 'not_paid') {
@@ -1931,7 +1973,7 @@ Phone: ${customer.phone}
                     )}
                     {loyaltyDiscount > 0 && (
                       <div className="total-line">
-                        <span>Tokens ({loyaltyPointsToRedeem}):</span>
+                        <span>Tokens ({tshToTokens(loyaltyDiscount)}):</span>
                         <span>- TSh {loyaltyDiscount.toLocaleString()}</span>
                       </div>
                     )}
@@ -2003,43 +2045,88 @@ Phone: ${customer.phone}
                             : ''}
                         </label>
                         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: 6 }}>
-                          From {TOKEN_REDEEM_MIN} tokens · 1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()}
+                          1 token = TSh {TOKEN_VALUE_TSH.toLocaleString()}
+                          {customerLoyalty?.resets_on ? ` · tokens reset to 0 on ${customerLoyalty.resets_on}` : ''}
+                          {customerLoyalty
+                            ? ` · covers up to TSh ${((customerLoyalty.current_points || 0) * TOKEN_VALUE_TSH).toLocaleString()}`
+                            : ''}
                         </div>
                         {customerLoyalty?.soft_perks?.length > 0 && (
                           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: 6 }}>
                             Soft perk: {customerLoyalty.soft_perks.map((p) => p.name).join(' · ')}
                           </div>
                         )}
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <input
-                            type="number"
-                            inputMode="numeric"
-                            min={TOKEN_REDEEM_MIN}
-                            step={TOKEN_REDEEM_STEP}
-                            value={loyaltyPointsToRedeem}
-                            onChange={(e) => setLoyaltyPointsToRedeem(e.target.value)}
-                            placeholder={`Min ${TOKEN_REDEEM_MIN}`}
-                            disabled={redeemingLoyalty || !(customerLoyalty?.current_points >= TOKEN_REDEEM_MIN)}
-                          />
-                          {loyaltyDiscount > 0 ? (
-                            <button type="button" className="btn-secondary" onClick={clearLoyaltyRedeem}>
+                        {appliedRedeem ? (
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: '13px', color: 'var(--success-color)', flex: 1 }}>
+                              ✅ {redeemPurposeInfo(appliedRedeem.purpose).label}
+                              {appliedRedeem.note ? ` — ${appliedRedeem.note}` : ''}: TSh {redeemValueTsh.toLocaleString()} =
+                              {' '}{tshToTokens(redeemValueTsh)} token{tshToTokens(redeemValueTsh) === 1 ? '' : 's'}
+                              {redeemPurposeInfo(appliedRedeem.purpose).onReceipt
+                                ? ' (receipt discounted)'
+                                : ' (cost waived, receipt unchanged)'}
+                            </div>
+                            <button type="button" className="btn-secondary" onClick={clearLoyaltyRedeem} disabled={redeemingLoyalty}>
                               Clear
                             </button>
-                          ) : (
-                            <button
-                              type="button"
-                              className="btn-secondary"
-                              onClick={applyLoyaltyRedeemPreview}
-                              disabled={!(customerLoyalty?.current_points >= TOKEN_REDEEM_MIN)}
-                            >
-                              Apply
-                            </button>
-                          )}
-                        </div>
-                        {loyaltyDiscount > 0 && (
-                          <div style={{ fontSize: '13px', color: 'var(--success-color)', marginTop: 4 }}>
-                            Token value TSh {loyaltyDiscount.toLocaleString()} (laundry / pickup / partner)
                           </div>
+                        ) : (
+                          <>
+                            <select
+                              value={redeemPurpose}
+                              onChange={(e) => { setRedeemPurpose(e.target.value); setLoyaltyError(''); }}
+                              disabled={redeemingLoyalty || !(customerLoyalty?.current_points > 0)}
+                              style={{ marginBottom: 6 }}
+                            >
+                              {REDEEM_PURPOSES.map((p) => (
+                                <option key={p.key} value={p.key}>{p.label}</option>
+                              ))}
+                            </select>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min="1"
+                                step="1"
+                                value={redeemValue}
+                                onChange={(e) => { setRedeemValue(e.target.value); setLoyaltyError(''); }}
+                                placeholder={redeemPurposeInfo(redeemPurpose).valueLabel}
+                                disabled={redeemingLoyalty || !(customerLoyalty?.current_points > 0)}
+                              />
+                              <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={applyLoyaltyRedeemPreview}
+                                disabled={!(customerLoyalty?.current_points > 0) || (redeemCheck && !redeemCheck.ok)}
+                              >
+                                Apply
+                              </button>
+                            </div>
+                            {redeemPurpose !== 'discount' && (
+                              <input
+                                type="text"
+                                value={redeemNote}
+                                onChange={(e) => { setRedeemNote(e.target.value); setLoyaltyError(''); }}
+                                placeholder={redeemPurpose === 'delivery' ? 'Note, e.g. Delivery to Njiro' : 'Service, e.g. Blanket cleaning'}
+                                maxLength={120}
+                                style={{ marginTop: 6 }}
+                                disabled={redeemingLoyalty}
+                              />
+                            )}
+                            {redeemCheck && (
+                              <div
+                                style={{
+                                  fontSize: '13px',
+                                  marginTop: 4,
+                                  color: redeemCheck.ok ? 'var(--success-color)' : 'var(--danger-color)',
+                                }}
+                              >
+                                {redeemCheck.ok
+                                  ? `Needs ${redeemCheck.tokensNeeded} token${redeemCheck.tokensNeeded === 1 ? '' : 's'} — customer has ${redeemCheck.available} ✔ (${redeemCheck.available - redeemCheck.tokensNeeded} left)`
+                                  : `⚠️ ${redeemCheck.error}`}
+                              </div>
+                            )}
+                          </>
                         )}
                         {loyaltyError && (
                           <div style={{ fontSize: '13px', color: 'var(--danger-color)', marginTop: 4 }}>
@@ -2196,6 +2283,12 @@ Phone: ${customer.phone}
               </p>
               <p><strong>Items:</strong> {orderItems.length} line{orderItems.length !== 1 ? 's' : ''}</p>
               <p><strong>Total:</strong> TSh {payableTotal.toLocaleString()}</p>
+              {appliedRedeem && redeemValueTsh > 0 && (
+                <p>
+                  <strong>Tokens:</strong> {tshToTokens(redeemValueTsh)} used — {redeemPurposeInfo(appliedRedeem.purpose).label}
+                  {appliedRedeem.note ? ` (${appliedRedeem.note})` : ''} · TSh {redeemValueTsh.toLocaleString()}
+                </p>
+              )}
               <p><strong>Payment:</strong> {orderData.payment_status === 'not_paid' ? 'Not paid' : orderData.payment_status === 'advance' ? `Advance TSh ${(parseFloat(orderData.paid_amount) || 0).toLocaleString()}` : 'Paid in full'} ({String(orderData.payment_method || 'cash').replace('_', ' ')})</p>
             </div>
             <div className="confirm-order-actions">
