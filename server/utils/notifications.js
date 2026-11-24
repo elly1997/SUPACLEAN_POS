@@ -1,7 +1,7 @@
 const { sendSMS, generateOrderConfirmation, generateCollectionReminder, calendarDaysUtc, daysOverdueFromEstimated, generateInvoiceReminder, generatePaymentNoticeShort, getTokensForSms } = require('./sms');
 const { sendWhatsApp } = require('./whatsapp');
 const db = require('../database/db');
-const { computeDedupeKey, hasRecentDuplicate } = require('./smsDedupe');
+const { computeDedupeKey, hasRecentDuplicate, hasRecentCategorySms } = require('./smsDedupe');
 
 /**
  * Unified notification service
@@ -116,6 +116,16 @@ async function sendNotification(options) {
     invoiceNumber: orderData.invoiceNumber,
     dedupeKey: options.dedupeKey
   });
+  if (customerId && (await hasRecentCategorySms(db, { customerId, notificationType }))) {
+    console.log(`SMS:  Notification skipped (24h limit): customer ${customerId} type ${notificationType}`);
+    return {
+      success: true,
+      skippedDuplicate: true,
+      rateLimited24h: true,
+      message,
+      channels: { sms: { skippedDuplicate: true }, whatsapp: { skippedDuplicate: true } }
+    };
+  }
   if (dedupeKey && customerId) {
     const dup = await hasRecentDuplicate(db, { customerId, notificationType, dedupeKey });
     if (dup) {

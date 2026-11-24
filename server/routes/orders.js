@@ -2883,7 +2883,9 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
 
     if (result.skippedDuplicate) {
       return res.json({
-        message: 'This notification was already sent recently for this receipt; not sending again.',
+        message: result.rateLimited24h
+          ? 'This customer already received an SMS of this kind in the last 24 hours; not sending another.'
+          : 'This notification was already sent recently for this receipt; not sending again.',
         skipped_duplicate: true,
         channel: null
       });
@@ -2927,7 +2929,7 @@ router.post('/:id/send-reminder', authenticate, requireBranchAccess(), requirePe
     const result = await sendCollectionReminder(null, id, Array.isArray(channels) ? channels : [channels]);
     if (result.skippedDuplicate) {
       return res.json({
-        message: 'A reminder for this receipt was already sent recently; not sending another SMS.',
+        message: 'This customer already received a reminder SMS in the last 24 hours; not sending another.',
         skipped_duplicate: true,
         sent: false,
         result

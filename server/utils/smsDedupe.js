@@ -80,6 +80,50 @@ async function hasRecentDuplicate(db, { customerId, notificationType, dedupeKey,
   return !!row;
 }
 
+/**
+ * Hard cap: a customer may receive at most ONE SMS per category in any rolling 24 hours,
+ * regardless of receipt/invoice. Categories:
+ *  - reminder: collection/ready notices and balance/invoice reminders
+ *  - receipt:  receipt / order confirmation SMS
+ */
+const RATE_LIMIT_HOURS = Math.max(1, parseInt(process.env.SMS_CATEGORY_LIMIT_HOURS || '24', 10) || 24);
+const CATEGORY_TYPES = {
+  reminder: ['ready', 'reminder', 'balance_reminder', 'invoice_reminder'],
+  receipt: ['receipt_sms', 'confirmation']
+};
+
+function categoryForType(notificationType) {
+  const t = String(notificationType || '');
+  for (const [category, types] of Object.entries(CATEGORY_TYPES)) {
+    if (types.includes(t)) return category;
+  }
+  return null;
+}
+
+/** True if the customer already got (or is getting) an SMS of the same category within the window. */
+async function hasRecentCategorySms(db, { customerId, notificationType, hours = RATE_LIMIT_HOURS }) {
+  const category = categoryForType(notificationType);
+  if (!customerId || !category) return false;
+  const types = CATEGORY_TYPES[category];
+  const placeholders = types.map(() => '?').join(', ');
+  const cutoff = new Date(Date.now() - hours * 3600000).toISOString();
+  const pendingCutoff = new Date(Date.now() - PENDING_CLAIM_MINUTES * 60000).toISOString();
+  const row = await dbGetAsync(
+    db,
+    `SELECT id FROM notifications
+     WHERE customer_id = ?
+       AND channel = 'sms'
+       AND notification_type IN (${placeholders})
+       AND (
+         (status IN ('sent', 'logged') AND COALESCE(sent_at, created_at) > ?)
+         OR (status = 'pending' AND created_at > ?)
+       )
+     LIMIT 1`,
+    [customerId, ...types, cutoff, pendingCutoff]
+  );
+  return !!row;
+}
+
 /** True if this exact text already went (or is going) to this number moments ago. */
 async function hasRecentIdenticalMessage(db, { recipient, message, minutes = IDENTICAL_MESSAGE_WINDOW_MINUTES }) {
   if (!recipient || !message) return false;
@@ -123,6 +167,8 @@ module.exports = {
   computeDedupeKey,
   hasRecentDuplicate,
   hasRecentIdenticalMessage,
+  hasRecentCategorySms,
+  categoryForType,
   withLock,
   DEFAULT_WINDOW_HOURS
 };

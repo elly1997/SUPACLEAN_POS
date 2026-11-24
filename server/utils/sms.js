@@ -1,6 +1,6 @@
 const axios = require('axios');
 const db = require('../database/db');
-const { computeDedupeKey, hasRecentDuplicate, hasRecentIdenticalMessage, withLock } = require('./smsDedupe');
+const { computeDedupeKey, hasRecentDuplicate, hasRecentIdenticalMessage, hasRecentCategorySms, categoryForType, withLock } = require('./smsDedupe');
 
 // SMS notification service
 // This is a template - you'll need to integrate with a Tanzanian SMS provider
@@ -62,6 +62,21 @@ async function sendSMS(phone, message, options = {}) {
   // inside a per-phone lock, so parallel requests (e.g. several lines of one receipt marked
   // ready at once, double clicks, two devices) cannot all pass the check and each send.
   const claim = await withLock(`sms:${formattedPhone}`, async () => {
+    // 24-hour cap: one reminder-type SMS and one receipt-type SMS per customer per 24h.
+    if (await hasRecentCategorySms(db, { customerId, notificationType })) {
+      console.log(
+        `SMS:  SMS skipped (24h limit): customer ${customerId} already received a ${categoryForType(notificationType)} SMS in the last 24h`
+      );
+      return {
+        skip: {
+          success: true,
+          skippedDuplicate: true,
+          rateLimited24h: true,
+          message: `SMS skipped — customer already received a ${categoryForType(notificationType)} SMS in the last 24 hours`
+        }
+      };
+    }
+
     if (dedupeKey && customerId) {
       const dup = await hasRecentDuplicate(db, {
         customerId,
