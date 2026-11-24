@@ -17,7 +17,7 @@ const {
 } = require('../utils/receipt');
 const {
   generateOrderReceiptSms,
-  generateCollectionReminder,
+  generateCustomerReadyReminder,
   daysOverdueFromEstimated,
   getTokensForSms
 } = require('../utils/sms');
@@ -1842,13 +1842,14 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
               const balanceDue = Math.max(0, totalAmount - paidAmount);
               const daysOverdue = daysOverdueFromEstimated(orderWithCustomer.estimated_collection_date);
               const tokens = await getTokensForSms(orderWithCustomer.customer_id);
-              const message = generateCollectionReminder(
-                orderWithCustomer.receipt_number,
-                orderWithCustomer.customer_name,
+              const message = await generateCustomerReadyReminder({
+                customerId: orderWithCustomer.customer_id,
+                customerName: orderWithCustomer.customer_name,
+                receiptNumber: orderWithCustomer.receipt_number,
                 daysOverdue,
                 balanceDue,
                 tokens
-              );
+              });
               
               // Try SMS first; if SMS fails, send via WhatsApp (don't block the response)
               sendSmsWithWhatsAppFallback(orderWithCustomer.customer_phone, message, {
@@ -2846,13 +2847,14 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
       const balanceDue = Math.max(0, totalAmount - paidAmount);
       const daysOverdueReady = daysOverdueFromEstimated(order.estimated_collection_date);
       const tokensReady = await getTokensForSms(order.customer_id);
-      message = generateCollectionReminder(
-        order.receipt_number,
-        order.customer_name,
-        daysOverdueReady,
+      message = await generateCustomerReadyReminder({
+        customerId: order.customer_id,
+        customerName: order.customer_name,
+        receiptNumber: order.receipt_number,
+        daysOverdue: daysOverdueReady,
         balanceDue,
-        tokensReady
-      );
+        tokens: tokensReady
+      });
     } else if (notification_type === 'reminder') {
       const daysOverdue = daysOverdueFromEstimated(order.estimated_collection_date);
       const receiptSums = await db.get(
@@ -2869,7 +2871,14 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
         (parseFloat(receiptSums?.receipt_total_amount || 0) - parseFloat(receiptSums?.receipt_paid_amount || 0))
       );
       const tokensReminder = await getTokensForSms(order.customer_id);
-      message = generateCollectionReminder(order.receipt_number, order.customer_name, daysOverdue, balanceDue, tokensReminder);
+      message = await generateCustomerReadyReminder({
+        customerId: order.customer_id,
+        customerName: order.customer_name,
+        receiptNumber: order.receipt_number,
+        daysOverdue,
+        balanceDue,
+        tokens: tokensReminder
+      });
     } else {
       return res.status(400).json({ error: 'Invalid notification type' });
     }

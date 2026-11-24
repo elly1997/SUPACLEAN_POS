@@ -492,12 +492,88 @@ function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0
   const safeBalance = Number.isFinite(Number(balanceDue)) ? Math.max(0, Number(balanceDue)) : 0;
   const balanceText = Number(safeBalance).toLocaleString();
   const safeName = String(customerName || 'Mteja').replace(/\s+/g, ' ').trim() || 'Mteja';
-  const safeReceipt = String(receiptNumber || '').replace(/\s+/g, ' ').trim();
+  // receiptNumber may be a single receipt or a list (one reminder covering all of a customer's items).
+  const receiptList = (Array.isArray(receiptNumber) ? receiptNumber : [receiptNumber])
+    .map((r) => String(r || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const MAX_LISTED = 2; // keep within one SMS segment; the rest shown as "+N"
+  const safeReceipt =
+    receiptList.length > MAX_LISTED
+      ? `${receiptList.slice(0, MAX_LISTED).join(', ')} +${receiptList.length - MAX_LISTED}`
+      : receiptList.join(', ');
+  const multi = receiptList.length > 1;
 
-  const head = `Habari ${safeName}, oda yako tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio: TSh ${balanceText}.`;
+  const head = multi
+    ? `Habari ${safeName}, oda zako zote tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio jumla: TSh ${balanceText}.`
+    : `Habari ${safeName}, oda yako tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio: TSh ${balanceText}.`;
   const tokenPart = formatTokensSmsSegment(tokens);
   const tail = tokenPart ? `${tokenPart}. Karibu sana.` : 'Karibu sana.';
   return fitSmsHeadAndTail(head, tail, MAX_REMINDER_SMS_LEN);
+}
+
+async function dbAllAsync(sql, params = []) {
+  const ret = db.all(sql, params);
+  if (ret && typeof ret.then === 'function') return ret;
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || [])));
+  });
+}
+
+/**
+ * ONE reminder for ALL of a customer's items: every receipt that has at least one line ready
+ * (not voided / archived), with the combined balance and the longest overdue time.
+ * The receipt that triggered the SMS is always included. Falls back to the single-receipt text
+ * if the lookup fails or there is nothing else to add.
+ */
+async function generateCustomerReadyReminder({
+  customerId,
+  customerName,
+  receiptNumber,
+  daysOverdue = 0,
+  balanceDue = 0,
+  tokens = null
+}) {
+  const single = () => generateCollectionReminder(receiptNumber, customerName, daysOverdue, balanceDue, tokens);
+  if (!customerId) return single();
+  try {
+    const rows = await dbAllAsync(
+      `SELECT MIN(o.receipt_number) AS receipt_number,
+              COALESCE(SUM(o.total_amount), 0) AS total_amount,
+              COALESCE(SUM(o.paid_amount), 0) AS paid_amount,
+              MIN(o.estimated_collection_date) AS est
+       FROM orders o
+       WHERE o.customer_id = ?
+         AND COALESCE(o.is_voided, FALSE) = FALSE
+         AND o.archived_at IS NULL
+       GROUP BY UPPER(TRIM(o.receipt_number))
+       HAVING SUM(CASE WHEN o.status = 'ready' THEN 1 ELSE 0 END) > 0
+       ORDER BY MIN(o.id)`,
+      [customerId]
+    );
+    const wanted = String(receiptNumber || '').trim().toUpperCase();
+    const receipts = [];
+    let totalBalance = 0;
+    let maxOverdue = 0;
+    let includesWanted = !wanted;
+    for (const r of rows || []) {
+      const num = String(r.receipt_number || '').trim();
+      if (!num) continue;
+      receipts.push(num);
+      totalBalance += Math.max(0, parseFloat(r.total_amount || 0) - parseFloat(r.paid_amount || 0));
+      maxOverdue = Math.max(maxOverdue, daysOverdueFromEstimated(r.est));
+      if (num.toUpperCase() === wanted) includesWanted = true;
+    }
+    if (!includesWanted) {
+      receipts.unshift(String(receiptNumber).trim());
+      totalBalance += Math.max(0, Number(balanceDue) || 0);
+      maxOverdue = Math.max(maxOverdue, Number(daysOverdue) || 0);
+    }
+    if (receipts.length <= 1) return single();
+    return generateCollectionReminder(receipts, customerName, maxOverdue, totalBalance, tokens);
+  } catch (err) {
+    console.error('SMS combined reminder lookup failed:', err?.message || err);
+    return single();
+  }
 }
 
 /**
@@ -530,6 +606,7 @@ module.exports = {
   generateReadyNotification,
   generateOrderConfirmation,
   generateCollectionReminder,
+  generateCustomerReadyReminder,
   MAX_STORAGE_DAYS,
   calendarDaysUtc,
   daysOverdueFromEstimated,

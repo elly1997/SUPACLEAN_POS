@@ -1,4 +1,4 @@
-const { sendSMS, generateOrderConfirmation, generateCollectionReminder, calendarDaysUtc, daysOverdueFromEstimated, generateInvoiceReminder, generatePaymentNoticeShort, getTokensForSms } = require('./sms');
+const { sendSMS, generateOrderConfirmation, generateCustomerReadyReminder, calendarDaysUtc, daysOverdueFromEstimated, generateInvoiceReminder, generatePaymentNoticeShort, getTokensForSms } = require('./sms');
 const { sendWhatsApp } = require('./whatsapp');
 const db = require('../database/db');
 const { computeDedupeKey, hasRecentDuplicate, hasRecentCategorySms } = require('./smsDedupe');
@@ -56,13 +56,14 @@ async function sendNotification(options) {
   switch (notificationType) {
     case 'ready': {
       const daysOverdue = daysOverdueFromEstimated(orderData.estimatedDate);
-      message = generateCollectionReminder(
-        orderData.receiptNumber,
+      message = await generateCustomerReadyReminder({
+        customerId,
         customerName,
+        receiptNumber: orderData.receiptNumber,
         daysOverdue,
-        orderData.balanceDue ?? 0,
+        balanceDue: orderData.balanceDue ?? 0,
         tokens
-      );
+      });
       break;
     }
     case 'confirmation':
@@ -74,13 +75,14 @@ async function sendNotification(options) {
       );
       break;
     case 'reminder':
-      message = generateCollectionReminder(
-        orderData.receiptNumber,
+      message = await generateCustomerReadyReminder({
+        customerId,
         customerName,
-        orderData.daysOverdue ?? 0,
-        orderData.balanceDue ?? 0,
+        receiptNumber: orderData.receiptNumber,
+        daysOverdue: orderData.daysOverdue ?? 0,
+        balanceDue: orderData.balanceDue ?? 0,
         tokens
-      );
+      });
       break;
     case 'balance_reminder':
       message = generateBalanceReminder(
