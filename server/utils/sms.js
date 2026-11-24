@@ -1,6 +1,6 @@
 const axios = require('axios');
 const db = require('../database/db');
-const { computeDedupeKey, hasRecentDuplicate } = require('./smsDedupe');
+const { computeDedupeKey, hasRecentDuplicate, hasRecentIdenticalMessage, withLock } = require('./smsDedupe');
 
 // SMS notification service
 // This is a template - you'll need to integrate with a Tanzanian SMS provider
@@ -51,70 +51,97 @@ async function sendSMS(phone, message, options = {}) {
     customerId,
     notificationType
   });
-  if (dedupeKey && customerId) {
-    const dup = await hasRecentDuplicate(db, {
-      customerId,
-      notificationType,
-      dedupeKey
-    });
-    if (dup) {
-      console.log(
-        `SMS:  SMS skipped (duplicate within window): customer ${customerId} type ${notificationType} key ${dedupeKey}`
-      );
-      return {
-        success: true,
-        skippedDuplicate: true,
-        message: 'SMS skipped — already sent recently for this receipt/customer and type'
-      };
-    }
-  }
 
   // Remove any non-numeric characters and ensure it starts with country code
-  const cleanPhone = phone.replace(/\D/g, '');
+  const cleanPhone = String(phone || '').replace(/\D/g, '');
   const formattedPhone = cleanPhone.startsWith('255') 
     ? `+${cleanPhone}` 
     : `+255${cleanPhone.slice(-9)}`;
 
-  const globallyEnabled = await isGlobalSmsSendingEnabled();
-  if (!globallyEnabled) {
-    // Track the deliberate suppression (helps admin debugging).
-    let suppressedNotificationId = null;
+  // ONE SMS AT A TIME per recipient: the duplicate check and the claim (pending row) happen
+  // inside a per-phone lock, so parallel requests (e.g. several lines of one receipt marked
+  // ready at once, double clicks, two devices) cannot all pass the check and each send.
+  const claim = await withLock(`sms:${formattedPhone}`, async () => {
+    if (dedupeKey && customerId) {
+      const dup = await hasRecentDuplicate(db, {
+        customerId,
+        notificationType,
+        dedupeKey
+      });
+      if (dup) {
+        console.log(
+          `SMS:  SMS skipped (duplicate within window): customer ${customerId} type ${notificationType} key ${dedupeKey}`
+        );
+        return {
+          skip: {
+            success: true,
+            skippedDuplicate: true,
+            message: 'SMS skipped — already sent recently for this receipt/customer and type'
+          }
+        };
+      }
+    }
+
+    // Safety net for any caller without a dedupe key: never send the identical text to the
+    // same phone twice within a short window.
+    if (await hasRecentIdenticalMessage(db, { recipient: formattedPhone, message })) {
+      console.log(`SMS:  SMS skipped (identical message to ${formattedPhone} sent moments ago)`);
+      return {
+        skip: {
+          success: true,
+          skippedDuplicate: true,
+          message: 'SMS skipped — identical message was just sent to this number'
+        }
+      };
+    }
+
+    const globallyEnabled = await isGlobalSmsSendingEnabled();
+    if (!globallyEnabled) {
+      // Track the deliberate suppression (helps admin debugging).
+      let suppressedNotificationId = null;
+      if (customerId) {
+        try {
+          const insertResult = await db.run(
+            `INSERT INTO notifications (customer_id, order_id, notification_type, channel, recipient, message, status, dedupe_key)
+             VALUES (?, ?, ?, 'sms', ?, ?, 'disabled', ?)`,
+            [customerId, orderId || null, notificationType, formattedPhone, message, dedupeKey || null]
+          );
+          suppressedNotificationId = insertResult?.row?.id ?? insertResult?.lastID ?? null;
+        } catch (insertErr) {
+          console.error('SMS (suppressed): failed to create notification record:', insertErr.message);
+        }
+      }
+      return {
+        skip: {
+          success: true,
+          smsSuppressed: true,
+          skippedDisabled: true,
+          message: 'SMS suppressed (globally disabled)',
+          notificationId: suppressedNotificationId,
+        }
+      };
+    }
+
+    // Claim: record a 'pending' notification BEFORE calling the carrier. Other requests that
+    // arrive meanwhile see this row (see hasRecentDuplicate) and skip.
+    let pendingId = null;
     if (customerId) {
       try {
         const insertResult = await db.run(
           `INSERT INTO notifications (customer_id, order_id, notification_type, channel, recipient, message, status, dedupe_key)
-           VALUES (?, ?, ?, 'sms', ?, ?, 'disabled', ?)`,
+           VALUES (?, ?, ?, 'sms', ?, ?, 'pending', ?)`,
           [customerId, orderId || null, notificationType, formattedPhone, message, dedupeKey || null]
         );
-        suppressedNotificationId = insertResult?.row?.id ?? insertResult?.lastID ?? null;
+        pendingId = insertResult?.row?.id ?? insertResult?.lastID ?? null;
       } catch (insertErr) {
-        console.error('SMS (suppressed): failed to create notification record:', insertErr.message);
+        console.error('SMS: failed to create notification record:', insertErr.message);
       }
     }
+    return { notificationId: pendingId };
+  });
 
-    return {
-      success: true,
-      smsSuppressed: true,
-      skippedDisabled: true,
-      message: 'SMS suppressed (globally disabled)',
-      notificationId: suppressedNotificationId,
-    };
-  }
-
-  // Create notification record (await so we have notificationId for status updates, especially on PostgreSQL)
-  let notificationId = null;
-  if (customerId) {
-    try {
-      const insertResult = await db.run(
-        `INSERT INTO notifications (customer_id, order_id, notification_type, channel, recipient, message, status, dedupe_key)
-         VALUES (?, ?, ?, 'sms', ?, ?, 'pending', ?)`,
-        [customerId, orderId || null, notificationType, formattedPhone, message, dedupeKey || null]
-      );
-      notificationId = insertResult?.row?.id ?? insertResult?.lastID ?? null;
-    } catch (insertErr) {
-      console.error('SMS: failed to create notification record:', insertErr.message);
-    }
-  }
+  if (claim.skip) return claim.skip;
+  const notificationId = claim.notificationId;
 
   try {
     const provider = (process.env.SMS_PROVIDER || 'africastalking').toLowerCase();
@@ -327,6 +354,68 @@ function getTermsAndConditionsUrl() {
   return process.env.TERMS_AND_CONDITIONS_URL || '';
 }
 
+/** SMS toggle: settings key `sms_show_tokens` (default on). Set to 'false' to hide token balances. */
+const SMS_TOKENS_SETTING_KEY = 'sms_show_tokens';
+let smsTokensEnabledCache = { value: true, fetchedAtMs: 0 };
+
+async function isSmsTokensEnabled() {
+  const now = Date.now();
+  if (now - smsTokensEnabledCache.fetchedAtMs < 5000) return smsTokensEnabledCache.value;
+  try {
+    const row = await dbGetAsync('SELECT setting_value FROM settings WHERE setting_key = ?', [SMS_TOKENS_SETTING_KEY]);
+    const raw = row?.setting_value;
+    const enabled =
+      raw == null
+        ? true
+        : !['false', '0', 'disabled', 'disable', 'off'].includes(String(raw).toLowerCase().trim());
+    smsTokensEnabledCache = { value: enabled, fetchedAtMs: now };
+    return enabled;
+  } catch (err) {
+    // Fail open: default behaviour is to show the token balance.
+    console.error('SMS token toggle lookup failed:', err?.message || err);
+    return true;
+  }
+}
+
+/**
+ * Current token balance for a customer (0 if no loyalty wallet yet).
+ * Returns null when the toggle is off or the lookup fails, so the SMS simply omits the segment.
+ */
+async function getTokensForSms(customerId) {
+  if (!customerId) return null;
+  if (!(await isSmsTokensEnabled())) return null;
+  try {
+    const row = await dbGetAsync('SELECT COALESCE(current_points, 0) AS tokens FROM loyalty_points WHERE customer_id = ?', [
+      customerId
+    ]);
+    return Math.max(0, Math.floor(Number(row?.tokens) || 0));
+  } catch (err) {
+    console.error('SMS token lookup failed:', err?.message || err);
+    return null;
+  }
+}
+
+/** Compact token segment, e.g. "Tokens (12)". Empty string when tokens is null/invalid. */
+function formatTokensSmsSegment(tokens) {
+  if (tokens === null || tokens === undefined || tokens === '') return '';
+  const n = Number(tokens);
+  if (!Number.isFinite(n)) return '';
+  return `Tokens (${Math.max(0, Math.floor(n))})`;
+}
+
+/**
+ * Join head + tail within maxLen. The tail (token segment, sign-off) is always kept;
+ * only the head is shortened with "..." if needed.
+ */
+function fitSmsHeadAndTail(head, tail, maxLen) {
+  const h = String(head || '').replace(/\s+/g, ' ').trim();
+  const t = String(tail || '').replace(/\s+/g, ' ').trim();
+  const full = t ? `${h} ${t}` : h;
+  if (full.length <= maxLen) return full;
+  const room = maxLen - (t ? t.length + 1 : 0) - 3;
+  return `${h.slice(0, Math.max(0, room)).trimEnd()}...${t ? ` ${t}` : ''}`;
+}
+
 /**
  * Order receipt SMS – sent once after printing receipt. Detailed but brief; includes T&C link.
  *
@@ -337,18 +426,18 @@ function getTermsAndConditionsUrl() {
  * @param {number} totalAmount - Total in TSh
  * @param {string} paymentStatus - paid_full, not_paid, advance, credit
  * @param {string} [estimatedDate] - Optional estimated collection date for SMS
+ * @param {number|null} [tokens] - Customer's current token balance; null omits the segment
  */
-function generateOrderReceiptSms(receiptNumber, customerName, customerId, itemsDescription, totalAmount, paymentStatus, estimatedDate = null) {
-  const MAX_RECEIPT_SMS_LEN = 110;
+function generateOrderReceiptSms(receiptNumber, customerName, customerId, itemsDescription, totalAmount, paymentStatus, estimatedDate = null, tokens = null) {
+  const MAX_RECEIPT_SMS_LEN = 130; // stays within one 160-char GSM segment
   const amountStr = typeof totalAmount === 'number' ? totalAmount.toLocaleString() : String(totalAmount);
   const statusStr = formatPaymentStatusForSms(paymentStatus);
   const safeName = (customerName || 'Customer').replace(/[^a-zA-Z0-9 .'-]/g, '').trim() || 'Customer';
-  const base = `Habari ${safeName}, receipt ${receiptNumber}, TSh ${amountStr}, ${statusStr}. Thank you.`;
-  const normalized = base.replace(/\s+/g, ' ').trim();
+  const head = `Habari ${safeName}, receipt ${receiptNumber}, TSh ${amountStr}, ${statusStr}.`;
+  const tokenPart = formatTokensSmsSegment(tokens);
+  const tail = tokenPart ? `${tokenPart}. Thank you.` : 'Thank you.';
   // Enforce single short English SMS to avoid multi-part billing.
-  return normalized.length <= MAX_RECEIPT_SMS_LEN
-    ? normalized
-    : `${normalized.slice(0, MAX_RECEIPT_SMS_LEN - 3).trimEnd()}...`;
+  return fitSmsHeadAndTail(head, tail, MAX_RECEIPT_SMS_LEN);
 }
 
 /** Max storage days policy (SMS + business rule reference). */
@@ -380,20 +469,20 @@ function daysOverdueFromEstimated(estimatedDate) {
  * @param {string} customerName
  * @param {number} daysOverdue - Days after estimated_collection_date (due = received + 3 days)
  * @param {number} balanceDue
+ * @param {number|null} [tokens] - Customer's current token balance; null omits the segment
  */
-function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0, balanceDue = 0) {
-  const MAX_REMINDER_SMS_LEN = 140;
+function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0, balanceDue = 0, tokens = null) {
+  const MAX_REMINDER_SMS_LEN = 160; // single GSM segment
   const overdueDays = Number.isFinite(Number(daysOverdue)) ? Math.max(0, Number(daysOverdue)) : 0;
   const safeBalance = Number.isFinite(Number(balanceDue)) ? Math.max(0, Number(balanceDue)) : 0;
   const balanceText = Number(safeBalance).toLocaleString();
   const safeName = String(customerName || 'Mteja').replace(/\s+/g, ' ').trim() || 'Mteja';
   const safeReceipt = String(receiptNumber || '').replace(/\s+/g, ' ').trim();
 
-  const base = `Habari ${safeName}, oda yako tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio: TSh ${balanceText}. Karibu sana.`;
-  const normalized = base.replace(/\s+/g, ' ').trim();
-  return normalized.length <= MAX_REMINDER_SMS_LEN
-    ? normalized
-    : `${normalized.slice(0, MAX_REMINDER_SMS_LEN - 3).trimEnd()}...`;
+  const head = `Habari ${safeName}, oda yako tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio: TSh ${balanceText}.`;
+  const tokenPart = formatTokensSmsSegment(tokens);
+  const tail = tokenPart ? `${tokenPart}. Karibu sana.` : 'Karibu sana.';
+  return fitSmsHeadAndTail(head, tail, MAX_REMINDER_SMS_LEN);
 }
 
 /**
@@ -432,6 +521,8 @@ module.exports = {
   generateInvoiceReminder,
   generatePaymentNoticeShort,
   generateOrderReceiptSms,
+  getTokensForSms,
+  formatTokensSmsSegment,
   getTermsAndConditionsUrl,
   formatPaymentStatusForSms,
   formatPaymentStatusForSmsSwahili

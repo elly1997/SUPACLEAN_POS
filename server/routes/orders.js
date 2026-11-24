@@ -18,7 +18,8 @@ const {
 const {
   generateOrderReceiptSms,
   generateCollectionReminder,
-  daysOverdueFromEstimated
+  daysOverdueFromEstimated,
+  getTokensForSms
 } = require('../utils/sms');
 const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny, requireReceiptAccess } = require('../middleware/auth');
@@ -849,6 +850,7 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', authenticate, requireBra
       totalReceiptItems,
       first.branch_code
     );
+    const tokens = await getTokensForSms(customerId);
     const message = generateOrderReceiptSms(
       customerReceiptId,
       customerName,
@@ -856,7 +858,8 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', authenticate, requireBra
       itemsDescription,
       receiptTotal,
       paymentStatus,
-      estimatedDate
+      estimatedDate,
+      tokens
     );
 
     const result = await sendSmsWithWhatsAppFallback(customerPhone, message, {
@@ -1820,19 +1823,11 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
           const smsEnabled = orderWithCustomer.sms_notifications_enabled !== 0;
           
           if (smsEnabled && orderWithCustomer.customer_phone && !isPlaceholderPhone(orderWithCustomer.customer_phone)) {
-            // Send one ready notification per receipt (not per item)
-            const otherReadyItems = await db.get(
-              `SELECT id
-               FROM orders
-               WHERE UPPER(receipt_number) = UPPER(?)
-                 AND customer_id = ?
-                 AND id <> ?
-                 AND status IN ('ready', 'collected')
-               LIMIT 1`,
-              [orderWithCustomer.receipt_number, orderWithCustomer.customer_id, orderWithCustomer.id]
-            );
-
-            if (!otherReadyItems) {
+            // One ready notification per receipt (not per item). Several lines of a receipt are often
+            // marked ready at the same moment, so a "is another line ready?" check is racy (it either
+            // lets every line send or makes every line skip). The atomic per-receipt dedupe inside
+            // sendSMS() (key rcpt:<receipt>, type 'ready') is the single gate instead.
+            {
               const receiptSums = await db.get(
                 `SELECT 
                    COALESCE(SUM(total_amount), 0) as receipt_total_amount,
@@ -1846,11 +1841,13 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
               const paidAmount = parseFloat(receiptSums?.receipt_paid_amount || 0);
               const balanceDue = Math.max(0, totalAmount - paidAmount);
               const daysOverdue = daysOverdueFromEstimated(orderWithCustomer.estimated_collection_date);
+              const tokens = await getTokensForSms(orderWithCustomer.customer_id);
               const message = generateCollectionReminder(
                 orderWithCustomer.receipt_number,
                 orderWithCustomer.customer_name,
                 daysOverdue,
-                balanceDue
+                balanceDue,
+                tokens
               );
               
               // Try SMS first; if SMS fails, send via WhatsApp (don't block the response)
@@ -1874,8 +1871,6 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
               }).catch(err => {
                 console.error(`ERROR:  Error sending ready notification:`, err);
               });
-            } else {
-              console.log(`MAIL:  Ready notification already sent for receipt ${orderWithCustomer.receipt_number}; skipping duplicate.`);
             }
           } else if (!smsEnabled) {
             console.log(`SMS:  SMS notifications disabled for customer ${orderWithCustomer.customer_name}`);
@@ -2850,11 +2845,13 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
       const paidAmount = parseFloat(receiptSums?.receipt_paid_amount || 0);
       const balanceDue = Math.max(0, totalAmount - paidAmount);
       const daysOverdueReady = daysOverdueFromEstimated(order.estimated_collection_date);
+      const tokensReady = await getTokensForSms(order.customer_id);
       message = generateCollectionReminder(
         order.receipt_number,
         order.customer_name,
         daysOverdueReady,
-        balanceDue
+        balanceDue,
+        tokensReady
       );
     } else if (notification_type === 'reminder') {
       const daysOverdue = daysOverdueFromEstimated(order.estimated_collection_date);
@@ -2871,7 +2868,8 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
         0,
         (parseFloat(receiptSums?.receipt_total_amount || 0) - parseFloat(receiptSums?.receipt_paid_amount || 0))
       );
-      message = generateCollectionReminder(order.receipt_number, order.customer_name, daysOverdue, balanceDue);
+      const tokensReminder = await getTokensForSms(order.customer_id);
+      message = generateCollectionReminder(order.receipt_number, order.customer_name, daysOverdue, balanceDue, tokensReminder);
     } else {
       return res.status(400).json({ error: 'Invalid notification type' });
     }
@@ -2927,6 +2925,14 @@ router.post('/:id/send-reminder', authenticate, requireBranchAccess(), requirePe
 
   try {
     const result = await sendCollectionReminder(null, id, Array.isArray(channels) ? channels : [channels]);
+    if (result.skippedDuplicate) {
+      return res.json({
+        message: 'A reminder for this receipt was already sent recently; not sending another SMS.',
+        skipped_duplicate: true,
+        sent: false,
+        result
+      });
+    }
     if (result.success) {
       res.json({
         message: 'Reminder sent successfully',

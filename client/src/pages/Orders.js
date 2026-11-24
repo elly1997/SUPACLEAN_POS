@@ -333,7 +333,12 @@ const Orders = () => {
     const ids = items.map((i) => i?.id).filter(Boolean);
     if (ids.length === 0) return;
     try {
-      await Promise.all(ids.map((id) => updateOrderStatus(id, newStatus)));
+      // One line at a time (not Promise.all): parallel updates fired the "ready" SMS for every
+      // line of the receipt at once. The server also de-duplicates, this just keeps it orderly.
+      for (const id of ids) {
+        // eslint-disable-next-line no-await-in-loop
+        await updateOrderStatus(id, newStatus);
+      }
       applyStatusLocally(ids, newStatus);
       showToast(`Updated ${ids.length} item(s) to ${newStatus}`, 'success');
     } catch (error) {
@@ -641,10 +646,13 @@ const Orders = () => {
   };
 
   const handleSendReminder = async (orderId, channels = ['sms']) => {
+    if (sendingReminder != null) return; // one SMS at a time — ignore double clicks
     try {
       setSendingReminder(orderId);
       const res = await sendCollectionReminder(orderId, channels);
-      if (res.data.result && res.data.result.success) {
+      if (res.data.skipped_duplicate) {
+        showToast(res.data.message || 'Reminder already sent recently — not sending another SMS.', 'info');
+      } else if (res.data.result && res.data.result.success) {
         showToast('Reminder sent successfully!', 'success');
       } else {
         showToast(res.data.result?.error || res.data.error || 'Failed to send reminder', 'warning');
