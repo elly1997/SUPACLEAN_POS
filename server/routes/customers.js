@@ -7,6 +7,7 @@ const { getBranchFilter, getEffectiveBranchId } = require('../utils/branchFilter
 const { branchCustomerMatchSql, customerBelongsToBranch } = require('../utils/customerBranch');
 const { normalizePhoneDigits, isPlaceholderPhone, digitsOnlySql } = require('../utils/customerPhone');
 const { releaseCompanyWidePhoneLock } = require('../database/ensureLongevitySchema');
+const { sqlYearTokens } = require('../utils/loyaltyYear');
 
 async function phoneNormalizedForCustomer(phone, excludeId = null, branchId = null) {
   const normalized = normalizePhoneDigits(String(phone || '').trim());
@@ -392,6 +393,7 @@ router.get('/', async (req, res) => {
                 COALESCE(lp.current_points, 0) AS current_points,
                 COALESCE(lp.lifetime_points, 0) AS lifetime_points,
                 COALESCE(lp.tier, 'Bronze') AS tier,
+                ${sqlYearTokens('c.id')} AS year_tokens,
                 COALESCE((
                   SELECT SUM(GREATEST(COALESCE(o.total_amount, 0) - COALESCE(o.paid_amount, 0), 0))
                   FROM orders o
@@ -415,6 +417,7 @@ router.get('/', async (req, res) => {
         outstanding_balance: parseFloat(row.outstanding_balance || 0),
         current_points: parseInt(row.current_points || 0),
         lifetime_points: parseInt(row.lifetime_points || 0),
+        year_tokens: parseInt(row.year_tokens || 0),
         tier: row.tier || 'Bronze',
         branch_id: row.branch_id != null ? row.branch_id : null,
         branch_name: row.branch_name || null
@@ -439,6 +442,7 @@ router.get('/', async (req, res) => {
            COALESCE(lp.current_points, 0) AS current_points,
            COALESCE(lp.lifetime_points, 0) AS lifetime_points,
            COALESCE(lp.tier, 'Bronze') AS tier,
+           ${sqlYearTokens('c.id')} AS year_tokens,
            COALESCE(SUM(CASE 
              WHEN o.id IS NOT NULL 
              AND o.status != 'collected' 
@@ -487,6 +491,7 @@ router.get('/', async (req, res) => {
       outstanding_balance: parseFloat(row.outstanding_balance || 0),
       current_points: parseInt(row.current_points || 0),
       lifetime_points: parseInt(row.lifetime_points || 0),
+      year_tokens: parseInt(row.year_tokens || 0),
       tier: row.tier || 'Bronze'
     }));
     res.json(formattedRows);

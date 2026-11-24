@@ -100,8 +100,15 @@ export default function ReceiptDetailPanel({
               <td>
                 <strong style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   {order.customer_name || '—'}
-                  <LoyaltyBadge tier={order.tier} points={order.current_points} />
+                  <LoyaltyBadge tier={order.tier} points={order.current_points} yearTokens={order.year_tokens} />
                 </strong>
+              </td>
+            </tr>
+            <tr>
+              <td>Tokens {new Date().getFullYear()}</td>
+              <td>
+                <strong>{Math.max(0, Math.floor(Number(order.year_tokens) || 0))}</strong>
+                <span style={{ marginLeft: 8, opacity: 0.7, fontSize: '0.85em' }}>earned this year · resets 1 Jan</span>
               </td>
             </tr>
             <tr>

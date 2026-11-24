@@ -1493,6 +1493,7 @@ Phone: ${customer.phone}
                             <small>
                               Tokens: {customerLoyalty.current_points || 0} available
                               {' · '}lifetime {customerLoyalty.lifetime_points || 0}
+                              {' · '}{new Date().getFullYear()}: {customerLoyalty.year_tokens || 0}
                               {customerLoyalty.next_tier && customerLoyalty.tokens_to_next_tier > 0
                                 ? ` · ${customerLoyalty.tokens_to_next_tier} to ${customerLoyalty.next_tier}`
                                 : ''}

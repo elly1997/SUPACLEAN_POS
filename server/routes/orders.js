@@ -40,6 +40,7 @@ const {
   assertNoPendingVoid,
 } = require('../utils/adminInbox');
 const { sqlActiveOrdersOnly, sqlUnarchivedOrdersOnly } = require('../utils/orderVoidFilter');
+const { sqlYearTokens } = require('../utils/loyaltyYear');
 const cashManagement = require('./cashManagement');
 const {
   readIdempotencyKey,
@@ -303,7 +304,8 @@ router.get('/', authenticate, requireBranchAccess(), async (req, res) => {
               b.name as branch_name,
               b.code as branch_code,
               COALESCE(lp.current_points, 0) AS current_points,
-              COALESCE(lp.tier, 'Bronze') AS tier
+              COALESCE(lp.tier, 'Bronze') AS tier,
+              ${sqlYearTokens('c.id')} AS year_tokens
        FROM orders o
        JOIN services s ON o.service_id = s.id
        JOIN customers c ON o.customer_id = c.id
@@ -484,6 +486,7 @@ router.get('/collection-queue', authenticate, requireBranchAccess(), async (req,
                 b.name as branch_name, b.code as branch_code,
                 COALESCE(lp.current_points, 0) AS current_points,
                 COALESCE(lp.tier, 'Bronze') AS tier,
+                ${sqlYearTokens('c.id')} AS year_tokens,
                 CASE
                   WHEN o.estimated_collection_date IS NOT NULL AND o.estimated_collection_date < CURRENT_TIMESTAMP
                   THEN 1 ELSE 0
@@ -557,7 +560,8 @@ router.get('/receipt/:receiptNumber', authenticate, requireReceiptAccess(), asyn
               b.name as branch_name,
               b.code as branch_code,
               COALESCE(lp.current_points, 0) AS current_points,
-              COALESCE(lp.tier, 'Bronze') AS tier
+              COALESCE(lp.tier, 'Bronze') AS tier,
+              ${sqlYearTokens('c.id')} AS year_tokens
        FROM orders o
        JOIN services s ON o.service_id = s.id
        JOIN customers c ON o.customer_id = c.id

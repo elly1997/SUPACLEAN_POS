@@ -16,6 +16,7 @@ const TIER_LABELS = {
 export default function LoyaltyBadge({
   tier,
   points,
+  yearTokens,
   showPoints = true,
   size = 'sm',
   className = '',
@@ -25,11 +26,16 @@ export default function LoyaltyBadge({
   const label = TIER_LABELS[tierKey] || rawTier;
   const pts = Number(points);
   const tokensLabel = Number.isFinite(pts) ? Math.max(0, Math.floor(pts)) : 0;
+  const yr = Number(yearTokens);
+  const yearNote =
+    yearTokens != null && Number.isFinite(yr)
+      ? ` · ${Math.max(0, Math.floor(yr))} earned in ${new Date().getFullYear()}`
+      : '';
 
   return (
     <span
       className={`loyalty-badge loyalty-badge--${size} loyalty-badge--${tierKey} ${className}`.trim()}
-      title={`${label} · ${formatTokenBalance(tokensLabel)} (1 token = TSh 500 redeem)`}
+      title={`${label} · ${formatTokenBalance(tokensLabel)}${yearNote} (1 token = TSh 500 redeem)`}
     >
       <span className="loyalty-badge__tier">{label}</span>
       {showPoints && (

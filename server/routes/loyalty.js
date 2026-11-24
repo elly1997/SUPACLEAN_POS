@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../database/query');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { requireAnyPermission, hasPermission } = require('../middleware/permissions');
+const { getYearTokens, currentYearEat } = require('../utils/loyaltyYear');
 
 router.use(authenticate);
 
@@ -159,6 +160,7 @@ router.get('/customer/:customerId', async (req, res) => {
       loyalty = { ...loyalty, tier };
     }
     const { next_tier, points_to_next_tier } = nextTierInfo(lifetime, tier);
+    const yearTokens = await getYearTokens(db, customerId).catch(() => 0);
 
     res.json({
       customer_id: parseInt(customerId, 10),
@@ -166,6 +168,8 @@ router.get('/customer/:customerId', async (req, res) => {
       lifetime_points: lifetime,
       current_tokens: current,
       lifetime_tokens: lifetime,
+      year_tokens: yearTokens,
+      year: currentYearEat(),
       token_value_tsh: LOYALTY_CONFIG.redemptionValueTSh,
       min_redeem_tokens: LOYALTY_CONFIG.minRedeemPoints,
       earn_rule: `1 whole token per TSh ${LOYALTY_CONFIG.minSpendForPoint.toLocaleString()} paid cash on a single receipt (e.g. 40,000 = 2; no decimals)`,

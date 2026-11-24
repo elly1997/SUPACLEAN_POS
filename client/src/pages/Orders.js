@@ -1019,6 +1019,7 @@ ${displayPhone !== 'No phone' ? `Phone: ${displayPhone}\n` : ''}─────�
           customer_phone: order.customer_phone,
           tier: order.tier || 'Bronze',
           current_points: Number(order.current_points) || 0,
+          year_tokens: Number(order.year_tokens) || 0,
           branch_id: order.branch_id,
           branch_name: order.branch_name,
           branch_code: order.branch_code,

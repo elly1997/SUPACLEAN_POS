@@ -31,6 +31,7 @@ const CUSTOMERS_EXPORT_COLUMNS = [
   { key: 'tier', label: 'Tier' },
   { key: 'current_points', label: 'Current Tokens' },
   { key: 'lifetime_points', label: 'Lifetime Tokens' },
+  { key: 'year_tokens', label: `Tokens ${new Date().getFullYear()}` },
   { key: 'outstanding_balance', label: 'Outstanding Balance' },
   { key: 'tags', label: 'Tags' },
 ];
@@ -292,6 +293,10 @@ const Customers = () => {
         phone: c.phone ?? '',
         email: c.email ?? '',
         address: c.address ?? '',
+        tier: c.tier ?? 'Bronze',
+        current_points: c.current_points ?? 0,
+        lifetime_points: c.lifetime_points ?? 0,
+        year_tokens: c.year_tokens ?? 0,
         outstanding_balance: c.outstanding_balance != null ? c.outstanding_balance : 0,
         tags: c.tags ?? '',
       }));
@@ -496,10 +501,11 @@ const Customers = () => {
                     <div className="customers-list-card-header">
                       <div className="customer-avatar-table">{(customer.name || '?').charAt(0).toUpperCase()}</div>
                       <strong>{customer.name}</strong>
-                      <LoyaltyBadge tier={customer.tier} points={customer.current_points} />
+                      <LoyaltyBadge tier={customer.tier} points={customer.current_points} yearTokens={customer.year_tokens} />
                     </div>
                     <div className="customers-list-card-body">
                       <p>{customer.phone}</p>
+                      <p className="text-muted">Tokens {new Date().getFullYear()}: <strong>{customer.year_tokens || 0}</strong></p>
                       <p className="text-muted">{customer.email || '—'}</p>
                       <p className="text-muted">{customer.address || '—'}</p>
                       <p>{balance > 0 ? <span style={{ color: 'var(--warning-color)', fontWeight: 'bold' }}>TSh {balance.toLocaleString()}</span> : <span style={{ color: 'var(--success-color)' }}>TSh 0</span>}</p>
@@ -644,7 +650,10 @@ const Customers = () => {
                         )}
                       </td>
                       <td>
-                        <LoyaltyBadge tier={customer.tier} points={customer.current_points} />
+                        <LoyaltyBadge tier={customer.tier} points={customer.current_points} yearTokens={customer.year_tokens} />
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 2 }}>
+                          {customer.year_tokens || 0} in {new Date().getFullYear()}
+                        </div>
                       </td>
                       <td>
                         {(() => {
@@ -813,6 +822,13 @@ const Customers = () => {
             <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Lifetime tokens</div>
               <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{loyaltyData[loyaltyCustomerId].lifetime_points}</div>
+            </div>
+            <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                Earned in {loyaltyData[loyaltyCustomerId].year || new Date().getFullYear()}
+              </div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{loyaltyData[loyaltyCustomerId].year_tokens ?? 0}</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Resets to 0 on 1 Jan</div>
             </div>
             <div style={{ flex: 1, minWidth: '140px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Tier</div>
