@@ -8,6 +8,7 @@ import {
   sendDailyClosingReport,
   getBankDeposits,
   createBankDeposit,
+  deleteBankDeposit,
   getActiveBankAccounts,
   getCashSummaryRange,
   getUnreconciledClosings,
@@ -521,6 +522,38 @@ const CashManagement = () => {
       loadUnreconciledClosings();
     } catch (error) {
       showToast('Error adding deposit: ' + (error.response?.data?.error || error.message), 'error');
+    }
+  };
+
+  const handleDeleteDeposit = async (deposit) => {
+    const amountLabel = parseFloat(deposit.amount || 0).toLocaleString();
+    if (isAdmin) {
+      if (!window.confirm(`Delete this bank deposit of TSh ${amountLabel}? The day's totals will be recalculated.`)) return;
+      try {
+        await deleteBankDeposit(deposit.id);
+        showToast('Bank deposit deleted', 'success');
+        loadData();
+        loadUnreconciledClosings();
+      } catch (error) {
+        showToast('Error deleting deposit: ' + (error.response?.data?.error || error.message), 'error');
+      }
+      return;
+    }
+
+    const reason = window.prompt(
+      `Why should the TSh ${amountLabel} deposit be deleted? An admin must approve this request.`,
+      ''
+    );
+    if (reason == null) return;
+    if (!reason.trim()) {
+      showToast('A reason is required to request a deletion', 'error');
+      return;
+    }
+    try {
+      const res = await deleteBankDeposit(deposit.id, { reason: reason.trim() });
+      showToast(res.data?.message || 'Delete request sent to admin for approval', 'info');
+    } catch (error) {
+      showToast(error.response?.data?.error || error.message || 'Could not send delete request', 'error');
     }
   };
 
@@ -1209,6 +1242,7 @@ const CashManagement = () => {
                   <th>Bank / Account</th>
                   <th>Reference</th>
                   <th>Notes</th>
+                  <th aria-label="Actions"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1218,6 +1252,18 @@ const CashManagement = () => {
                     <td>{deposit.bank_account_name || deposit.bank_name || '—'}</td>
                     <td>{deposit.reference_number ? <span className="reference">{deposit.reference_number}</span> : '—'}</td>
                     <td className="deposit-notes-cell">{deposit.notes || '—'}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-small"
+                        onClick={() => handleDeleteDeposit(deposit)}
+                        title={isAdmin
+                          ? 'Delete this deposit'
+                          : 'Request deletion — an admin must approve'}
+                      >
+                        {isAdmin ? 'Delete' : 'Request delete'}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

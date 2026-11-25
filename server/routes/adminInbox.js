@@ -12,6 +12,8 @@ const {
   dismissInboxItem,
   approveVoidRequest,
   rejectVoidRequest,
+  approveDepositDeleteRequest,
+  rejectDepositDeleteRequest,
   TYPES,
 } = require('../utils/adminInbox');
 
@@ -90,6 +92,15 @@ router.post('/:id/approve', requireBranchAccess(), async (req, res) => {
     || req.body?.acknowledge_reconciled_day === '1';
 
   try {
+    const pendingItem = await getInboxItem(req.params.id);
+    if (pendingItem?.type === TYPES.DEPOSIT_DELETE) {
+      const out = await approveDepositDeleteRequest(req.params.id, {
+        reviewedBy: req.user?.fullName || req.user?.username || 'Admin',
+        reviewedByUserId: req.user?.id,
+        reviewNote: req.body?.review_note || null,
+      });
+      return res.json({ message: 'Deposit deletion approved and deposit removed', item: out.item });
+    }
     // Admins approving voids should not be blocked by a selected branch switcher —
     // use empty branch filter so the receipt can be found regardless of X-Branch-Id.
     const branchFilter = { clause: '', params: [] };
@@ -119,6 +130,15 @@ router.post('/:id/approve', requireBranchAccess(), async (req, res) => {
 
 router.post('/:id/reject', async (req, res) => {
   try {
+    const pendingItem = await getInboxItem(req.params.id);
+    if (pendingItem?.type === TYPES.DEPOSIT_DELETE) {
+      const out = await rejectDepositDeleteRequest(req.params.id, {
+        reviewedBy: req.user?.fullName || req.user?.username || 'Admin',
+        reviewedByUserId: req.user?.id,
+        reviewNote: req.body?.review_note || req.body?.reason || null,
+      });
+      return res.json({ message: 'Deposit deletion declined', item: out.item });
+    }
     const out = await rejectVoidRequest(req.params.id, {
       reviewedBy: req.user?.fullName || req.user?.username || 'Admin',
       reviewedByUserId: req.user?.id,

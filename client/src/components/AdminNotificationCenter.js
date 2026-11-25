@@ -14,6 +14,7 @@ import './AdminNotificationCenter.css';
 
 const TYPE_LABELS = {
   void_receipt: 'Void',
+  deposit_delete: 'Deposit delete',
   cash_short: 'Cash short',
   ai_suggestion: 'AI tip',
   system: 'System',
@@ -63,6 +64,23 @@ function getInboxDetailLines(item) {
     }
     if (payload.item_count > 1) {
       lines.push({ label: 'Items', value: String(payload.item_count) });
+    }
+  } else if (item.type === 'deposit_delete') {
+    if (payload.date) {
+      lines.push({ label: 'Date', value: payload.date });
+    }
+    const depAmt = formatMoney(payload.amount);
+    if (depAmt != null) {
+      lines.push({ label: 'Amount', value: `${depAmt} TZS` });
+    }
+    if (payload.bank_name) {
+      lines.push({ label: 'Bank', value: payload.bank_name });
+    }
+    if (payload.reference_number) {
+      lines.push({ label: 'Reference', value: payload.reference_number });
+    }
+    if (payload.reason) {
+      lines.push({ label: 'Reason', value: payload.reason });
     }
   } else if (item.type === 'cash_short') {
     if (payload.date) {
@@ -199,7 +217,7 @@ export default function AdminNotificationCenter() {
         return;
       }
       const msg = error.response?.data?.error || error.message || 'Approve failed';
-      showToast('Could not approve void request: ' + msg, 'error');
+      showToast('Could not approve request: ' + msg, 'error');
     } finally {
       setBusyId(null);
     }
@@ -235,7 +253,7 @@ export default function AdminNotificationCenter() {
     if (item.type === 'void_receipt' && item.payload?.receipt_number) {
       setOpen(false);
       navigate(`/orders?receipt=${encodeURIComponent(item.payload.receipt_number)}`);
-    } else if (item.type === 'cash_short') {
+    } else if (item.type === 'cash_short' || item.type === 'deposit_delete') {
       setOpen(false);
       navigate('/cash-management');
     }

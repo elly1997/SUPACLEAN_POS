@@ -983,7 +983,8 @@ export const deleteBankAccount = (id) => api.delete(`/bank-accounts/${id}`);
 export const getBankDeposit = (id) => api.get(`/bank-deposits/${id}`);
 export const createBankDeposit = (data) => api.post('/bank-deposits', data);
 export const updateBankDeposit = (id, data) => api.put(`/bank-deposits/${id}`, data);
-export const deleteBankDeposit = (id) => api.delete(`/bank-deposits/${id}`);
+/** Admins delete immediately; other roles send a request ({ reason }) for admin approval (HTTP 202). */
+export const deleteBankDeposit = (id, data = {}) => api.delete(`/bank-deposits/${id}`, { data });
 export async function getBankDepositTotal(params = {}) {
   if (isOffline()) {
     try {

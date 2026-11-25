@@ -7,6 +7,7 @@ const TYPES = {
   VOID_RECEIPT: 'void_receipt',
   CASH_SHORT: 'cash_short',
   AI_SUGGESTION: 'ai_suggestion',
+  DEPOSIT_DELETE: 'deposit_delete',
   SYSTEM: 'system',
 };
 
@@ -442,6 +443,164 @@ async function rejectVoidRequest(inboxId, {
   return { item: await getInboxItem(inboxId) };
 }
 
+/* ---------- Bank deposit delete: manager request → admin approval ---------- */
+
+function depositDeleteDedupeKey(depositId) {
+  return `deposit_delete:pending:${Number(depositId)}`;
+}
+
+/**
+ * Non-admin asks to delete a bank deposit. Creates a pending inbox item; the deposit is only
+ * removed when an admin approves it (see approveDepositDeleteRequest).
+ */
+async function createDepositDeleteRequest({ deposit, reason, requestedBy, requestedByUserId }) {
+  const cleanReason = String(reason || '').trim();
+  if (!cleanReason) {
+    const err = new Error('A reason is required to request a deposit deletion');
+    err.status = 400;
+    throw err;
+  }
+
+  const dedupeKey = depositDeleteDedupeKey(deposit.id);
+  const existing = await db.get('SELECT * FROM admin_inbox WHERE dedupe_key = ?', [dedupeKey]);
+  if (existing) {
+    const err = new Error('A delete request for this deposit is already awaiting admin approval');
+    err.status = 409;
+    err.code = 'deposit_delete_pending';
+    err.inboxItem = { ...existing, payload: safeJson(existing.payload) };
+    throw err;
+  }
+
+  const day = String(deposit.date).trim().slice(0, 10);
+  const amount = parseFloat(deposit.amount) || 0;
+  const amountLabel = amount.toLocaleString();
+  const bankLabel = deposit.bank_account_name || deposit.bank_name || 'bank not specified';
+
+  const { item } = await createInboxItem({
+    type: TYPES.DEPOSIT_DELETE,
+    title: `Delete deposit: TSh ${amountLabel} (${day})`,
+    body: `${requestedBy} requested to delete a bank deposit of TSh ${amountLabel} to ${bankLabel} dated ${day}. Reason: ${cleanReason}`,
+    branchId: deposit.branch_id,
+    status: 'unread',
+    actionStatus: 'pending',
+    priority: 'high',
+    dedupeKey,
+    payload: {
+      deposit_id: Number(deposit.id),
+      date: day,
+      amount,
+      bank_name: bankLabel,
+      reference_number: deposit.reference_number || null,
+      notes: deposit.notes || null,
+      reason: cleanReason,
+    },
+    requestedBy,
+    requestedByUserId,
+  });
+
+  return { item: { ...item, payload: safeJson(item.payload) } };
+}
+
+async function loadPendingDepositDeleteItem(inboxId) {
+  const item = await getInboxItem(inboxId);
+  if (!item) {
+    const err = new Error('Inbox item not found');
+    err.status = 404;
+    throw err;
+  }
+  if (item.type !== TYPES.DEPOSIT_DELETE) {
+    const err = new Error('This inbox item is not a deposit delete request');
+    err.status = 400;
+    throw err;
+  }
+  if (item.action_status !== 'pending') {
+    const err = new Error(`Deposit delete request is already ${item.action_status || 'closed'}`);
+    err.status = 409;
+    throw err;
+  }
+  return item;
+}
+
+/**
+ * Admin approved: delete the deposit and refresh the day chain. Blocked if the day is reconciled
+ * (admin must reverse the reconciliation first, then approve again).
+ */
+async function approveDepositDeleteRequest(inboxId, { reviewedBy, reviewedByUserId, reviewNote = null } = {}) {
+  const item = await loadPendingDepositDeleteItem(inboxId);
+  const depositId = Number(item.payload?.deposit_id);
+
+  const deposit = await db.get('SELECT id, date, branch_id FROM bank_deposits WHERE id = ?', [depositId]);
+  if (!deposit) {
+    const err = new Error('This deposit no longer exists. Decline this request instead.');
+    err.status = 404;
+    throw err;
+  }
+  const day = String(deposit.date).trim().slice(0, 10);
+
+  // Lazy require: avoids a circular import (cashManagement → adminInbox).
+  const { isReconciledDay } = require('./reconciledDay');
+  if (await isReconciledDay(day, deposit.branch_id)) {
+    const err = new Error(
+      'This deposit is on a reconciled day. Reverse the reconciliation first, then approve again.'
+    );
+    err.status = 409;
+    err.code = 'deposit_day_reconciled';
+    throw err;
+  }
+
+  await db.run('DELETE FROM bank_deposits WHERE id = ?', [depositId]);
+
+  let daysRefreshed = 0;
+  try {
+    const { refreshUnreconciledSummariesFromDate } = require('../routes/cashManagement');
+    const chain = await refreshUnreconciledSummariesFromDate(deposit.branch_id, day);
+    daysRefreshed = chain?.daysRefreshed ?? 0;
+  } catch (refreshErr) {
+    console.error('[adminInbox] refresh after deposit delete failed:', refreshErr.message);
+  }
+
+  await db.run(
+    `UPDATE admin_inbox
+     SET action_status = 'approved',
+         status = 'read',
+         reviewed_by = ?,
+         reviewed_by_user_id = ?,
+         reviewed_at = CURRENT_TIMESTAMP,
+         review_note = ?,
+         dedupe_key = NULL,
+         payload = payload || ?::jsonb,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [
+      reviewedBy,
+      reviewedByUserId,
+      reviewNote || null,
+      JSON.stringify({ execution_result: { deposit_deleted: true, date: day, days_refreshed: daysRefreshed, deleted_at: new Date().toISOString() } }),
+      inboxId,
+    ]
+  );
+
+  return { item: await getInboxItem(inboxId) };
+}
+
+async function rejectDepositDeleteRequest(inboxId, { reviewedBy, reviewedByUserId, reviewNote = null } = {}) {
+  await loadPendingDepositDeleteItem(inboxId);
+  await db.run(
+    `UPDATE admin_inbox
+     SET action_status = 'rejected',
+         status = 'read',
+         reviewed_by = ?,
+         reviewed_by_user_id = ?,
+         reviewed_at = CURRENT_TIMESTAMP,
+         review_note = ?,
+         dedupe_key = NULL,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [reviewedBy, reviewedByUserId, reviewNote, inboxId]
+  );
+  return { item: await getInboxItem(inboxId) };
+}
+
 /**
  * Log an admin-executed void into the inbox (awareness, not actionable).
  */
@@ -626,6 +785,9 @@ module.exports = {
   createVoidReceiptRequest,
   approveVoidRequest,
   rejectVoidRequest,
+  createDepositDeleteRequest,
+  approveDepositDeleteRequest,
+  rejectDepositDeleteRequest,
   logAdminExecutedVoid,
   notifyCashShort,
   notifyReconciledDay,

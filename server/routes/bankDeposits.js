@@ -6,6 +6,7 @@ const { requirePermission } = require('../middleware/permissions');
 const { getEffectiveBranchId } = require('../utils/branchFilter');
 const { assertNotFutureBusinessDate } = require('../utils/businessDate');
 const { assertWritableBusinessDay } = require('../utils/reconciledDay');
+const { createDepositDeleteRequest } = require('../utils/adminInbox');
 const cashManagement = require('./cashManagement');
 
 router.use(authenticate, requireBranchFeature('bank_deposits'));
@@ -194,15 +195,55 @@ router.delete('/:id', requireBranchAccess(), requirePermission('canManageCash'),
   const branchId = getEffectiveBranchId(req);
   
   try {
-    let qPrev = 'SELECT date, branch_id FROM bank_deposits WHERE id = ?';
+    let qPrev = `SELECT d.*, b.name AS bank_account_name
+      FROM bank_deposits d
+      LEFT JOIN bank_accounts b ON d.bank_account_id = b.id
+      WHERE d.id = ?`;
     const pPrev = [id];
     if (branchId != null) {
-      qPrev += ' AND branch_id = ?';
+      qPrev += ' AND d.branch_id = ?';
       pPrev.push(branchId);
     }
     const row = await db.get(qPrev, pPrev);
     if (!row) {
       return res.status(404).json({ error: 'Deposit not found' });
+    }
+
+    const deleteDay = String(row.date).trim().slice(0, 10);
+    const deleteBid = row.branch_id != null ? row.branch_id : branchId;
+
+    // Reconciled day: the locked summary would drift from the deposit list. Reverse the
+    // reconciliation first (admin), then delete.
+    if (
+      !(await assertWritableBusinessDay(deleteDay, deleteBid, res, {
+        fieldName: 'date',
+        errorMessage:
+          'This deposit is on a reconciled day. An admin must reverse the reconciliation first, then the deposit can be deleted.',
+      }))
+    ) {
+      return;
+    }
+
+    // Managers (anyone who is not an admin) can't delete directly: send a request to the admin inbox.
+    if (req.user?.role !== 'admin') {
+      try {
+        const { item } = await createDepositDeleteRequest({
+          deposit: row,
+          reason: req.body?.reason,
+          requestedBy: req.user?.fullName || req.user?.username || 'Manager',
+          requestedByUserId: req.user?.id,
+        });
+        return res.status(202).json({
+          pending_approval: true,
+          message: 'Delete request sent to admin for approval. The deposit is removed once an admin approves it.',
+          inbox_item: item,
+        });
+      } catch (reqErr) {
+        if (reqErr.status) {
+          return res.status(reqErr.status).json({ error: reqErr.message, code: reqErr.code, inbox_item: reqErr.inboxItem });
+        }
+        throw reqErr;
+      }
     }
 
     let query = 'DELETE FROM bank_deposits WHERE id = ?';
