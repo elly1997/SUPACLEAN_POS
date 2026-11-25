@@ -17,7 +17,7 @@ const {
 } = require('../utils/receipt');
 const {
   generateOrderReceiptSms,
-  generateCustomerReadyReminder,
+  generateCollectionReminder,
   daysOverdueFromEstimated,
   getTokensForSms
 } = require('../utils/sms');
@@ -844,12 +844,8 @@ router.post('/receipt/:receiptNumber/send-receipt-sms', authenticate, requireBra
     const itemsDescription = itemParts.join('; ');
 
     const estimatedDate = first.estimated_collection_date || null;
-    const totalReceiptItems = allOrders.reduce((sum, row) => sum + (parseFloat(row.quantity) || 1), 0);
-    const customerReceiptId = formatCustomerReceiptId(
-      receiptNumber,
-      totalReceiptItems,
-      first.branch_code
-    );
+    // Customer-facing ID only (e.g. "UH 1-25-11"); no item count in the SMS.
+    const customerReceiptId = formatCustomerReceiptId(receiptNumber, null, first.branch_code);
     const tokens = await getTokensForSms(customerId);
     const message = generateOrderReceiptSms(
       customerReceiptId,
@@ -1842,14 +1838,13 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
               const balanceDue = Math.max(0, totalAmount - paidAmount);
               const daysOverdue = daysOverdueFromEstimated(orderWithCustomer.estimated_collection_date);
               const tokens = await getTokensForSms(orderWithCustomer.customer_id);
-              const message = await generateCustomerReadyReminder({
-                customerId: orderWithCustomer.customer_id,
-                customerName: orderWithCustomer.customer_name,
-                receiptNumber: orderWithCustomer.receipt_number,
+              const message = generateCollectionReminder(
+                orderWithCustomer.receipt_number,
+                orderWithCustomer.customer_name,
                 daysOverdue,
                 balanceDue,
                 tokens
-              });
+              );
               
               // Try SMS first; if SMS fails, send via WhatsApp (don't block the response)
               sendSmsWithWhatsAppFallback(orderWithCustomer.customer_phone, message, {
@@ -2847,14 +2842,13 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
       const balanceDue = Math.max(0, totalAmount - paidAmount);
       const daysOverdueReady = daysOverdueFromEstimated(order.estimated_collection_date);
       const tokensReady = await getTokensForSms(order.customer_id);
-      message = await generateCustomerReadyReminder({
-        customerId: order.customer_id,
-        customerName: order.customer_name,
-        receiptNumber: order.receipt_number,
-        daysOverdue: daysOverdueReady,
+      message = generateCollectionReminder(
+        order.receipt_number,
+        order.customer_name,
+        daysOverdueReady,
         balanceDue,
-        tokens: tokensReady
-      });
+        tokensReady
+      );
     } else if (notification_type === 'reminder') {
       const daysOverdue = daysOverdueFromEstimated(order.estimated_collection_date);
       const receiptSums = await db.get(
@@ -2871,14 +2865,13 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
         (parseFloat(receiptSums?.receipt_total_amount || 0) - parseFloat(receiptSums?.receipt_paid_amount || 0))
       );
       const tokensReminder = await getTokensForSms(order.customer_id);
-      message = await generateCustomerReadyReminder({
-        customerId: order.customer_id,
-        customerName: order.customer_name,
-        receiptNumber: order.receipt_number,
+      message = generateCollectionReminder(
+        order.receipt_number,
+        order.customer_name,
         daysOverdue,
         balanceDue,
-        tokens: tokensReminder
-      });
+        tokensReminder
+      );
     } else {
       return res.status(400).json({ error: 'Invalid notification type' });
     }
@@ -2887,7 +2880,9 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
       customerId: order.customer_id,
       orderId: order.id,
       notificationType: notification_type,
-      receiptNumber: order.receipt_number
+      receiptNumber: order.receipt_number,
+      // One-click reminder for ONE receipt: not subject to the per-customer 24h cap.
+      bypassCategoryLimit: true
     });
 
     if (result.skippedDuplicate) {

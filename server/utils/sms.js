@@ -63,7 +63,8 @@ async function sendSMS(phone, message, options = {}) {
   // ready at once, double clicks, two devices) cannot all pass the check and each send.
   const claim = await withLock(`sms:${formattedPhone}`, async () => {
     // 24-hour cap: one reminder-type SMS and one receipt-type SMS per customer per 24h.
-    if (await hasRecentCategorySms(db, { customerId, notificationType })) {
+    // One-click manual reminders for a single receipt bypass the cap (per-receipt duplicate check still applies).
+    if (!options.bypassCategoryLimit && (await hasRecentCategorySms(db, { customerId, notificationType }))) {
       console.log(
         `SMS:  SMS skipped (24h limit): customer ${customerId} already received a ${categoryForType(notificationType)} SMS in the last 24h`
       );
@@ -431,10 +432,48 @@ function fitSmsHeadAndTail(head, tail, maxLen) {
   return `${h.slice(0, Math.max(0, room)).trimEnd()}...${t ? ` ${t}` : ''}`;
 }
 
+/** One SMS segment (GSM-7). Longer messages are billed as multi-part. */
+const SMS_SINGLE_SEGMENT_MAX = 160;
+
+/**
+ * Make a customer name safe for GSM-7 SMS: drop accents (José → Jose), keep letters, digits, space, . ' -.
+ * Falls back to `fallback` when nothing usable is left.
+ */
+function toSmsSafeName(name, fallback) {
+  const cleaned = String(name || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9 .'-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || fallback;
+}
+
+/** First word of a name ("Humphrey Simba" → "Humphrey"). */
+function firstNameOf(name) {
+  return String(name || '').trim().split(' ')[0] || String(name || '');
+}
+
+/**
+ * Build a message with the full name; if it would exceed one SMS segment, rebuild with
+ * the first name only. `makeParts(name)` returns { head, tail } and the tail is always kept.
+ */
+function composeSmsWithNameFallback(makeParts, fullName, maxLen = SMS_SINGLE_SEGMENT_MAX) {
+  let parts = makeParts(fullName);
+  const joinedLen = (p) => `${p.head} ${p.tail}`.replace(/\s+/g, ' ').trim().length;
+  if (joinedLen(parts) > maxLen) {
+    const first = firstNameOf(fullName);
+    if (first && first !== fullName) {
+      parts = makeParts(first);
+    }
+  }
+  return fitSmsHeadAndTail(parts.head, parts.tail, maxLen);
+}
+
 /**
  * Order receipt SMS – sent once after printing receipt. Detailed but brief; includes T&C link.
  *
- * @param {string} receiptNumber
+ * @param {string} receiptNumber - Customer-facing receipt ID, e.g. "UH 1-25-11"
  * @param {string} customerName
  * @param {string|number} customerId
  * @param {string} itemsDescription - e.g. "2x Wash & Fold (Blue); 1x Iron (Shirts)"
@@ -444,15 +483,15 @@ function fitSmsHeadAndTail(head, tail, maxLen) {
  * @param {number|null} [tokens] - Customer's current token balance; null omits the segment
  */
 function generateOrderReceiptSms(receiptNumber, customerName, customerId, itemsDescription, totalAmount, paymentStatus, estimatedDate = null, tokens = null) {
-  const MAX_RECEIPT_SMS_LEN = 130; // stays within one 160-char GSM segment
   const amountStr = typeof totalAmount === 'number' ? totalAmount.toLocaleString() : String(totalAmount);
   const statusStr = formatPaymentStatusForSms(paymentStatus);
-  const safeName = (customerName || 'Customer').replace(/[^a-zA-Z0-9 .'-]/g, '').trim() || 'Customer';
-  const head = `Habari ${safeName}, receipt ${receiptNumber}, TSh ${amountStr}, ${statusStr}.`;
+  const safeReceipt = String(receiptNumber || '').replace(/\s+/g, ' ').trim();
   const tokenPart = formatTokensSmsSegment(tokens);
-  const tail = tokenPart ? `${tokenPart}. Thank you.` : 'Thank you.';
-  // Enforce single short English SMS to avoid multi-part billing.
-  return fitSmsHeadAndTail(head, tail, MAX_RECEIPT_SMS_LEN);
+  const makeParts = (name) => ({
+    head: `Habari ${name}, receipt ${safeReceipt}, TSh ${amountStr}, ${statusStr}.`,
+    tail: tokenPart ? `${tokenPart}. Thank you.` : 'Thank you.'
+  });
+  return composeSmsWithNameFallback(makeParts, toSmsSafeName(customerName, 'Customer'));
 }
 
 /** Max storage days policy (SMS + business rule reference). */
@@ -487,93 +526,17 @@ function daysOverdueFromEstimated(estimatedDate) {
  * @param {number|null} [tokens] - Customer's current token balance; null omits the segment
  */
 function generateCollectionReminder(receiptNumber, customerName, daysOverdue = 0, balanceDue = 0, tokens = null) {
-  const MAX_REMINDER_SMS_LEN = 160; // single GSM segment
   const overdueDays = Number.isFinite(Number(daysOverdue)) ? Math.max(0, Number(daysOverdue)) : 0;
   const safeBalance = Number.isFinite(Number(balanceDue)) ? Math.max(0, Number(balanceDue)) : 0;
   const balanceText = Number(safeBalance).toLocaleString();
-  const safeName = String(customerName || 'Mteja').replace(/\s+/g, ' ').trim() || 'Mteja';
-  // receiptNumber may be a single receipt or a list (one reminder covering all of a customer's items).
-  const receiptList = (Array.isArray(receiptNumber) ? receiptNumber : [receiptNumber])
-    .map((r) => String(r || '').replace(/\s+/g, ' ').trim())
-    .filter(Boolean);
-  const MAX_LISTED = 2; // keep within one SMS segment; the rest shown as "+N"
-  const safeReceipt =
-    receiptList.length > MAX_LISTED
-      ? `${receiptList.slice(0, MAX_LISTED).join(', ')} +${receiptList.length - MAX_LISTED}`
-      : receiptList.join(', ');
-  const multi = receiptList.length > 1;
-
-  const head = multi
-    ? `Habari ${safeName}, oda zako zote tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio jumla: TSh ${balanceText}.`
-    : `Habari ${safeName}, oda yako tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio: TSh ${balanceText}.`;
+  const safeReceipt = String(receiptNumber || '').replace(/\s+/g, ' ').trim();
   const tokenPart = formatTokensSmsSegment(tokens);
   const tail = tokenPart ? `${tokenPart}. Karibu sana.` : 'Karibu sana.';
-  return fitSmsHeadAndTail(head, tail, MAX_REMINDER_SMS_LEN);
-}
-
-async function dbAllAsync(sql, params = []) {
-  const ret = db.all(sql, params);
-  if (ret && typeof ret.then === 'function') return ret;
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || [])));
+  const makeParts = (name) => ({
+    head: `Habari ${name}, oda yako tayari kuchukuliwa. Risiti: ${safeReceipt}. Siku za kuchelewa: ${overdueDays}. Salio: TSh ${balanceText}.`,
+    tail
   });
-}
-
-/**
- * ONE reminder for ALL of a customer's items: every receipt that has at least one line ready
- * (not voided / archived), with the combined balance and the longest overdue time.
- * The receipt that triggered the SMS is always included. Falls back to the single-receipt text
- * if the lookup fails or there is nothing else to add.
- */
-async function generateCustomerReadyReminder({
-  customerId,
-  customerName,
-  receiptNumber,
-  daysOverdue = 0,
-  balanceDue = 0,
-  tokens = null
-}) {
-  const single = () => generateCollectionReminder(receiptNumber, customerName, daysOverdue, balanceDue, tokens);
-  if (!customerId) return single();
-  try {
-    const rows = await dbAllAsync(
-      `SELECT MIN(o.receipt_number) AS receipt_number,
-              COALESCE(SUM(o.total_amount), 0) AS total_amount,
-              COALESCE(SUM(o.paid_amount), 0) AS paid_amount,
-              MIN(o.estimated_collection_date) AS est
-       FROM orders o
-       WHERE o.customer_id = ?
-         AND COALESCE(o.is_voided, FALSE) = FALSE
-         AND o.archived_at IS NULL
-       GROUP BY UPPER(TRIM(o.receipt_number))
-       HAVING SUM(CASE WHEN o.status = 'ready' THEN 1 ELSE 0 END) > 0
-       ORDER BY MIN(o.id)`,
-      [customerId]
-    );
-    const wanted = String(receiptNumber || '').trim().toUpperCase();
-    const receipts = [];
-    let totalBalance = 0;
-    let maxOverdue = 0;
-    let includesWanted = !wanted;
-    for (const r of rows || []) {
-      const num = String(r.receipt_number || '').trim();
-      if (!num) continue;
-      receipts.push(num);
-      totalBalance += Math.max(0, parseFloat(r.total_amount || 0) - parseFloat(r.paid_amount || 0));
-      maxOverdue = Math.max(maxOverdue, daysOverdueFromEstimated(r.est));
-      if (num.toUpperCase() === wanted) includesWanted = true;
-    }
-    if (!includesWanted) {
-      receipts.unshift(String(receiptNumber).trim());
-      totalBalance += Math.max(0, Number(balanceDue) || 0);
-      maxOverdue = Math.max(maxOverdue, Number(daysOverdue) || 0);
-    }
-    if (receipts.length <= 1) return single();
-    return generateCollectionReminder(receipts, customerName, maxOverdue, totalBalance, tokens);
-  } catch (err) {
-    console.error('SMS combined reminder lookup failed:', err?.message || err);
-    return single();
-  }
+  return composeSmsWithNameFallback(makeParts, toSmsSafeName(customerName, 'Mteja'));
 }
 
 /**
@@ -606,7 +569,6 @@ module.exports = {
   generateReadyNotification,
   generateOrderConfirmation,
   generateCollectionReminder,
-  generateCustomerReadyReminder,
   MAX_STORAGE_DAYS,
   calendarDaysUtc,
   daysOverdueFromEstimated,
