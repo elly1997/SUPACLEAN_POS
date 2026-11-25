@@ -1,4 +1,4 @@
-const { sendSMS, generateOrderConfirmation, generateCollectionReminder, calendarDaysUtc, daysOverdueFromEstimated, generateInvoiceReminder, generatePaymentNoticeShort, getTokensForSms } = require('./sms');
+const { sendSMS, generateOrderConfirmation, generateCollectionReminder, calendarDaysUtc, daysOverdueFromEstimated, generateInvoiceReminder, generatePaymentNoticeShort, getTokensForSms, getCustomerReceiptLabel } = require('./sms');
 const { sendWhatsApp } = require('./whatsapp');
 const db = require('../database/db');
 const { computeDedupeKey, hasRecentDuplicate, hasRecentCategorySms } = require('./smsDedupe');
@@ -53,11 +53,20 @@ async function sendNotification(options) {
   // Generate message based on type
   let message = '';
   const tokens = await getTokensForSms(customerId);
+  // Every customer-facing receipt ID carries the branch code (e.g. "KN 5-20-11"), including legacy
+  // receipts that were stored without it.
+  const receiptLabel = orderData.receiptNumber
+    ? await getCustomerReceiptLabel(orderData.receiptNumber, {
+        orderId,
+        customerId,
+        branchId: orderData.branchId
+      })
+    : '';
   switch (notificationType) {
     case 'ready': {
       const daysOverdue = daysOverdueFromEstimated(orderData.estimatedDate);
       message = generateCollectionReminder(
-        orderData.receiptNumber,
+        receiptLabel,
         customerName,
         daysOverdue,
         orderData.balanceDue ?? 0,
@@ -67,7 +76,7 @@ async function sendNotification(options) {
     }
     case 'confirmation':
       message = generateOrderConfirmation(
-        orderData.receiptNumber,
+        receiptLabel,
         customerName,
         orderData.totalAmount,
         orderData.estimatedDate
@@ -75,7 +84,7 @@ async function sendNotification(options) {
       break;
     case 'reminder':
       message = generateCollectionReminder(
-        orderData.receiptNumber,
+        receiptLabel,
         customerName,
         orderData.daysOverdue ?? 0,
         orderData.balanceDue ?? 0,
@@ -278,6 +287,7 @@ async function sendCollectionReminder(customerId, orderId, channels = ['sms']) {
             notificationType: 'reminder',
             orderData: {
               receiptNumber: order.receipt_number,
+              branchId: order.branch_id,
               daysOverdue,
               estimatedDate: order.estimated_collection_date,
               balanceDue
@@ -299,7 +309,7 @@ async function sendCollectionReminder(customerId, orderId, channels = ['sms']) {
 async function sendBalanceReminder(customerId, channels = ['sms']) {
   return new Promise((resolve, reject) => {
     db.all(
-      `SELECT o.receipt_number, (o.total_amount - COALESCE(o.paid_amount, 0)) as balance
+      `SELECT o.receipt_number, o.branch_id, (o.total_amount - COALESCE(o.paid_amount, 0)) as balance
        FROM orders o
        WHERE o.customer_id = ? 
          AND o.status != 'collected'
@@ -318,7 +328,19 @@ async function sendBalanceReminder(customerId, channels = ['sms']) {
         }
 
         const totalBalance = orders.reduce((sum, o) => sum + parseFloat(o.balance || 0), 0);
-        const receiptNumbers = orders.map(o => o.receipt_number);
+        // Branch-prefixed receipt IDs (e.g. "KN 5-20-11"), one per receipt (a receipt has many lines).
+        const receiptNumbers = [];
+        const seenReceipts = new Set();
+        for (const o of orders) {
+          const label = await getCustomerReceiptLabel(o.receipt_number, {
+            branchId: o.branch_id,
+            customerId
+          });
+          if (label && !seenReceipts.has(label)) {
+            seenReceipts.add(label);
+            receiptNumbers.push(label);
+          }
+        }
 
         db.get(
           'SELECT name, phone, sms_notifications_enabled FROM customers WHERE id = ?',

@@ -19,7 +19,8 @@ const {
   generateOrderReceiptSms,
   generateCollectionReminder,
   daysOverdueFromEstimated,
-  getTokensForSms
+  getTokensForSms,
+  getCustomerReceiptLabel
 } = require('../utils/sms');
 const { sendSmsWithWhatsAppFallback } = require('../utils/notifications');
 const { authenticate, requireBranchAccess, requireBranchFeature, requireBranchFeatureAny, requireReceiptAccess } = require('../middleware/auth');
@@ -1838,8 +1839,13 @@ router.put('/:id/status', authenticate, requireBranchAccess(), requirePermission
               const balanceDue = Math.max(0, totalAmount - paidAmount);
               const daysOverdue = daysOverdueFromEstimated(orderWithCustomer.estimated_collection_date);
               const tokens = await getTokensForSms(orderWithCustomer.customer_id);
+              const readyReceiptLabel = await getCustomerReceiptLabel(orderWithCustomer.receipt_number, {
+                branchId: orderWithCustomer.branch_id,
+                orderId: orderWithCustomer.id,
+                customerId: orderWithCustomer.customer_id
+              });
               const message = generateCollectionReminder(
-                orderWithCustomer.receipt_number,
+                readyReceiptLabel,
                 orderWithCustomer.customer_name,
                 daysOverdue,
                 balanceDue,
@@ -2842,8 +2848,13 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
       const balanceDue = Math.max(0, totalAmount - paidAmount);
       const daysOverdueReady = daysOverdueFromEstimated(order.estimated_collection_date);
       const tokensReady = await getTokensForSms(order.customer_id);
+      const manualReadyLabel = await getCustomerReceiptLabel(order.receipt_number, {
+        branchId: order.branch_id,
+        orderId: order.id,
+        customerId: order.customer_id
+      });
       message = generateCollectionReminder(
-        order.receipt_number,
+        manualReadyLabel,
         order.customer_name,
         daysOverdueReady,
         balanceDue,
@@ -2865,8 +2876,13 @@ router.post('/:id/send-notification', authenticate, requireBranchAccess(), requi
         (parseFloat(receiptSums?.receipt_total_amount || 0) - parseFloat(receiptSums?.receipt_paid_amount || 0))
       );
       const tokensReminder = await getTokensForSms(order.customer_id);
+      const manualReminderLabel = await getCustomerReceiptLabel(order.receipt_number, {
+        branchId: order.branch_id,
+        orderId: order.id,
+        customerId: order.customer_id
+      });
       message = generateCollectionReminder(
-        order.receipt_number,
+        manualReminderLabel,
         order.customer_name,
         daysOverdue,
         balanceDue,

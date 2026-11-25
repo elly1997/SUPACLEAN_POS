@@ -1,5 +1,6 @@
 const axios = require('axios');
 const db = require('../database/db');
+const { formatCustomerReceiptId, getBranchReceiptPrefix } = require('./receipt');
 const { computeDedupeKey, hasRecentDuplicate, hasRecentIdenticalMessage, hasRecentCategorySms, categoryForType, withLock } = require('./smsDedupe');
 
 // SMS notification service
@@ -494,6 +495,51 @@ function generateOrderReceiptSms(receiptNumber, customerName, customerId, itemsD
   return composeSmsWithNameFallback(makeParts, toSmsSafeName(customerName, 'Customer'));
 }
 
+const PREFIXED_RECEIPT_RE = /^[A-Za-z0-9]{2,10}\s+\d/;
+
+/**
+ * Customer-facing receipt ID for ANY SMS/WhatsApp text: always carries the branch code
+ * (e.g. "KN 5-20-11"). Older receipts were stored without the prefix ("5-20-11"), so the branch is
+ * resolved from whatever context is available and added. Already-prefixed numbers are left as is.
+ *
+ * @param {string} receiptNumber - stored receipt number (prefixed or legacy)
+ * @param {{ branchId?: number|string|null, branchCode?: string|null, orderId?: number|string|null, customerId?: number|string|null }} [ctx]
+ */
+async function getCustomerReceiptLabel(receiptNumber, ctx = {}) {
+  const raw = String(receiptNumber || '').trim();
+  if (!raw) return raw;
+
+  // Strips the legacy " (YY)" suffix; keeps an existing branch prefix.
+  const cleaned = formatCustomerReceiptId(raw, null, null);
+  if (PREFIXED_RECEIPT_RE.test(cleaned)) return cleaned;
+
+  let prefix = ctx.branchCode ? String(ctx.branchCode).trim().toUpperCase() : '';
+  if (!prefix) {
+    try {
+      let branchId = ctx.branchId != null && ctx.branchId !== '' ? ctx.branchId : null;
+      if (branchId == null && ctx.orderId != null) {
+        const row = await dbGetAsync('SELECT branch_id FROM orders WHERE id = ?', [ctx.orderId]);
+        branchId = row?.branch_id ?? null;
+      }
+      if (branchId == null && ctx.customerId != null) {
+        const row = await dbGetAsync(
+          `SELECT branch_id FROM orders
+           WHERE customer_id = ? AND UPPER(TRIM(receipt_number)) = UPPER(?) AND branch_id IS NOT NULL
+           LIMIT 1`,
+          [ctx.customerId, raw]
+        );
+        branchId = row?.branch_id ?? null;
+      }
+      if (branchId != null) {
+        prefix = (await getBranchReceiptPrefix(branchId)) || '';
+      }
+    } catch (err) {
+      console.error('SMS receipt label lookup failed:', err?.message || err);
+    }
+  }
+  return formatCustomerReceiptId(raw, null, prefix || null);
+}
+
 /** Max storage days policy (SMS + business rule reference). */
 const MAX_STORAGE_DAYS = 45;
 
@@ -567,6 +613,7 @@ function generatePaymentNoticeShort(invoiceNumber, companyName, amountDue, daysO
 module.exports = {
   sendSMS,
   generateReadyNotification,
+  getCustomerReceiptLabel,
   generateOrderConfirmation,
   generateCollectionReminder,
   MAX_STORAGE_DAYS,
