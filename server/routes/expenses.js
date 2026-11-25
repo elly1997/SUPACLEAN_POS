@@ -651,49 +651,100 @@ router.put('/:id', requireBranchAccess(), requirePermission('canManageExpenses')
   }
 });
 
-// Void expense (managers and admins only). Keeps audit trail and avoids hard-delete.
-router.delete('/:id', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
-  const { id } = req.params;
-  
-  try {
-    const existing = await db.get('SELECT * FROM expenses WHERE id = $1 AND COALESCE(is_voided, FALSE) = FALSE', [id]);
-    if (!existing) {
-      return res.status(404).json({ error: 'Expense not found' });
-    }
-    const delDate = normalizeExpenseDate(existing.date);
-    const branchId = existing.branch_id != null ? existing.branch_id : (getEffectiveBranchId(req) ?? req.user?.branchId ?? null);
-    if (await isReconciledDay(delDate, branchId) && !wantsReconciledDayAcknowledgement(req)) {
-      return res.status(409).json({
+/**
+ * Void an expense (soft delete with audit trail). Shared by the admin DELETE route and by
+ * admin approval of a manager's delete request (admin inbox).
+ * @returns {Promise<{ status: number, body: object }>}
+ */
+async function voidExpenseCore({ id, voidReason, actorName, acknowledgeReconciledDay = false, branchFallback = null }) {
+  const existing = await db.get('SELECT * FROM expenses WHERE id = $1 AND COALESCE(is_voided, FALSE) = FALSE', [id]);
+  if (!existing) {
+    return { status: 404, body: { error: 'Expense not found' } };
+  }
+  const delDate = normalizeExpenseDate(existing.date);
+  const branchId = existing.branch_id != null ? existing.branch_id : branchFallback;
+  if ((await isReconciledDay(delDate, branchId)) && !acknowledgeReconciledDay) {
+    return {
+      status: 409,
+      body: {
         error:
           'This expense is on a reconciled day. Confirm again to void and recalculate the locked daily summary (send acknowledge_reconciled_day).',
         code: 'reconciled_day'
-      });
-    }
-    const result = await db.run(
-      `UPDATE expenses
-       SET is_voided = TRUE, void_reason = $1, voided_by = $2, voided_at = CURRENT_TIMESTAMP, updated_by = $2, update_reason = $1
-       WHERE id = $3`,
-      [
-        req.body?.void_reason || 'Voided by user',
-        req.user?.fullName || req.user?.username || 'User',
-        id
-      ]
-    );
-    if (result.changes === 0) {
-      return res.status(404).json({ error: 'Expense not found' });
-    }
-    if (isSalaryAdvanceCategory(existing.category)) {
-      await removeLinkedSalaryAdvance(Number(id));
-    }
-    await writeExpenseAudit('void', Number(id), existing, null, req.body?.void_reason || null, req);
-    const closingRefresh = await refreshDailyClosingForExpenseDates(branchId, delDate);
-    res.json({
+      }
+    };
+  }
+  const actor = actorName || 'User';
+  const result = await db.run(
+    `UPDATE expenses
+     SET is_voided = TRUE, void_reason = $1, voided_by = $2, voided_at = CURRENT_TIMESTAMP, updated_by = $2, update_reason = $1
+     WHERE id = $3`,
+    [voidReason || 'Voided by user', actor, id]
+  );
+  if (result.changes === 0) {
+    return { status: 404, body: { error: 'Expense not found' } };
+  }
+  if (isSalaryAdvanceCategory(existing.category)) {
+    await removeLinkedSalaryAdvance(Number(id));
+  }
+  await writeExpenseAudit('void', Number(id), existing, null, voidReason || null, { user: { fullName: actor } });
+  const closingRefresh = await refreshDailyClosingForExpenseDates(branchId, delDate);
+  return {
+    status: 200,
+    body: {
       message: 'Expense voided successfully',
       reconciled_days_refreshed: closingRefresh.reconciledDaysForced || []
+    }
+  };
+}
+
+// Void expense. Admins void directly; managers/others send a request that an admin must approve
+// (admin inbox). Keeps audit trail and avoids hard-delete.
+router.delete('/:id', requireBranchAccess(), requirePermission('canManageExpenses'), async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    if (req.user?.role !== 'admin') {
+      const existing = await db.get('SELECT * FROM expenses WHERE id = $1 AND COALESCE(is_voided, FALSE) = FALSE', [id]);
+      const effectiveBranch = getEffectiveBranchId(req);
+      if (
+        !existing ||
+        (effectiveBranch != null && existing.branch_id != null && Number(existing.branch_id) !== Number(effectiveBranch))
+      ) {
+        return res.status(404).json({ error: 'Expense not found' });
+      }
+      try {
+        const { createExpenseDeleteRequest } = require('../utils/adminInbox');
+        const { item } = await createExpenseDeleteRequest({
+          expense: existing,
+          reason: req.body?.void_reason ?? req.body?.reason,
+          requestedBy: req.user?.fullName || req.user?.username || 'Manager',
+          requestedByUserId: req.user?.id
+        });
+        return res.status(202).json({
+          pending_approval: true,
+          message: 'Delete request sent to admin for approval. The expense is voided once an admin approves it.',
+          inbox_item: item
+        });
+      } catch (reqErr) {
+        if (reqErr.status) {
+          return res.status(reqErr.status).json({ error: reqErr.message, code: reqErr.code, inbox_item: reqErr.inboxItem });
+        }
+        throw reqErr;
+      }
+    }
+
+    const out = await voidExpenseCore({
+      id,
+      voidReason: req.body?.void_reason,
+      actorName: req.user?.fullName || req.user?.username || 'User',
+      acknowledgeReconciledDay: wantsReconciledDayAcknowledgement(req),
+      branchFallback: getEffectiveBranchId(req) ?? req.user?.branchId ?? null
     });
+    res.status(out.status).json(out.body);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 module.exports = router;
+module.exports.voidExpenseCore = voidExpenseCore;

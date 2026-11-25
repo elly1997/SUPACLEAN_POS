@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { getExpenses, createExpense, updateExpense, deleteExpense, getExpenseSummary, getActiveBankAccounts, getPayrollEmployeesForAdvances, recalculateDailyCashForDate, getExpenseCategories, createExpenseCategory } from '../api/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
+import { voidOrRequestExpenseDeletion } from '../utils/expenseDelete';
 import { useBusinessDay } from '../contexts/BusinessDayContext';
 import useHorizontalScrollRegion from '../hooks/useHorizontalScrollRegion';
 import Loader from '../components/Loader';
@@ -32,7 +33,7 @@ const PAYMENT_SOURCES = [
 
 const Expenses = () => {
   const { showToast, ToastContainer } = useToast();
-  const { hasPermission, selectedBranchId } = useAuth();
+  const { hasPermission, selectedBranchId, isAdmin } = useAuth();
   const { workingDate, isCatchUpMode } = useBusinessDay();
   const canManageCash = hasPermission?.('canManageCash') ?? false;
   const [expenses, setExpenses] = useState([]);
@@ -252,49 +253,22 @@ const Expenses = () => {
     setShowForm(true);
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm('Are you sure you want to void this expense?')) {
-      return;
-    }
+  const handleDelete = async (expense) => {
     try {
-      const res = await deleteExpense(id);
-      const days = res?.data?.reconciled_days_refreshed;
-      if (Array.isArray(days) && days.length) {
+      const out = await voidOrRequestExpenseDeletion(expense, { isAdmin, deleteExpense });
+      if (out.status === 'cancelled') return;
+      if (out.status === 'requested') {
+        showToast(out.message || 'Delete request sent to admin for approval', 'info');
+        return;
+      }
+      if (out.reconciledRefreshed?.length) {
         showToast('Expense voided; reconciled daily summary was recalculated for the affected date(s).', 'success');
       } else {
         showToast('Expense voided successfully', 'success');
       }
       loadExpenses();
     } catch (error) {
-      const status = error.response?.status;
-      const msg = error.response?.data?.error || error.message;
-      const code = error.response?.data?.code;
-      if (status === 409 && code === 'reconciled_day') {
-        if (
-          !window.confirm(
-            'This day is reconciled. Voiding will recalculate the locked daily summary and refresh later pending days. Continue?'
-          )
-        ) {
-          return;
-        }
-        try {
-          const res2 = await deleteExpense(id, {
-            void_reason: 'Voided by user',
-            acknowledge_reconciled_day: true
-          });
-          const days = res2?.data?.reconciled_days_refreshed;
-          if (Array.isArray(days) && days.length) {
-            showToast('Expense voided; reconciled daily summary was recalculated for the affected date(s).', 'success');
-          } else {
-            showToast('Expense voided successfully', 'success');
-          }
-          loadExpenses();
-        } catch (err2) {
-          showToast('Error voiding expense: ' + (err2.response?.data?.error || err2.message), 'error');
-        }
-        return;
-      }
-      showToast('Error deleting expense: ' + msg, 'error');
+      showToast('Error deleting expense: ' + (error.response?.data?.error || error.message), 'error');
     }
   };
 
@@ -698,10 +672,10 @@ const Expenses = () => {
                           ✏️
                         </button>
                         <button
-                          onClick={() => handleDelete(expense.id)}
+                          onClick={() => handleDelete(expense)}
                           className="btn-delete"
                           type="button"
-                          title="Delete"
+                          title={isAdmin ? 'Delete' : 'Request deletion — an admin must approve'}
                         >
                           🗑️
                         </button>

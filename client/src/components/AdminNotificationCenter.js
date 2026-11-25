@@ -15,6 +15,7 @@ import './AdminNotificationCenter.css';
 const TYPE_LABELS = {
   void_receipt: 'Void',
   deposit_delete: 'Deposit delete',
+  expense_delete: 'Expense delete',
   cash_short: 'Cash short',
   ai_suggestion: 'AI tip',
   system: 'System',
@@ -78,6 +79,26 @@ function getInboxDetailLines(item) {
     }
     if (payload.reference_number) {
       lines.push({ label: 'Reference', value: payload.reference_number });
+    }
+    if (payload.reason) {
+      lines.push({ label: 'Reason', value: payload.reason });
+    }
+  } else if (item.type === 'expense_delete') {
+    if (payload.date) {
+      lines.push({ label: 'Date', value: payload.date });
+    }
+    if (payload.category) {
+      lines.push({ label: 'Category', value: payload.category });
+    }
+    const expAmt = formatMoney(payload.amount);
+    if (expAmt != null) {
+      lines.push({ label: 'Amount', value: `${expAmt} TZS` });
+    }
+    if (payload.payment_source) {
+      lines.push({ label: 'Paid from', value: payload.payment_source });
+    }
+    if (payload.description) {
+      lines.push({ label: 'Details', value: payload.description });
     }
     if (payload.reason) {
       lines.push({ label: 'Reason', value: payload.reason });
@@ -208,8 +229,9 @@ export default function AdminNotificationCenter() {
       const code = error.response?.data?.code;
       if (status === 409 && code === 'reconciled_day') {
         setBusyId(null);
+        const subject = item.type === 'expense_delete' ? 'This expense is on a reconciled day.' : 'This receipt touches a reconciled day.';
         const confirmed = window.confirm(
-          'This receipt touches a reconciled day.\n\nApproving will recalculate the locked daily summary and refresh any later pending days.\n\nContinue?'
+          `${subject}\n\nApproving will recalculate the locked daily summary and refresh any later pending days.\n\nContinue?`
         );
         if (!confirmed) return;
         // Re-approve with acknowledgement
@@ -253,6 +275,9 @@ export default function AdminNotificationCenter() {
     if (item.type === 'void_receipt' && item.payload?.receipt_number) {
       setOpen(false);
       navigate(`/orders?receipt=${encodeURIComponent(item.payload.receipt_number)}`);
+    } else if (item.type === 'expense_delete') {
+      setOpen(false);
+      navigate('/expenses');
     } else if (item.type === 'cash_short' || item.type === 'deposit_delete') {
       setOpen(false);
       navigate('/cash-management');

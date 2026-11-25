@@ -8,6 +8,7 @@ const TYPES = {
   CASH_SHORT: 'cash_short',
   AI_SUGGESTION: 'ai_suggestion',
   DEPOSIT_DELETE: 'deposit_delete',
+  EXPENSE_DELETE: 'expense_delete',
   SYSTEM: 'system',
 };
 
@@ -501,24 +502,46 @@ async function createDepositDeleteRequest({ deposit, reason, requestedBy, reques
   return { item: { ...item, payload: safeJson(item.payload) } };
 }
 
-async function loadPendingDepositDeleteItem(inboxId) {
+/** Load an inbox item and make sure it is the expected request type and still pending. */
+async function loadPendingItemOfType(inboxId, type, label) {
   const item = await getInboxItem(inboxId);
   if (!item) {
     const err = new Error('Inbox item not found');
     err.status = 404;
     throw err;
   }
-  if (item.type !== TYPES.DEPOSIT_DELETE) {
-    const err = new Error('This inbox item is not a deposit delete request');
+  if (item.type !== type) {
+    const err = new Error(`This inbox item is not a ${label}`);
     err.status = 400;
     throw err;
   }
   if (item.action_status !== 'pending') {
-    const err = new Error(`Deposit delete request is already ${item.action_status || 'closed'}`);
+    const err = new Error(`${label[0].toUpperCase()}${label.slice(1)} is already ${item.action_status || 'closed'}`);
     err.status = 409;
     throw err;
   }
   return item;
+}
+
+function loadPendingDepositDeleteItem(inboxId) {
+  return loadPendingItemOfType(inboxId, TYPES.DEPOSIT_DELETE, 'deposit delete request');
+}
+
+async function markRequestRejected(inboxId, { reviewedBy, reviewedByUserId, reviewNote = null }) {
+  await db.run(
+    `UPDATE admin_inbox
+     SET action_status = 'rejected',
+         status = 'read',
+         reviewed_by = ?,
+         reviewed_by_user_id = ?,
+         reviewed_at = CURRENT_TIMESTAMP,
+         review_note = ?,
+         dedupe_key = NULL,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [reviewedBy, reviewedByUserId, reviewNote, inboxId]
+  );
+  return { item: await getInboxItem(inboxId) };
 }
 
 /**
@@ -585,20 +608,140 @@ async function approveDepositDeleteRequest(inboxId, { reviewedBy, reviewedByUser
 
 async function rejectDepositDeleteRequest(inboxId, { reviewedBy, reviewedByUserId, reviewNote = null } = {}) {
   await loadPendingDepositDeleteItem(inboxId);
+  return markRequestRejected(inboxId, { reviewedBy, reviewedByUserId, reviewNote });
+}
+
+/* ---------- Expense delete (void): manager request → admin approval ---------- */
+
+function expenseDeleteDedupeKey(expenseId) {
+  return `expense_delete:pending:${Number(expenseId)}`;
+}
+
+/** Non-admin asks to void an expense. Only an admin approving it actually voids it. */
+async function createExpenseDeleteRequest({ expense, reason, requestedBy, requestedByUserId }) {
+  const cleanReason = String(reason || '').trim();
+  if (!cleanReason) {
+    const err = new Error('A reason is required to request an expense deletion');
+    err.status = 400;
+    throw err;
+  }
+
+  const dedupeKey = expenseDeleteDedupeKey(expense.id);
+  const existing = await db.get('SELECT * FROM admin_inbox WHERE dedupe_key = ?', [dedupeKey]);
+  if (existing) {
+    const err = new Error('A delete request for this expense is already awaiting admin approval');
+    err.status = 409;
+    err.code = 'expense_delete_pending';
+    err.inboxItem = { ...existing, payload: safeJson(existing.payload) };
+    throw err;
+  }
+
+  const day = String(expense.date).trim().slice(0, 10);
+  const amount = parseFloat(expense.amount) || 0;
+  const amountLabel = amount.toLocaleString();
+  const category = expense.category || 'Expense';
+
+  const { item } = await createInboxItem({
+    type: TYPES.EXPENSE_DELETE,
+    title: `Delete expense: ${category} TSh ${amountLabel} (${day})`,
+    body: `${requestedBy} requested to delete the ${category} expense of TSh ${amountLabel} dated ${day}. Reason: ${cleanReason}`,
+    branchId: expense.branch_id,
+    status: 'unread',
+    actionStatus: 'pending',
+    priority: 'high',
+    dedupeKey,
+    payload: {
+      expense_id: Number(expense.id),
+      date: day,
+      amount,
+      category,
+      payment_source: expense.payment_source || null,
+      description: expense.description || null,
+      reason: cleanReason,
+    },
+    requestedBy,
+    requestedByUserId,
+  });
+
+  return { item: { ...item, payload: safeJson(item.payload) } };
+}
+
+/**
+ * Admin approved: void the expense using the same logic as an admin deleting it directly.
+ * On a reconciled day this needs the admin's confirmation (acknowledgeReconciledDay), exactly like voids.
+ */
+async function approveExpenseDeleteRequest(inboxId, {
+  reviewedBy,
+  reviewedByUserId,
+  reviewNote = null,
+  acknowledgeReconciledDay = false,
+} = {}) {
+  const item = await loadPendingItemOfType(inboxId, TYPES.EXPENSE_DELETE, 'expense delete request');
+  const payload = item.payload || {};
+  const expenseId = Number(payload.expense_id);
+
+  // Lazy require: avoids a circular import (expenses route → cashManagement → adminInbox).
+  const { voidExpenseCore } = require('../routes/expenses');
+  const out = await voidExpenseCore({
+    id: expenseId,
+    voidReason: `Requested by ${item.requested_by || 'staff'}: ${payload.reason || 'no reason given'} (approved by ${reviewedBy || 'Admin'})`,
+    actorName: reviewedBy || 'Admin',
+    acknowledgeReconciledDay: acknowledgeReconciledDay === true,
+    branchFallback: item.branch_id ?? null,
+  });
+
+  if (out.status === 409) {
+    const err = new Error(
+      'This expense is on a reconciled day. Approving will void it and recalculate the locked daily summary.'
+    );
+    err.status = 409;
+    err.code = 'reconciled_day';
+    throw err;
+  }
+  if (out.status === 404) {
+    const err = new Error('This expense no longer exists or is already voided. Decline this request instead.');
+    err.status = 404;
+    throw err;
+  }
+  if (out.status !== 200) {
+    const err = new Error(out.body?.error || 'Failed to void expense');
+    err.status = out.status || 500;
+    throw err;
+  }
+
   await db.run(
     `UPDATE admin_inbox
-     SET action_status = 'rejected',
+     SET action_status = 'approved',
          status = 'read',
          reviewed_by = ?,
          reviewed_by_user_id = ?,
          reviewed_at = CURRENT_TIMESTAMP,
          review_note = ?,
          dedupe_key = NULL,
+         payload = payload || ?::jsonb,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [reviewedBy, reviewedByUserId, reviewNote, inboxId]
+    [
+      reviewedBy,
+      reviewedByUserId,
+      reviewNote || null,
+      JSON.stringify({
+        execution_result: {
+          expense_voided: true,
+          reconciled_days_refreshed: out.body?.reconciled_days_refreshed || [],
+          voided_at: new Date().toISOString(),
+        },
+      }),
+      inboxId,
+    ]
   );
+
   return { item: await getInboxItem(inboxId) };
+}
+
+async function rejectExpenseDeleteRequest(inboxId, { reviewedBy, reviewedByUserId, reviewNote = null } = {}) {
+  await loadPendingItemOfType(inboxId, TYPES.EXPENSE_DELETE, 'expense delete request');
+  return markRequestRejected(inboxId, { reviewedBy, reviewedByUserId, reviewNote });
 }
 
 /**
@@ -788,6 +931,9 @@ module.exports = {
   createDepositDeleteRequest,
   approveDepositDeleteRequest,
   rejectDepositDeleteRequest,
+  createExpenseDeleteRequest,
+  approveExpenseDeleteRequest,
+  rejectExpenseDeleteRequest,
   logAdminExecutedVoid,
   notifyCashShort,
   notifyReconciledDay,

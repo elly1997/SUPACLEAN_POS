@@ -17,8 +17,10 @@ import {
   getBookSalesDetailForDate,
   recalculateDailyCashForDate,
   refreshCashChainFromDate,
-  getExpenses
+  getExpenses,
+  deleteExpense
 } from '../api/api';
+import { voidOrRequestExpenseDeletion } from '../utils/expenseDelete';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../contexts/AuthContext';
 import { useBusinessDay } from '../contexts/BusinessDayContext';
@@ -554,6 +556,28 @@ const CashManagement = () => {
       showToast(res.data?.message || 'Delete request sent to admin for approval', 'info');
     } catch (error) {
       showToast(error.response?.data?.error || error.message || 'Could not send delete request', 'error');
+    }
+  };
+
+  const handleDeleteExpense = async (expense) => {
+    try {
+      const out = await voidOrRequestExpenseDeletion(expense, { isAdmin, deleteExpense });
+      if (out.status === 'cancelled') return;
+      if (out.status === 'requested') {
+        showToast(out.message || 'Delete request sent to admin for approval', 'info');
+        return;
+      }
+      showToast(
+        out.reconciledRefreshed?.length
+          ? 'Expense voided; reconciled daily summary was recalculated for the affected date(s).'
+          : 'Expense voided successfully',
+        'success'
+      );
+      loadTodayExpenses();
+      loadData();
+      loadUnreconciledClosings();
+    } catch (error) {
+      showToast('Error deleting expense: ' + (error.response?.data?.error || error.message), 'error');
     }
   };
 
@@ -1296,6 +1320,7 @@ const CashManagement = () => {
                     <th className="num">Amount (TSh)</th>
                     <th>Payment</th>
                     <th>Notes</th>
+                    <th aria-label="Actions"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1305,6 +1330,18 @@ const CashManagement = () => {
                       <td className="num">{parseFloat(exp.amount || 0).toLocaleString()}</td>
                       <td>{exp.payment_source || exp.payment_method || '—'}</td>
                       <td className="deposit-notes-cell">{exp.description || exp.notes || '—'}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn-secondary btn-small"
+                          onClick={() => handleDeleteExpense(exp)}
+                          title={isAdmin
+                            ? 'Delete (void) this expense'
+                            : 'Request deletion — an admin must approve'}
+                        >
+                          {isAdmin ? 'Delete' : 'Request delete'}
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
